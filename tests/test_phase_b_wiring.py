@@ -1,0 +1,283 @@
+# -*- coding: utf-8 -*-
+"""
+Pruebas de wiring de Fase B: verifica que el agente se pueda instanciar
+con phase_b_enabled=True/False sin AttributeError ni errores de dependencias.
+"""
+
+import logging
+import os
+import sys
+from datetime import datetime
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+os.environ.update({"DASHSCOPE_API_KEY": "sk-test", "MOLTBOOK_API_KEY": "sk-test"})
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s|%(name)s|%(message)s")
+
+pytest_plugins = ("pytest_asyncio",)
+
+TEST_DB = Path("data/test_phase_b_wiring.db")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_db():
+    import services.persistence as _p
+    _original = _p.DB_PATH
+    _p.DB_PATH = TEST_DB
+    if TEST_DB.exists():
+        TEST_DB.unlink()
+    yield
+    if TEST_DB.exists():
+        TEST_DB.unlink()
+    _p.DB_PATH = _original
+
+
+@pytest.fixture
+def behavior_disabled():
+    return {
+        "max_posts_per_day": 1,
+        "phase_a_publish_enabled": False,
+        "phase_b_enabled": False,
+        "phase_c_enabled": False,
+        "whisper_mode": False,
+        "max_comments_per_day": 0,
+        "max_comment_replies_per_cycle": 0,
+        "max_comments_per_post": 0,
+        "cycle_interval_seconds": 1,
+    }
+
+
+@pytest.fixture
+def behavior_enabled():
+    return {
+        "max_posts_per_day": 1,
+        "phase_a_publish_enabled": False,
+        "phase_b_enabled": True,
+        "phase_c_enabled": False,
+        "whisper_mode": False,
+        "max_comments_per_day": 6,
+        "max_comment_replies_per_cycle": 1,
+        "max_comments_per_post": 3,
+        "cycle_interval_seconds": 1,
+        "phase_b_feed_replies": False,
+        "phase_b_own_post_replies": False,
+    }
+
+
+def _make_mocks():
+    model_cascade = MagicMock()
+    model_cascade.generate = AsyncMock(return_value="Test reply.")
+    moltbook = MagicMock()
+    moltbook.create_comment = MagicMock(return_value={"success": True, "id": "c1"})
+    moltbook.get_feed = MagicMock(return_value=MagicMock(success=True, data={"posts": []}))
+    moltbook.fetch_my_posts = MagicMock(return_value=[])
+    moltbook.fetch_post_comments = MagicMock(return_value=[])
+    return model_cascade, moltbook
+
+
+# ── Test: instanciación con phase_b_enabled=False ───────────────
+
+def test_agent_instantiation_phase_b_disabled(behavior_disabled):
+    """El agente se instancia sin error con phase_b_enabled=False."""
+    model_cascade, moltbook = _make_mocks()
+    import config.config as _cfg
+    with (
+        patch("core.agent.create_telegram_client", return_value=None),
+        patch("core.agent.PlatformAwareness", return_value=None),
+        patch.dict(_cfg.behavior_cfg, values=behavior_disabled, clear=False),
+    ):
+        from core.agent import COMETRiobambaAgent
+        ag = COMETRiobambaAgent(
+            credentials=MagicMock(moltbook_api_key="sk-test"),
+            model_cascade=model_cascade,
+            moltbook_client=moltbook,
+        )
+        assert ag._phase_b_deps is not None
+        assert ag._phase_b is None  # lazy init
+
+
+# ── Test: instanciación con phase_b_enabled=True ────────────────
+
+def test_agent_instantiation_phase_b_enabled(behavior_enabled):
+    """El agente se instancia sin AttributeError con phase_b_enabled=True."""
+    model_cascade, moltbook = _make_mocks()
+    import config.config as _cfg
+    with (
+        patch("core.agent.create_telegram_client", return_value=None),
+        patch("core.agent.PlatformAwareness", return_value=None),
+        patch.dict(_cfg.behavior_cfg, values=behavior_enabled, clear=False),
+    ):
+        from core.agent import COMETRiobambaAgent
+        ag = COMETRiobambaAgent(
+            credentials=MagicMock(moltbook_api_key="sk-test"),
+            model_cascade=model_cascade,
+            moltbook_client=moltbook,
+        )
+        assert ag._phase_b_deps is not None
+        # moltubook_api_client debe estar accesible
+        assert ag.moltbook_api_client is not None
+
+
+# ── Test: _run_cycle() con Phase B habilitada ───────────────────
+
+@pytest.mark.asyncio
+async def test_run_cycle_with_phase_b_enabled(behavior_enabled):
+    """_run_cycle() con Fase B habilitada llega a completarse sin crash."""
+    model_cascade, moltbook = _make_mocks()
+
+    from phases.phase_b import PhaseB
+    phase_b_mock = MagicMock(spec=PhaseB)
+    phase_b_mock.execute = AsyncMock(return_value={
+        "success": True,
+        "replies_published": 0,
+        "feed_replies": [],
+        "own_post_replies": [],
+    })
+
+    import config.config as _cfg
+    with (
+        patch("core.agent.create_telegram_client", return_value=None),
+        patch("core.agent.PlatformAwareness", return_value=None),
+        patch.dict(_cfg.behavior_cfg, values=behavior_enabled, clear=False),
+    ):
+        from core.agent import COMETRiobambaAgent
+        ag = COMETRiobambaAgent(
+            credentials=MagicMock(moltbook_api_key="sk-test"),
+            model_cascade=model_cascade,
+            moltbook_client=moltbook,
+        )
+        ag._phase_b = phase_b_mock
+        ag._platform_awareness_available = False
+        ag.platform_awareness = None
+        ag.telegram_client = None
+
+        hoy = datetime.now().date().isoformat()
+        ag.state.posts_today = 0
+        ag.state.last_post_date = hoy
+
+        result = await ag._run_cycle()
+        assert "phase_b" in result
+        assert result["phase_b"].get("success") is True
+        assert phase_b_mock.execute.call_count == 1
+
+
+# ── Tests: persistent replied_comment_ids ────────────────────────
+
+from pathlib import Path
+import json
+from phases.phase_b import _load_replied_comment_ids, _save_replied_comment_ids, _REPLIED_IDS_PATH
+
+
+def test_replied_ids_persistence():
+    _REPLIED_IDS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    test_ids = {"c1", "c2", "c3"}
+    _save_replied_comment_ids(test_ids)
+    loaded = _load_replied_comment_ids()
+    assert loaded == test_ids
+    _REPLIED_IDS_PATH.unlink(missing_ok=True)
+
+
+def test_replied_ids_loaded_empty_when_missing():
+    if _REPLIED_IDS_PATH.exists():
+        _REPLIED_IDS_PATH.unlink()
+    loaded = _load_replied_comment_ids()
+    assert loaded == set()
+
+
+@pytest.mark.asyncio
+async def test_replied_ids_skip_prevents_duplicate():
+    from unittest.mock import MagicMock, AsyncMock
+    from phases.deps import PhaseBDeps
+    from phases.phase_b import PhaseB
+
+    deps = PhaseBDeps(
+        model_cascade=MagicMock(),
+        moltbook_client=MagicMock(),
+        behavior_cfg={"max_comments_per_post": 5, "max_comments_per_day": 10, "max_comment_replies_per_cycle": 3},
+        agent_name="test-agent",
+    )
+    phase_b = PhaseB(deps=deps)
+    phase_b._replied_comment_ids = {"p1:c1", "p1:c2"}
+
+    post_id = "p1"
+    comments = [
+        {"id": "c1", "content": "Hola", "author": "user1"},
+        {"id": "c3", "content": "Hello, how are you?", "author": "user2"},
+    ]
+    with (
+        patch.object(phase_b.api, "fetch_post_comments", return_value=comments),
+        patch.object(phase_b, "_generate_own_post_reply", AsyncMock(return_value="Test reply")),
+        patch.object(phase_b, "_check_and_prevent_duplicate", AsyncMock(return_value="Test reply")),
+        patch.object(phase_b.api, "create_comment", return_value={"success": True, "id": "new1"}),
+    ):
+        import phases.phase_b as _pb_mod
+        with patch.object(_pb_mod, "_save_replied_comment_ids"):
+            with patch.object(_pb_mod, "is_thread_closed", return_value=False):
+                results = await phase_b._process_own_post(post_id)
+
+    assert len(results) == 1
+    assert results[0]["comment_id"] == "c3"
+
+
+# ── Tests: persistent commented_post_ids ──────────────────────
+
+from phases.phase_b import _load_commented_post_ids, _save_commented_post_ids, _COMMENTED_POSTS_PATH
+
+
+def test_commented_post_ids_persistence():
+    _COMMENTED_POSTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    from datetime import datetime
+    now = datetime.now()
+    test_ids = {"p1": now.isoformat(), "p2": now.isoformat(), "p3": now.isoformat()}
+    _save_commented_post_ids(test_ids)
+    loaded = _load_commented_post_ids()
+    assert loaded.keys() == test_ids.keys()
+    _COMMENTED_POSTS_PATH.unlink(missing_ok=True)
+
+
+def test_commented_post_ids_empty_when_missing():
+    if _COMMENTED_POSTS_PATH.exists():
+        _COMMENTED_POSTS_PATH.unlink()
+    loaded = _load_commented_post_ids()
+    assert loaded == {}
+
+
+@pytest.mark.asyncio
+async def test_commented_post_ids_skip_prevents_duplicate():
+    from unittest.mock import MagicMock, AsyncMock
+    from phases.deps import PhaseBDeps
+    from phases.phase_b import PhaseB, RelevanceDecision
+
+    deps = PhaseBDeps(
+        model_cascade=MagicMock(),
+        moltbook_client=MagicMock(),
+        behavior_cfg={"max_comments_per_post": 5, "max_comments_per_day": 10, "max_comment_replies_per_cycle": 3},
+        agent_name="test-agent",
+    )
+    phase_b = PhaseB(deps=deps)
+    phase_b._commented_post_ids = {"already_done_post": "2026-01-01T00:00:00"}
+    phase_b.get_comments_today = lambda: 0
+    phase_b.incr_comments_today = lambda: None
+
+    posts = [
+        {"id": "already_done_post", "title": "Existing", "content": "Hello", "comments": []},
+        {"id": "new_post", "title": "New", "content": "How are you?", "comments": []},
+    ]
+
+    with (
+        patch.object(phase_b, "_fetch_candidate_posts", return_value=posts),
+        patch.object(phase_b, "_decide_reply_from_post", return_value=RelevanceDecision(True, 30, "reply_sent")),
+        patch.object(phase_b, "_generate_reply_for_post", AsyncMock(return_value="Nice post")),
+        patch.object(phase_b, "_check_and_prevent_duplicate", AsyncMock(return_value="Nice post")),
+        patch.object(phase_b.api, "create_comment", return_value={"success": True, "id": "c1"}),
+    ):
+        import phases.phase_b as _pb_mod
+        with patch.object(_pb_mod, "_save_commented_post_ids"):
+            results = await phase_b._execute_feed_replies()
+
+    assert len(results) == 1
+    assert results[0]["post_id"] == "new_post"
