@@ -52,7 +52,7 @@ class ChallengeSolver:
                 elif isinstance(node, ast.UnaryOp):
                     if type(node.op) not in (ast.USub,):
                         return None
-                elif isinstance(node, (ast.Expression, ast.Constant)):
+                elif isinstance(node, (ast.Expression, ast.Constant, ast.operator, ast.unaryop)):
                     continue
                 else:
                     return None
