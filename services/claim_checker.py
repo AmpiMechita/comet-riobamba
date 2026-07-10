@@ -63,7 +63,7 @@ async def extract_claim(
     post_text: str,
     comment_text: str,
     llm: Any,
-    tier: str = "haiku",
+    tier: str = "fallback",
 ) -> Optional[Dict[str, str]]:
     """Extract the central claim of a post and what a reply must address.
 
@@ -112,7 +112,7 @@ async def check_claim(
     claim: Dict[str, str],
     reply_draft: str,
     llm: Any,
-    tier: str = "haiku",
+    tier: str = "fallback",
 ) -> Dict[str, Any]:
     """Check whether a reply draft addresses the post's central claim.
 

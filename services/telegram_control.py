@@ -524,7 +524,7 @@ async def handle_assistant_query(user_text: str, agent=None) -> str:
             system_prompt=system_prompt,
             max_tokens=400,
             temperature=0.7,
-            tier="opus",
+            tier="premium",
             caller="telegram_assistant",
         )
         response = (response or "").strip()

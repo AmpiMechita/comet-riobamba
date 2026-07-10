@@ -24,6 +24,14 @@ from utils.resilience import CircuitBreaker
 
 logger = logging.getLogger("services.model_cascade")
 
+# ── Anthropic spend guard ────────────────────────────────────────
+# Pricing for claude-sonnet-5 (USD per 1M tokens). Used to estimate the
+# cumulative cost of Anthropic calls and stop before blowing the budget.
+_ANTHROPIC_INPUT_PRICE_PER_1M = 2.0
+_ANTHROPIC_OUTPUT_PRICE_PER_1M = 10.0
+_ANTHROPIC_SPEND_FILE = os.path.join("data", "anthropic_spend_tracker.json")
+_ANTHROPIC_SPEND_LIMIT_DEFAULT = 4.50
+
 
 @dataclass
 class ProviderConfig:
@@ -38,6 +46,10 @@ class ProviderConfig:
     extra_headers: Dict[str, str] = field(default_factory=dict)
     enabled: bool = True
     kind: str = "openai"  # "openai" | "anthropic" | "ollama_native"
+    # When True, the provider is only used when a caller explicitly requests its
+    # tier (e.g. the CAPTCHA solver asking for tier="cerebras"). It is NEVER
+    # picked as an automatic fallback for content generation.
+    explicit_only: bool = False
 
 
 class ModelCascade:
@@ -53,7 +65,7 @@ class ModelCascade:
         self._health_histories: Dict[str, Deque[bool]] = {}
         self._telemetry_file = os.path.join("data", "cascade_telemetry.jsonl")
 
-        # ── Degraded mode: set when the tier cascade (tier_opus → tier_haiku) is exhausted ──
+        # ── Degraded mode: set when the tier cascade (tier_premium → tier_fallback) is exhausted ──
         self.degraded_mode = False
         self._degraded_alert_sent = False
 
@@ -61,31 +73,35 @@ class ModelCascade:
         self._init_circuit_breakers()
 
     TIER_MAPPING = {
-        "opus": "tier_opus",
+        # Tiers named by FUNCTION (not by legacy model heritage):
+        "premium": "tier_premium",     # Anthropic claude-sonnet-5 (primary content)
+        "fallback": "tier_fallback",   # DeepSeek V4 Pro (paid content fallback)
         "sonnet": "tier_sonnet",
-        "haiku": "tier_haiku",
         "openrouter": "openrouter",
         "cerebras": "cerebras",
         "groq": "groq",
-        "default": "ollama_local"
+        "default": "ollama_local",
+        # Backward-compat aliases (legacy tier names → new provider names).
+        "opus": "tier_premium",
+        "haiku": "tier_fallback",
     }
 
 
     def _load_providers(self) -> None:
         creds = self.credentials
 
-        # ── tier_opus: Anthropic Claude 3.5 Sonnet (primary) ──────────────
-        # When ANTHROPIC_API_KEY is present, tier_opus is served by Anthropic's
-        # Messages API. DeepSeek is demoted to tier_haiku (fallback). If the
-        # Anthropic key is missing we fall back to the env-configured tier_opus
-        # so the cascade keeps working in dev/test environments.
+        # ── tier_premium: Anthropic Claude (claude-sonnet-5, primary content) ──
+        # When ANTHROPIC_API_KEY is present, tier_premium is served by Anthropic's
+        # Messages API. DeepSeek V4 Pro serves tier_fallback. If the Anthropic key
+        # is missing we fall back to the env-configured tier_opus credentials so
+        # the cascade keeps working in dev/test environments.
         anthropic_key = getattr(creds, "anthropic_api_key", "") or ""
         if anthropic_key:
             self.providers.append(
                 ProviderConfig(
-                    name="tier_opus",
+                    name="tier_premium",
                     url=getattr(creds, "anthropic_url", "") or "https://api.anthropic.com/v1/messages",
-                    model=getattr(creds, "anthropic_model", "") or "claude-3-5-sonnet-20240620",
+                    model=getattr(creds, "anthropic_model", "") or "claude-sonnet-5",
                     api_key=anthropic_key,
                     timeout=getattr(creds, "anthropic_timeout", 120) or 120,
                     max_retries=self.default_retries,
@@ -103,7 +119,7 @@ class ModelCascade:
                 cfg = creds.tier_opus
                 self.providers.append(
                     ProviderConfig(
-                        name="tier_opus",
+                        name="tier_premium",
                         url=cfg.url,
                         model=cfg.model,
                         api_key=cfg.api_key,
@@ -114,13 +130,27 @@ class ModelCascade:
                     )
                 )
 
-        # ── tier_sonnet + openrouter: unchanged env-configured tiers ──────
-        tier_configs: list[tuple[str, Optional[TierConfig]]] = [
-            ("tier_sonnet", creds.tier_sonnet),
-            ("openrouter", creds.tier_openrouter),
+        # ── tier_sonnet (Gemini) + openrouter: product-gated fallbacks ────
+        # Gemini desactivado por decisión de producto (solo modelos de pago).
+        # Reactivar con GEMINI_ENABLED=true solo en caso de fallo simultáneo de
+        # Anthropic y DeepSeek. OpenRouter sigue el mismo patrón reversible
+        # (OPENROUTER_ENABLED). Con ambos en false, la cascada de contenido queda
+        # limitada a Anthropic (primario) → DeepSeek (fallback).
+        _gemini_enabled = os.getenv("GEMINI_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+        _openrouter_enabled = os.getenv("OPENROUTER_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+
+        tier_configs: list[tuple[str, Optional[TierConfig], bool]] = [
+            ("tier_sonnet", creds.tier_sonnet, _gemini_enabled),
+            ("openrouter", creds.tier_openrouter, _openrouter_enabled),
         ]
-        for provider_name, cfg in tier_configs:
+        for provider_name, cfg, flag_enabled in tier_configs:
             if cfg is None:
+                continue
+            if not flag_enabled:
+                logger.info(
+                    "ModelCascade: '%s' NO registrado (flag desactivado por decisión de producto).",
+                    provider_name,
+                )
                 continue
             self.providers.append(
                 ProviderConfig(
@@ -135,16 +165,16 @@ class ModelCascade:
                 )
             )
 
-        # ── tier_haiku: DeepSeek (fallback after Anthropic) ───────────────
+        # ── tier_fallback: DeepSeek V4 Pro (paid fallback after Anthropic) ──
         # Prefer explicit DEEPSEEK_* config; otherwise reuse the env-configured
-        # tier_haiku so existing setups keep working.
+        # tier_haiku credentials so existing setups keep working.
         deepseek_key = getattr(creds, "deepseek_api_key", "") or ""
         if deepseek_key:
             self.providers.append(
                 ProviderConfig(
-                    name="tier_haiku",
+                    name="tier_fallback",
                     url=getattr(creds, "deepseek_url", "") or "https://api.deepseek.com/v1/chat/completions",
-                    model=getattr(creds, "deepseek_model", "") or "deepseek-chat",
+                    model=getattr(creds, "deepseek_model", "") or "deepseek-v4-pro",
                     api_key=deepseek_key,
                     timeout=getattr(creds, "deepseek_timeout", 90) or 90,
                     max_retries=self.default_retries,
@@ -156,7 +186,7 @@ class ModelCascade:
             cfg = creds.tier_haiku
             self.providers.append(
                 ProviderConfig(
-                    name="tier_haiku",
+                    name="tier_fallback",
                     url=cfg.url,
                     model=cfg.model,
                     api_key=cfg.api_key,
@@ -167,7 +197,15 @@ class ModelCascade:
                 )
             )
 
-        if creds.cerebras_api_key:
+        # ── Cerebras: CAPTCHA solver pipeline ONLY (independent flag) ─────
+        # Cerebras es una función interna de bajo riesgo (extracción de texto en
+        # el resolvedor de CAPTCHA, no contenido publicado). Se mantiene activo
+        # por defecto con su propio flag (CEREBRAS_ENABLED, distinto del de
+        # contenido) y se marca explicit_only=True: NUNCA entra al fallback
+        # automático de generación de contenido; solo se usa cuando un caller
+        # pide tier="cerebras" explícitamente (challenge_solver.py).
+        _cerebras_enabled = os.getenv("CEREBRAS_ENABLED", "true").strip().lower() in ("1", "true", "yes")
+        if creds.cerebras_api_key and _cerebras_enabled:
             self.providers.append(
                 ProviderConfig(
                     name="cerebras",
@@ -178,10 +216,15 @@ class ModelCascade:
                     max_retries=self.default_retries,
                     cooldown_seconds=self.default_cooldown,
                     failure_threshold=self.default_failure_threshold,
+                    explicit_only=True,
                 )
             )
 
-        if creds.groq_api_key:
+        # ── Groq: DESACTIVADO permanentemente (GROQ_ENABLED, default false) ──
+        # Agotó el TPD (tokens-per-day) en mayo 2026 dejando Fases B y C sin
+        # fallback. No reactivar salvo emergencia explícita.
+        _groq_enabled = os.getenv("GROQ_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+        if creds.groq_api_key and _groq_enabled:
             self.providers.append(
                 ProviderConfig(
                     name="groq",
@@ -200,8 +243,8 @@ class ModelCascade:
         # localhost:11434 (even for a few seconds) degrades every cascade fallout.
         # These providers — including the former last-resort `tier_local` — are now
         # DISABLED by default and only registered when OLLAMA_ENABLED is truthy.
-        # With them off, the active flow is: tier_opus → tier_haiku → Degraded Mode,
-        # and _enter_degraded_mode() fires immediately after tier_haiku fails,
+        # With them off, the active flow is: tier_premium → tier_fallback → Degraded Mode,
+        # and _enter_degraded_mode() fires immediately after tier_fallback fails,
         # without ever attempting a localhost connection.
         _ollama_enabled = os.getenv("OLLAMA_ENABLED", "false").strip().lower() in ("1", "true", "yes")
         if _ollama_enabled:
@@ -268,10 +311,17 @@ class ModelCascade:
         caller = kwargs.pop("caller", "unknown")
         provider_name = self.TIER_MAPPING.get(tier, "ollama_local")
         preferred = next((p for p in self.providers if p.name == provider_name and p.enabled), None)
+        # explicit_only providers (e.g. cerebras for CAPTCHA) are excluded from the
+        # automatic fallback chain; they only run when their tier is requested
+        # directly (in which case `preferred` points at them and leads the order).
+        fallback_pool = [
+            p for p in self.providers
+            if p.name != provider_name and not p.explicit_only
+        ]
         if preferred:
-            ordered_providers = [preferred] + [p for p in self.providers if p.name != provider_name]
+            ordered_providers = [preferred] + fallback_pool
         else:
-            ordered_providers = [p for p in self.providers if p.enabled]
+            ordered_providers = [p for p in self.providers if p.enabled and not p.explicit_only]
 
         if system_prompt is None and "systemprompt" in kwargs:
             system_prompt = kwargs.pop("systemprompt")
@@ -376,7 +426,7 @@ class ModelCascade:
                 continue
 
         # ── Cascade fully exhausted. With local Ollama fallbacks disabled
-        #    (Fix 1), the last real provider is tier_haiku; once it fails we
+        #    (Fix 1), the last real provider is tier_fallback; once it fails we
         #    enter Degraded Mode immediately, without touching localhost:11434. ──
         if any(p.name.startswith("tier_") for p in self.providers):
             self._enter_degraded_mode(attempted, last_error)
@@ -385,7 +435,7 @@ class ModelCascade:
         )
 
     def _enter_degraded_mode(self, attempted: List[str], last_error: Optional[Exception]) -> None:
-        """Cascade exhausted (tier_opus → tier_haiku all down): stop generation and alert.
+        """Cascade exhausted (tier_premium → tier_fallback all down): stop generation and alert.
 
         Sends a single Telegram alert per degraded episode; the flag is reset
         automatically on the next successful generation. No local (Ollama)
@@ -393,7 +443,7 @@ class ModelCascade:
         """
         self.degraded_mode = True
         logger.critical(
-            "🛑 ModelCascade: CASCADA LLM AGOTADA (tier_opus → tier_haiku). "
+            "🛑 ModelCascade: CASCADA LLM AGOTADA (tier_premium → tier_fallback). "
             "Modo degradado ACTIVO — generación de contenido detenida. "
             "Intentados: %s. Último error: %s",
             attempted, last_error,
@@ -599,7 +649,27 @@ class ModelCascade:
         `requests` so no new hard dependency is forced on test/dev environments.
         The returned text is identical in shape to the OpenAI-compatible path,
         keeping the cascade interface intact.
+
+        A hard spend guard estimates cumulative cost (input/output tokens priced
+        for claude-sonnet-5) persisted to data/anthropic_spend_tracker.json. Once
+        ANTHROPIC_SPEND_LIMIT_USD (default 4.50) is exceeded, this raises a
+        ret/non-retryable RuntimeError so the cascade falls back to the next
+        provider instead of crashing the cycle.
         """
+        # ── Hard spend guard: bail out to the next provider if over budget ──
+        spent = self._get_anthropic_spend()
+        limit = self._anthropic_spend_limit()
+        if spent >= limit:
+            logger.warning(
+                "💸 ModelCascade: límite de gasto Anthropic alcanzado "
+                "($%.4f >= $%.2f). Saltando '%s' y usando siguiente proveedor.",
+                spent, limit, provider.name,
+            )
+            raise RuntimeError(
+                f"Anthropic spend limit reached (${spent:.4f} >= ${limit:.2f}) "
+                f"desde {provider.name}:{provider.model} - fallback to next provider"
+            )
+
         system_text = ""
         chat_messages: List[Dict[str, str]] = []
         for m in messages:
@@ -627,6 +697,7 @@ class ModelCascade:
                     system=system_text or None,
                     messages=chat_messages,
                 )
+                self._record_anthropic_spend_from_response(resp)
                 return self._extract_anthropic_text(resp, provider)
             except Exception as e:
                 # Normalize SDK errors into the same string format the cascade
@@ -672,7 +743,67 @@ class ModelCascade:
             ) from e
 
         data = response.json()
+        self._record_anthropic_spend_from_response(data)
         return self._extract_anthropic_text(data, provider)
+
+    # ── Anthropic spend tracking (simple, file-persisted) ─────────────
+
+    @staticmethod
+    def _anthropic_spend_limit() -> float:
+        try:
+            return float(os.getenv("ANTHROPIC_SPEND_LIMIT_USD", str(_ANTHROPIC_SPEND_LIMIT_DEFAULT)))
+        except (ValueError, TypeError):
+            return _ANTHROPIC_SPEND_LIMIT_DEFAULT
+
+    def _get_anthropic_spend(self) -> float:
+        """Return cumulative estimated Anthropic spend in USD (0.0 if none)."""
+        try:
+            with open(_ANTHROPIC_SPEND_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return float(data.get("total_usd", 0.0))
+        except (FileNotFoundError, ValueError, TypeError, json.JSONDecodeError):
+            return 0.0
+        except Exception as e:
+            logger.debug("ModelCascade: could not read Anthropic spend tracker: %s", e)
+            return 0.0
+
+    @staticmethod
+    def _extract_anthropic_usage(resp: Any) -> tuple:
+        """Return (input_tokens, output_tokens) from an SDK object or dict."""
+        usage = resp.get("usage") if isinstance(resp, dict) else getattr(resp, "usage", None)
+        if usage is None:
+            return 0, 0
+        if isinstance(usage, dict):
+            return int(usage.get("input_tokens", 0) or 0), int(usage.get("output_tokens", 0) or 0)
+        return int(getattr(usage, "input_tokens", 0) or 0), int(getattr(usage, "output_tokens", 0) or 0)
+
+    def _record_anthropic_spend_from_response(self, resp: Any) -> None:
+        """Estimate the cost of one Anthropic response and persist the running total."""
+        try:
+            input_tokens, output_tokens = self._extract_anthropic_usage(resp)
+            if not input_tokens and not output_tokens:
+                return
+            cost = (
+                input_tokens * _ANTHROPIC_INPUT_PRICE_PER_1M / 1_000_000
+                + output_tokens * _ANTHROPIC_OUTPUT_PRICE_PER_1M / 1_000_000
+            )
+            total = self._get_anthropic_spend() + cost
+            os.makedirs(os.path.dirname(_ANTHROPIC_SPEND_FILE) or ".", exist_ok=True)
+            with open(_ANTHROPIC_SPEND_FILE, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "total_usd": round(total, 6),
+                        "last_updated": datetime.now(timezone.utc).isoformat(),
+                    },
+                    f,
+                    ensure_ascii=False,
+                )
+            logger.debug(
+                "ModelCascade: Anthropic spend +$%.6f (in=%d out=%d) → total $%.4f",
+                cost, input_tokens, output_tokens, total,
+            )
+        except Exception as e:
+            logger.warning("ModelCascade: failed to record Anthropic spend: %s", e)
 
     @staticmethod
     def _extract_anthropic_text(resp: Any, provider: ProviderConfig) -> str:

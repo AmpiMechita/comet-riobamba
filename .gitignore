@@ -1,0 +1,132 @@
+# Python cache and tooling
+__pycache__/
+*.py[cod]
+*.so
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Local env and secret material
+.env
+.env.*
+!*.env.example
+!*.env.sample
+secrets/
+
+# Logs and runtime noise
+logs/
+*.log
+*.pid
+*.seed
+agent_pid.txt
+last-run.txt
+run-*.txt
+run-*.log
+run-*.out
+run-*.err
+RUNTIME_STATE_NOTE.txt
+
+# Local databases and state
+*.db
+*.sqlite
+*.sqlite3
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+
+# Generated telemetry / runtime data under data/
+data/*.jsonl
+data/*_log.json
+data/*_logs.json
+data/*_state.json
+data/*_events.json
+data/*_metrics.json
+data/*_review.json
+data/*_summary.json
+data/*_trends.json
+data/*_guard.json
+data/*_performance.json
+data/*_roadmap.json
+data/*_index.json
+data/*_daily.json
+data/*_ids.json
+data/archive/
+data/state/
+data/self_eval_state.json
+data/performance_summary.json
+data/tracked_posts.json
+data/conversations.json
+data/phase_a_pause_state.json
+
+# Backup / fossil files
+*.bak*
+*backup*
+*.before_*
+*.broken*
+*.bak
+*.bak2
+*.bak3
+*.bak4
+*.bak_*
+*.bak-*
+*.backup
+*.backup-*
+*.fix-*
+*.broken-*
+*.pre-*
+*.before-*
+*.stable-*
+*.finalbak
+*.fullbak
+*.fullbak2
+*.safe
+*.old
+*.orig
+*.rej
+*~
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Keep placeholders visible
+!data/.gitkeep
+!logs/.gitkeep
+
+# Agent runtime lock
+.agent.lock
+
+# New runtime state files
+data/experiment_results/
+data/distribution_queue.json
+data/reply_strategy_hint.json
+data/topic_evolution_state.json
+data/content_distributor_state.json
+data/energy_weekly_digest_last.json
+data/last_energy_intel_run.txt
+data/last_balance_check.txt
+data/cascade_telemetry.jsonl
+
+# Compressed backups
+_legacy_backup_*.zip
+_quarantine_backup_*.zip
+
+# Legacy directories (should not exist)
+_archive/
+_quarantine/
+_lab/
+
+# Execution logs
+_logs/
