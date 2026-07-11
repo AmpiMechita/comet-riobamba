@@ -163,6 +163,19 @@ No confundir con los tiers internos al hacer debugging: `tier_premium` = Anthrop
 
 ---
 
+## Purga de fixture data en research_agenda.json (2026-07-11)
+
+Se detectó una fuga de fixture data de tests (strings "Post N about agents", "Feed post",
+"Repeat", "New") hacia `data/research_agenda.json` real, causada por 2 tests de feed-limit
+que no usaban aislamiento (`AGENDA_PATH` faltante en `_redirect_paths`).
+Causa raíz corregida en commit `1d61498`.
+Se purgaron 10 entradas de fixture del archivo real (219 → 209 topics), con backup en
+`data/research_agenda.json.bak-20260711` (no versionado, en disco local).
+El archivo `research_agenda.json` dejó de trackearse en git desde el commit `ca711cb`;
+esta nota documenta la purga ya que el archivo mismo no deja rastro versionado.
+
+---
+
 ## Estado operacional (junio 2026)
 
 | Componente | Estado |
