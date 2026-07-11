@@ -32,6 +32,14 @@ _ANTHROPIC_OUTPUT_PRICE_PER_1M = 10.0
 _ANTHROPIC_SPEND_FILE = os.path.join("data", "anthropic_spend_tracker.json")
 _ANTHROPIC_SPEND_LIMIT_DEFAULT = 4.50
 
+# ── Degraded-mode re-alert cooldown ──────────────────────────────
+# When the paid content cascade (tier_premium → tier_fallback) is fully down,
+# we re-alert on Telegram every DEGRADED_ALERT_COOLDOWN_MINUTES instead of only
+# once per episode, so a sustained outage keeps reminding the operator. State is
+# persisted to survive process restarts within an ongoing episode.
+_DEGRADED_STATE_FILE = os.path.join("data", "degraded_mode_state.json")
+_DEGRADED_ALERT_COOLDOWN_DEFAULT_MINUTES = 30
+
 
 @dataclass
 class ProviderConfig:
@@ -65,9 +73,10 @@ class ModelCascade:
         self._health_histories: Dict[str, Deque[bool]] = {}
         self._telemetry_file = os.path.join("data", "cascade_telemetry.jsonl")
 
-        # ── Degraded mode: set when the tier cascade (tier_premium → tier_fallback) is exhausted ──
-        self.degraded_mode = False
-        self._degraded_alert_sent = False
+        # ── Degraded mode: tier cascade (tier_premium → tier_fallback) exhausted ──
+        # In-memory mirror of the persisted degraded state; the source of truth is
+        # data/degraded_mode_state.json so re-alert cooldown survives restarts.
+        self.degraded_mode = self._load_degraded_state().get("is_degraded", False)
 
         self._load_providers()
         self._init_circuit_breakers()
@@ -363,8 +372,8 @@ class ModelCascade:
                     # A successful generation means the cascade recovered.
                     if self.degraded_mode:
                         logger.info("✅ ModelCascade: recuperado de modo degradado (provider='%s')", provider.name)
+                        self._clear_degraded_state()
                     self.degraded_mode = False
-                    self._degraded_alert_sent = False
                     # Warn if we fell back to a different provider than requested
                     if provider.name != provider_name:
                         logger.warning(
@@ -437,9 +446,12 @@ class ModelCascade:
     def _enter_degraded_mode(self, attempted: List[str], last_error: Optional[Exception]) -> None:
         """Cascade exhausted (tier_premium → tier_fallback all down): stop generation and alert.
 
-        Sends a single Telegram alert per degraded episode; the flag is reset
-        automatically on the next successful generation. No local (Ollama)
-        connection is attempted — production has no Ollama, so we fail fast.
+        Re-alerts on Telegram every DEGRADED_ALERT_COOLDOWN_MINUTES while the
+        outage persists (not just once), so a sustained failure keeps reminding
+        the operator. State is persisted to data/degraded_mode_state.json so the
+        cooldown survives process restarts within one episode. The degraded flag
+        is cleared on the next successful generation. No local (Ollama) connection
+        is attempted — production has no Ollama, so we fail fast.
         """
         self.degraded_mode = True
         logger.critical(
@@ -448,19 +460,82 @@ class ModelCascade:
             "Intentados: %s. Último error: %s",
             attempted, last_error,
         )
-        if self._degraded_alert_sent:
+
+        now = time.time()
+        state = self._load_degraded_state()
+        was_degraded = bool(state.get("is_degraded"))
+        since_ts = float(state.get("since_ts") or now) if was_degraded else now
+        last_alert_ts = float(state.get("last_alert_ts") or 0.0) if was_degraded else 0.0
+        cooldown_seconds = self._degraded_alert_cooldown_minutes() * 60
+
+        # Persist degraded state immediately (independent of whether we alert now).
+        self._save_degraded_state({
+            "is_degraded": True,
+            "since_ts": since_ts,
+            "last_alert_ts": last_alert_ts,
+        })
+
+        # Decide whether to (re-)alert: first entry, or cooldown elapsed.
+        is_first_alert = not was_degraded or last_alert_ts <= 0.0
+        due_for_realert = (now - last_alert_ts) >= cooldown_seconds
+        if not (is_first_alert or due_for_realert):
             return
+
+        if is_first_alert:
+            message = "Cascada LLM agotada. Revisar conectividad y saldo de APIs."
+        else:
+            elapsed_min = int((now - since_ts) / 60)
+            message = (
+                f"Cascada LLM SIGUE agotada tras {elapsed_min} min. "
+                "Revisar conectividad y saldo de APIs."
+            )
+
         try:
             telegram = self._get_telegram_client()
             if telegram is not None:
-                telegram.send_alert(
-                    "Modo degradado",
-                    "Cascada LLM agotada. Revisar conectividad y saldo de APIs.",
-                    level="ERROR",
-                )
-                self._degraded_alert_sent = True
+                telegram.send_alert("Modo degradado", message, level="ERROR")
+                # Only advance last_alert_ts if the send actually succeeded, so a
+                # failed send retries on the next cycle instead of waiting a full
+                # cooldown window.
+                self._save_degraded_state({
+                    "is_degraded": True,
+                    "since_ts": since_ts,
+                    "last_alert_ts": now,
+                })
         except Exception as e:
             logger.warning("ModelCascade: no se pudo enviar alerta de modo degradado por Telegram: %s", e)
+
+    # ── Degraded-mode state persistence (re-alert cooldown) ───────────
+
+    @staticmethod
+    def _degraded_alert_cooldown_minutes() -> float:
+        try:
+            return float(os.getenv("DEGRADED_ALERT_COOLDOWN_MINUTES", str(_DEGRADED_ALERT_COOLDOWN_DEFAULT_MINUTES)))
+        except (ValueError, TypeError):
+            return float(_DEGRADED_ALERT_COOLDOWN_DEFAULT_MINUTES)
+
+    def _load_degraded_state(self) -> Dict[str, Any]:
+        try:
+            with open(_DEGRADED_STATE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+        except (FileNotFoundError, ValueError, TypeError, json.JSONDecodeError):
+            return {}
+        except Exception as e:
+            logger.debug("ModelCascade: could not read degraded state: %s", e)
+        return {}
+
+    def _save_degraded_state(self, state: Dict[str, Any]) -> None:
+        try:
+            os.makedirs(os.path.dirname(_DEGRADED_STATE_FILE) or ".", exist_ok=True)
+            with open(_DEGRADED_STATE_FILE, "w", encoding="utf-8") as f:
+                json.dump(state, f, ensure_ascii=False)
+        except Exception as e:
+            logger.warning("ModelCascade: failed to persist degraded state: %s", e)
+
+    def _clear_degraded_state(self) -> None:
+        self._save_degraded_state({"is_degraded": False, "since_ts": None, "last_alert_ts": None})
 
     def _get_telegram_client(self):
         """Resolve a Telegram client from the owning agent or from env credentials."""
