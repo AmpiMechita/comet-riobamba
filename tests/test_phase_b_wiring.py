@@ -26,14 +26,29 @@ TEST_DB = Path("data/test_phase_b_wiring.db")
 @pytest.fixture(autouse=True)
 def _isolate_db():
     import services.persistence as _p
+    import services.research_agenda as _ra
     _original = _p.DB_PATH
     _p.DB_PATH = TEST_DB
+    # Feed-reply tests exercise _add_topic_to_agenda -> load_agenda/save_agenda,
+    # which use module-level AGENDA_PATH. Redirect to a throwaway temp file so
+    # fixture posts ("New", "Repeat", ...) never leak into the real
+    # data/research_agenda.json (root cause of the fixture-data leak).
+    _orig_agenda = _ra.AGENDA_PATH
+    _orig_archive = _ra.ARCHIVE_PATH
+    _tmp_agenda = Path("data/test_phase_b_wiring_agenda.json")
+    _ra.AGENDA_PATH = _tmp_agenda
+    _ra.ARCHIVE_PATH = Path("data/test_phase_b_wiring_agenda_archive.json")
     if TEST_DB.exists():
         TEST_DB.unlink()
     yield
     if TEST_DB.exists():
         TEST_DB.unlink()
+    for _f in (_tmp_agenda, _ra.ARCHIVE_PATH):
+        if Path(_f).exists():
+            Path(_f).unlink()
     _p.DB_PATH = _original
+    _ra.AGENDA_PATH = _orig_agenda
+    _ra.ARCHIVE_PATH = _orig_archive
 
 
 @pytest.fixture
