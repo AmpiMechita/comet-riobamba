@@ -43,6 +43,42 @@ def test_solve_native_math_empty_text():
     assert solver._solve_native_math(None) is None
 
 
+# ── Safe eval expression ─────────────────────────────────────────
+
+
+@pytest.mark.parametrize("expr,expected", [
+    ("23 * 7", 161.0),
+    ("23+7", 30.0),
+    ("100 - 25", 75.0),
+    ("8 * 7", 56.0),
+    ("144 / 12", 12.0),
+    ("3.5 + 2.5", 6.0),
+    ("23*7", 161.0),            # no whitespace
+    ("  23   *   7  ", 161.0),   # extra whitespace
+    ("23* 7", 161.0),            # inconsistent whitespace
+    (" -5 + 3", -2.0),           # unary minus
+])
+def test_safe_eval_valid_arithmetic(expr, expected):
+    assert ChallengeSolver._safe_eval_expression(expr) == expected
+
+
+@pytest.mark.parametrize("expr", [
+    "",
+    "abc",
+    "__import__('os').system('ls')",
+    "globals()",
+    "locals()",
+    "open('/etc/passwd')",
+    "1; import os",
+    "exec('x=1')",
+    "lambda: 1",
+    "[]",
+    "{}",
+])
+def test_safe_eval_rejects_unsafe(expr):
+    assert ChallengeSolver._safe_eval_expression(expr) is None
+
+
 # ── Mojibake fixing ──────────────────────────────────────────────
 
 
@@ -152,3 +188,53 @@ async def test_invalid_answer_format_rejected():
         "challenge_text": "something obscure",
     })
     assert result is False
+
+
+# ── Tests for core.challenge_solver (function-based solver) ──────
+
+
+class MockLLM:
+    def __init__(self, response):
+        self.response = response
+    async def complete(self, prompt, **kwargs):
+        return self.response
+
+
+@pytest.mark.asyncio
+async def test_core_simple_subtraction():
+    from core.challenge_solver import solve
+    llm = MockLLM("15.00")
+    result = await solve("A] lO^bSt-Er S[wImS aT/ tW]eNn-Tyy mE^tE[rS aNd] SlO/wS bY^ fIve", llm)
+    assert result == "15.00"
+
+
+@pytest.mark.asyncio
+async def test_core_integer_result_formatted():
+    from core.challenge_solver import solve
+    llm = MockLLM("42")
+    result = await solve("some challenge", llm)
+    assert result == "42.00"
+
+
+@pytest.mark.asyncio
+async def test_core_invalid_llm_response_returns_none():
+    from core.challenge_solver import solve
+    llm = MockLLM("no sé")
+    result = await solve("some challenge", llm)
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_core_negative_result():
+    from core.challenge_solver import solve
+    llm = MockLLM("-3.50")
+    result = await solve("some challenge", llm)
+    assert result == "-3.50"
+
+
+@pytest.mark.asyncio
+async def test_core_decimal_precision():
+    from core.challenge_solver import solve
+    llm = MockLLM("7.5")
+    result = await solve("some challenge", llm)
+    assert result == "7.50"
