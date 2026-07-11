@@ -118,6 +118,8 @@ data/energy_weekly_digest_last.json
 data/last_energy_intel_run.txt
 data/last_balance_check.txt
 data/cascade_telemetry.jsonl
+data/anthropic_spend_tracker.json
+data/degraded_mode_state.json
 
 # Compressed backups
 _legacy_backup_*.zip
