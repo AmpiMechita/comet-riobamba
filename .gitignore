@@ -121,6 +121,7 @@ data/cascade_telemetry.jsonl
 data/anthropic_spend_tracker.json
 data/degraded_mode_state.json
 data/research_agenda.json
+data/research_agenda_archive.json
 
 # Compressed backups
 _legacy_backup_*.zip

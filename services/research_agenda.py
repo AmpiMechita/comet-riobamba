@@ -11,13 +11,26 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass, field, asdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
 AGENDA_PATH = Path("data/research_agenda.json")
+ARCHIVE_PATH = Path("data/research_agenda_archive.json")
+
+# ── Retention policy (env-overridable) ────────────────────────────
+# TTL for covered topics: once a topic was posted, it need not linger in the
+# active agenda. Uncovered topics are not purged by age; they are ARCHIVED
+# (moved, not deleted) after a longer window, since a topic ignored for months
+# is likely stale but worth keeping as history. A hard cap on active entries is
+# the safety net if the TTL sweep does not run (crash/deploy).
+COVERED_TTL_DAYS = int(os.getenv("AGENDA_COVERED_TTL_DAYS", "14"))
+UNCOVERED_ARCHIVE_DAYS = int(os.getenv("AGENDA_UNCOVERED_ARCHIVE_DAYS", "60"))
+MAX_ACTIVE_TOPICS = int(os.getenv("AGENDA_MAX_ACTIVE_TOPICS", "150"))
 
 
 @dataclass
@@ -151,3 +164,133 @@ def save_agenda(agenda: ResearchAgenda) -> None:
         )
     except Exception as e:
         logger.warning("Could not save research agenda to %s: %s", AGENDA_PATH, e)
+
+
+# ── Retention / pruning ───────────────────────────────────────────
+
+
+def _parse_ts(value: object) -> Optional[datetime]:
+    """Parse an ISO-8601 created_at; return tz-aware UTC datetime or None."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value)
+    except (ValueError, TypeError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _age_days(topic: Dict, now: datetime) -> Optional[float]:
+    dt = _parse_ts(topic.get("created_at"))
+    if dt is None:
+        return None
+    return (now - dt).total_seconds() / 86400.0
+
+
+def _append_archive(topics: List[Dict]) -> None:
+    """Append topics to research_agenda_archive.json (create if missing)."""
+    if not topics:
+        return
+    try:
+        ARCHIVE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        if ARCHIVE_PATH.exists():
+            try:
+                existing = json.loads(ARCHIVE_PATH.read_text(encoding="utf-8"))
+                archived = existing.get("archived_topics", []) if isinstance(existing, dict) else []
+            except (ValueError, TypeError, json.JSONDecodeError):
+                archived = []
+        else:
+            archived = []
+        archived.extend(topics)
+        ARCHIVE_PATH.write_text(
+            json.dumps({"archived_topics": archived}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception as e:
+        logger.warning("Could not append to research agenda archive %s: %s", ARCHIVE_PATH, e)
+
+
+def prune_agenda(
+    agenda: ResearchAgenda,
+    now: Optional[datetime] = None,
+    covered_ttl_days: int = COVERED_TTL_DAYS,
+    uncovered_archive_days: int = UNCOVERED_ARCHIVE_DAYS,
+    max_active: int = MAX_ACTIVE_TOPICS,
+) -> Dict[str, int]:
+    """Prune pending_topics in place. Returns counts of what happened.
+
+    Policy (state-aware TTL + hard cap safety net):
+      1. TTL: drop covered=True topics older than ``covered_ttl_days`` (deleted).
+      2. Archive: move covered=False topics older than ``uncovered_archive_days``
+         to research_agenda_archive.json (preserved, not deleted).
+      3. Hard cap: if active topics still exceed ``max_active``, evict the oldest
+         covered=True first, then the oldest covered=False, archiving the evicted
+         uncovered ones. This is the safety net if the TTL sweep lapses.
+
+    ``now`` is injectable for deterministic testing. Topics without a parseable
+    ``created_at`` are treated as age 0 (never purged by age; kept newest).
+    """
+    now = now or datetime.now(timezone.utc)
+    topics = list(agenda.pending_topics)
+    result = {"dropped_covered_ttl": 0, "archived_uncovered_ttl": 0,
+              "capped_dropped_covered": 0, "capped_archived_uncovered": 0,
+              "before": len(topics), "after": 0}
+
+    to_archive: List[Dict] = []
+    survivors: List[Dict] = []
+
+    # ── 1 & 2: age-based TTL / archive ──
+    for t in topics:
+        age = _age_days(t, now)
+        covered = bool(t.get("covered"))
+        if covered:
+            if age is not None and age >= covered_ttl_days:
+                result["dropped_covered_ttl"] += 1
+                continue  # deleted
+            survivors.append(t)
+        else:
+            if age is not None and age >= uncovered_archive_days:
+                to_archive.append(t)
+                result["archived_uncovered_ttl"] += 1
+                continue  # archived, not kept
+            survivors.append(t)
+
+    # ── 3: hard cap safety net ──
+    if len(survivors) > max_active:
+        # Sort by age descending (oldest first) using created_at; missing ts = newest.
+        def _sort_key(t: Dict):
+            dt = _parse_ts(t.get("created_at"))
+            # oldest first: smaller timestamp sorts first; missing -> treat as newest
+            return dt or now
+
+        overflow = len(survivors) - max_active
+        # Evict covered first (oldest), then uncovered (oldest).
+        covered_sorted = sorted([t for t in survivors if t.get("covered")], key=_sort_key)
+        uncovered_sorted = sorted([t for t in survivors if not t.get("covered")], key=_sort_key)
+
+        evict_ids = []  # identity-based eviction set
+        evicted = []
+        for t in covered_sorted:
+            if len(evicted) >= overflow:
+                break
+            evicted.append(t)
+            evict_ids.append(id(t))
+            result["capped_dropped_covered"] += 1
+        if len(evicted) < overflow:
+            for t in uncovered_sorted:
+                if len(evicted) >= overflow:
+                    break
+                evicted.append(t)
+                evict_ids.append(id(t))
+                to_archive.append(t)  # preserve uncovered even when cap-evicted
+                result["capped_archived_uncovered"] += 1
+
+        evict_set = set(evict_ids)
+        survivors = [t for t in survivors if id(t) not in evict_set]
+
+    _append_archive(to_archive)
+    agenda.pending_topics = survivors
+    result["after"] = len(survivors)
+    return result
