@@ -120,6 +120,7 @@ data/last_balance_check.txt
 data/cascade_telemetry.jsonl
 data/anthropic_spend_tracker.json
 data/degraded_mode_state.json
+data/research_agenda.json
 
 # Compressed backups
 _legacy_backup_*.zip
