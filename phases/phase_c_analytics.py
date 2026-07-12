@@ -18,7 +18,7 @@ from services.telegram_client import create_telegram_client
 from services.roadmap import load_roadmap, save_roadmap, update_series_weight
 from services.persistence import load_topic_engagement
 from prompts.prompt_templates import SOCIAL_REPURPOSING_TEMPLATE
-from services.research_agenda import load_agenda, save_agenda, ResearchAgenda
+from services.research_agenda import load_agenda, save_agenda, prune_agenda, ResearchAgenda
 from services.self_improvement import log_proposal
 from utils.phase_utils import phase_error_boundary, validate_phase_deps
 
@@ -700,6 +700,26 @@ class PhaseCAnalytics:
         except Exception as e:
             logger.warning("Phase C: research agenda update failed: %s", e)
             results["research_agenda_updated"] = False
+
+        # Prune the research agenda (retention: TTL + archive + hard cap).
+        # Safe to call every cycle: prune_agenda() has an internal frequency
+        # guard (default 24h) and no-ops silently if the interval has not elapsed.
+        try:
+            agenda = load_agenda()
+            prune_res = prune_agenda(agenda)
+            if not prune_res.get("skipped"):
+                save_agenda(agenda)
+                logger.info(
+                    "Phase C: research agenda pruned — dropped_covered=%d, archived_uncovered=%d, "
+                    "capped_covered=%d, capped_archived=%d (%d→%d)",
+                    prune_res["dropped_covered_ttl"], prune_res["archived_uncovered_ttl"],
+                    prune_res["capped_dropped_covered"], prune_res["capped_archived_uncovered"],
+                    prune_res["before"], prune_res["after"],
+                )
+            results["research_agenda_pruned"] = not prune_res.get("skipped")
+        except Exception as e:
+            logger.warning("Phase C: research agenda prune failed: %s", e)
+            results["research_agenda_pruned"] = False
         
         # Update state
         state["last_analytics_run"] = datetime.now().isoformat()

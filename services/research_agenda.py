@@ -32,6 +32,14 @@ COVERED_TTL_DAYS = int(os.getenv("AGENDA_COVERED_TTL_DAYS", "14"))
 UNCOVERED_ARCHIVE_DAYS = int(os.getenv("AGENDA_UNCOVERED_ARCHIVE_DAYS", "60"))
 MAX_ACTIVE_TOPICS = int(os.getenv("AGENDA_MAX_ACTIVE_TOPICS", "150"))
 
+# ── Prune frequency guard ─────────────────────────────────────────
+# prune_agenda() is safe to call every Phase C cycle: an internal guard tracks
+# the last run in data/prune_agenda_last_run.json and no-ops silently if the
+# configured interval has not elapsed. Same persistence pattern as
+# degraded_mode_state.json (gitignored).
+PRUNE_STATE_PATH = Path("data/prune_agenda_last_run.json")
+PRUNE_INTERVAL_HOURS = float(os.getenv("PRUNE_INTERVAL_HOURS", "24"))
+
 
 @dataclass
 class ResearchAgenda:
@@ -212,12 +220,36 @@ def _append_archive(topics: List[Dict]) -> None:
         logger.warning("Could not append to research agenda archive %s: %s", ARCHIVE_PATH, e)
 
 
+def _load_prune_last_run() -> float:
+    """Return the epoch of the last prune run (0.0 if never / unreadable)."""
+    try:
+        with open(PRUNE_STATE_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return float(data.get("last_pruned_at", 0.0))
+    except (FileNotFoundError, ValueError, TypeError, json.JSONDecodeError):
+        return 0.0
+    except Exception as e:
+        logger.debug("Could not read prune state %s: %s", PRUNE_STATE_PATH, e)
+        return 0.0
+
+
+def _save_prune_last_run(epoch: float) -> None:
+    try:
+        PRUNE_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(PRUNE_STATE_PATH, "w", encoding="utf-8") as f:
+            json.dump({"last_pruned_at": epoch}, f, ensure_ascii=False)
+    except Exception as e:
+        logger.warning("Could not persist prune state %s: %s", PRUNE_STATE_PATH, e)
+
+
 def prune_agenda(
     agenda: ResearchAgenda,
     now: Optional[datetime] = None,
     covered_ttl_days: int = COVERED_TTL_DAYS,
     uncovered_archive_days: int = UNCOVERED_ARCHIVE_DAYS,
     max_active: int = MAX_ACTIVE_TOPICS,
+    respect_interval: bool = True,
+    interval_hours: float = PRUNE_INTERVAL_HOURS,
 ) -> Dict[str, int]:
     """Prune pending_topics in place. Returns counts of what happened.
 
@@ -229,14 +261,36 @@ def prune_agenda(
          covered=True first, then the oldest covered=False, archiving the evicted
          uncovered ones. This is the safety net if the TTL sweep lapses.
 
+    Frequency guard: when ``respect_interval`` is True (default), the prune logic
+    only runs if at least ``interval_hours`` elapsed since the last successful run
+    (persisted in data/prune_agenda_last_run.json). Otherwise it is a silent
+    no-op returning ``{"skipped": 1, ...}``. This makes it safe to call every
+    Phase C cycle. Pass ``respect_interval=False`` to force a run (tests / manual).
+
     ``now`` is injectable for deterministic testing. Topics without a parseable
     ``created_at`` are treated as age 0 (never purged by age; kept newest).
     """
     now = now or datetime.now(timezone.utc)
-    topics = list(agenda.pending_topics)
+
     result = {"dropped_covered_ttl": 0, "archived_uncovered_ttl": 0,
               "capped_dropped_covered": 0, "capped_archived_uncovered": 0,
-              "before": len(topics), "after": 0}
+              "before": len(agenda.pending_topics), "after": len(agenda.pending_topics),
+              "skipped": 0}
+
+    # ── Frequency guard: no-op silently if interval has not elapsed ──
+    if respect_interval:
+        last_run = _load_prune_last_run()
+        if last_run > 0.0:
+            elapsed_hours = (now.timestamp() - last_run) / 3600.0
+            if elapsed_hours < interval_hours:
+                logger.debug(
+                    "prune_agenda: skipped (%.1fh since last run < %.1fh interval)",
+                    elapsed_hours, interval_hours,
+                )
+                result["skipped"] = 1
+                return result
+
+    topics = list(agenda.pending_topics)
 
     to_archive: List[Dict] = []
     survivors: List[Dict] = []
@@ -293,4 +347,6 @@ def prune_agenda(
     _append_archive(to_archive)
     agenda.pending_topics = survivors
     result["after"] = len(survivors)
+    # Record successful run for the frequency guard.
+    _save_prune_last_run(now.timestamp())
     return result

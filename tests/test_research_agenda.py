@@ -13,11 +13,14 @@ from services import research_agenda as ra
 def _isolate_agenda_path(tmp_path):
     orig = ra.AGENDA_PATH
     orig_archive = ra.ARCHIVE_PATH
+    orig_prune_state = ra.PRUNE_STATE_PATH
     ra.AGENDA_PATH = tmp_path / "research_agenda.json"
     ra.ARCHIVE_PATH = tmp_path / "research_agenda_archive.json"
+    ra.PRUNE_STATE_PATH = tmp_path / "prune_agenda_last_run.json"
     yield
     ra.AGENDA_PATH = orig
     ra.ARCHIVE_PATH = orig_archive
+    ra.PRUNE_STATE_PATH = orig_prune_state
 
 
 class TestResearchAgenda:
@@ -155,7 +158,7 @@ class TestPruneAgenda:
             _mk_topic("old-covered", True, age_days=20, now=self.NOW),   # >14d -> drop
             _mk_topic("fresh-covered", True, age_days=5, now=self.NOW),  # <14d -> keep
         ]
-        res = ra.prune_agenda(agenda, now=self.NOW)
+        res = ra.prune_agenda(agenda, now=self.NOW, respect_interval=False)
         names = {t["topic"] for t in agenda.pending_topics}
         assert names == {"fresh-covered"}
         assert res["dropped_covered_ttl"] == 1
@@ -163,7 +166,7 @@ class TestPruneAgenda:
     def test_covered_topic_deleted_not_archived(self):
         agenda = ra.ResearchAgenda()
         agenda.pending_topics = [_mk_topic("old-covered", True, age_days=30, now=self.NOW)]
-        ra.prune_agenda(agenda, now=self.NOW)
+        ra.prune_agenda(agenda, now=self.NOW, respect_interval=False)
         # Covered TTL deletes; archive file should have no covered entry.
         if ra.ARCHIVE_PATH.exists():
             arch = json.loads(ra.ARCHIVE_PATH.read_text(encoding="utf-8"))
@@ -175,7 +178,7 @@ class TestPruneAgenda:
             _mk_topic("stale-pending", False, age_days=70, now=self.NOW),   # >60d -> archive
             _mk_topic("recent-pending", False, age_days=10, now=self.NOW),  # keep
         ]
-        res = ra.prune_agenda(agenda, now=self.NOW)
+        res = ra.prune_agenda(agenda, now=self.NOW, respect_interval=False)
         names = {t["topic"] for t in agenda.pending_topics}
         assert names == {"recent-pending"}
         assert res["archived_uncovered_ttl"] == 1
@@ -186,7 +189,7 @@ class TestPruneAgenda:
         """An uncovered topic aged between 14d and 60d must survive (not covered-TTL'd)."""
         agenda = ra.ResearchAgenda()
         agenda.pending_topics = [_mk_topic("mid-age-pending", False, age_days=30, now=self.NOW)]
-        ra.prune_agenda(agenda, now=self.NOW)
+        ra.prune_agenda(agenda, now=self.NOW, respect_interval=False)
         assert [t["topic"] for t in agenda.pending_topics] == ["mid-age-pending"]
 
     def test_hard_cap_evicts_covered_first(self):
@@ -199,7 +202,7 @@ class TestPruneAgenda:
             _mk_topic("unc-a", False, age_days=5, now=self.NOW),
             _mk_topic("unc-b", False, age_days=2, now=self.NOW),
         ]
-        res = ra.prune_agenda(agenda, now=self.NOW, max_active=3)
+        res = ra.prune_agenda(agenda, now=self.NOW, max_active=3, respect_interval=False)
         names = [t["topic"] for t in agenda.pending_topics]
         assert len(names) == 3
         # Both uncovered survive; the 2 oldest covered are evicted.
@@ -217,7 +220,7 @@ class TestPruneAgenda:
             _mk_topic("unc-3", False, age_days=5, now=self.NOW),
             _mk_topic("unc-newest", False, age_days=1, now=self.NOW),
         ]
-        res = ra.prune_agenda(agenda, now=self.NOW, max_active=2)
+        res = ra.prune_agenda(agenda, now=self.NOW, max_active=2, respect_interval=False)
         names = [t["topic"] for t in agenda.pending_topics]
         assert len(names) == 2
         assert "unc-newest" in names          # newest uncovered survives
@@ -234,7 +237,7 @@ class TestPruneAgenda:
         agenda.pending_topics = [
             {"topic": "no-timestamp", "source": "test", "tags": [], "covered": True},
         ]
-        res = ra.prune_agenda(agenda, now=self.NOW)
+        res = ra.prune_agenda(agenda, now=self.NOW, respect_interval=False)
         assert [t["topic"] for t in agenda.pending_topics] == ["no-timestamp"]
         assert res["dropped_covered_ttl"] == 0
 
@@ -244,7 +247,7 @@ class TestPruneAgenda:
             _mk_topic("keep1", True, age_days=1, now=self.NOW),
             _mk_topic("keep2", False, age_days=1, now=self.NOW),
         ]
-        res = ra.prune_agenda(agenda, now=self.NOW)
+        res = ra.prune_agenda(agenda, now=self.NOW, respect_interval=False)
         assert res["before"] == 2
         assert res["after"] == 2
         assert res["dropped_covered_ttl"] == 0
@@ -255,9 +258,9 @@ class TestPruneAgenda:
     def test_archive_appends_across_calls(self):
         agenda = ra.ResearchAgenda()
         agenda.pending_topics = [_mk_topic("old1", False, age_days=70, now=self.NOW)]
-        ra.prune_agenda(agenda, now=self.NOW)
+        ra.prune_agenda(agenda, now=self.NOW, respect_interval=False)
         agenda.pending_topics = [_mk_topic("old2", False, age_days=90, now=self.NOW)]
-        ra.prune_agenda(agenda, now=self.NOW)
+        ra.prune_agenda(agenda, now=self.NOW, respect_interval=False)
         arch = json.loads(ra.ARCHIVE_PATH.read_text(encoding="utf-8"))
         names = {t["topic"] for t in arch["archived_topics"]}
         assert names == {"old1", "old2"}
@@ -268,7 +271,70 @@ class TestPruneAgenda:
             _mk_topic("old-covered", True, age_days=30, now=self.NOW),
             _mk_topic("keep", False, age_days=1, now=self.NOW),
         ]
-        ra.prune_agenda(agenda, now=self.NOW)
+        ra.prune_agenda(agenda, now=self.NOW, respect_interval=False)
         ra.save_agenda(agenda)
         loaded = ra.load_agenda()
         assert [t["topic"] for t in loaded.pending_topics] == ["keep"]
+
+
+class TestPruneFrequencyGuard:
+    """The internal frequency guard: safe to call every cycle."""
+
+    BASE = datetime(2026, 7, 11, 12, 0, 0, tzinfo=timezone.utc)
+
+    def _agenda_with_old_covered(self):
+        agenda = ra.ResearchAgenda()
+        agenda.pending_topics = [_mk_topic("old-covered", True, age_days=30, now=self.BASE)]
+        return agenda
+
+    def test_two_calls_within_interval_prune_only_once(self):
+        # Call 1: no prior state -> runs, drops the old covered topic.
+        a1 = self._agenda_with_old_covered()
+        r1 = ra.prune_agenda(a1, now=self.BASE, interval_hours=24)
+        assert r1["skipped"] == 0
+        assert r1["dropped_covered_ttl"] == 1
+        assert a1.pending_topics == []
+
+        # Call 2, +10h later (< 24h): guard should skip -> no-op, topic untouched.
+        a2 = self._agenda_with_old_covered()
+        r2 = ra.prune_agenda(a2, now=self.BASE + timedelta(hours=10), interval_hours=24)
+        assert r2["skipped"] == 1
+        assert r2["dropped_covered_ttl"] == 0
+        assert [t["topic"] for t in a2.pending_topics] == ["old-covered"]  # untouched
+
+    def test_call_after_interval_prunes_again(self):
+        a1 = self._agenda_with_old_covered()
+        ra.prune_agenda(a1, now=self.BASE, interval_hours=24)
+
+        # +25h later (> 24h): guard allows a fresh run.
+        a2 = self._agenda_with_old_covered()
+        r2 = ra.prune_agenda(a2, now=self.BASE + timedelta(hours=25), interval_hours=24)
+        assert r2["skipped"] == 0
+        assert r2["dropped_covered_ttl"] == 1
+        assert a2.pending_topics == []
+
+    def test_respect_interval_false_always_runs(self):
+        a1 = self._agenda_with_old_covered()
+        ra.prune_agenda(a1, now=self.BASE, respect_interval=False)
+        # Immediately again, still within any interval, but forced:
+        a2 = self._agenda_with_old_covered()
+        r2 = ra.prune_agenda(a2, now=self.BASE, respect_interval=False)
+        assert r2["skipped"] == 0
+        assert r2["dropped_covered_ttl"] == 1
+
+    def test_guard_persists_last_run_timestamp(self):
+        a1 = self._agenda_with_old_covered()
+        ra.prune_agenda(a1, now=self.BASE, interval_hours=24)
+        assert ra.PRUNE_STATE_PATH.exists()
+        state = json.loads(ra.PRUNE_STATE_PATH.read_text(encoding="utf-8"))
+        assert state["last_pruned_at"] == self.BASE.timestamp()
+
+    def test_skipped_call_does_not_update_timestamp(self):
+        a1 = self._agenda_with_old_covered()
+        ra.prune_agenda(a1, now=self.BASE, interval_hours=24)
+        first_ts = json.loads(ra.PRUNE_STATE_PATH.read_text(encoding="utf-8"))["last_pruned_at"]
+        # Skipped call must not advance the timestamp.
+        a2 = self._agenda_with_old_covered()
+        ra.prune_agenda(a2, now=self.BASE + timedelta(hours=5), interval_hours=24)
+        second_ts = json.loads(ra.PRUNE_STATE_PATH.read_text(encoding="utf-8"))["last_pruned_at"]
+        assert first_ts == second_ts
