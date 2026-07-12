@@ -172,6 +172,15 @@ de Phase B cambia. Revisar si empieza a crecer la tasa de near-duplicates.
 
 ---
 
+## tier_fallback (DeepSeek V4 Pro) corre con thinking:disabled
+
+`tier_fallback` (DeepSeek V4 Pro) corre con `thinking:disabled` por costo — prioriza
+velocidad/precio sobre profundidad de razonamiento. Si la calidad editorial del fallback
+se percibe inferior a lo esperado, considerar `reasoning_effort:high` con `max_tokens` más
+generoso como alternativa, aceptando mayor costo por llamada.
+
+---
+
 ## Purga de fixture data en research_agenda.json (2026-07-11)
 
 Se detectó una fuga de fixture data de tests (strings "Post N about agents", "Feed post",

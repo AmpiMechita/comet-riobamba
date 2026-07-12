@@ -667,6 +667,22 @@ class ModelCascade:
             "max_tokens": int(max_tokens),
         }
 
+        # DeepSeek V4 Pro is a reasoning model: by default it spends the token
+        # budget on `reasoning_content` and may return an empty `content`
+        # (finish_reason="length"). For editorial content generation we want the
+        # answer directly, so disable thinking. Verified empirically that only
+        # {"thinking": {"type": "disabled"}} at top level takes effect (the
+        # OpenAI-SDK `extra_body`/`reasoning` variants are ignored by this
+        # raw-HTTP path). Scoped to DeepSeek so other OpenAI-compatible providers
+        # (cerebras, groq, ollama) are untouched.
+        _is_deepseek = provider.name == "tier_fallback" or "deepseek" in (provider.url or "").lower() or "deepseek" in (provider.model or "").lower()
+        if _is_deepseek:
+            payload["thinking"] = {"type": "disabled"}
+            # Safety margin for editorial prose (secondary to disabling thinking).
+            _min_fallback_tokens = int(os.getenv("DEEPSEEK_MIN_MAX_TOKENS", "2048"))
+            if int(max_tokens) < _min_fallback_tokens:
+                payload["max_tokens"] = _min_fallback_tokens
+
         response = requests.post(
             provider.url,
             headers=headers,

@@ -699,3 +699,79 @@ def test_missing_anthropic_key_logs_critical_warning(caplog):
         and "Claude 3.5 Sonnet" in r.message
         for r in caplog.records
     ), f"Expected critical ANTHROPIC_API_KEY warning, got: {[r.message for r in caplog.records]}"
+
+
+# ── DeepSeek thinking-disable isolation ────────────────────────────
+
+
+def _capture_openai_payload(cascade, provider):
+    """Run _call_provider_once against a stubbed requests.post and return the
+    JSON payload that would be sent to the OpenAI-compatible endpoint."""
+    captured = {}
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": "ok"}}]}
+
+    def _fake_post(url, headers=None, json=None, timeout=None):
+        captured["payload"] = json
+        return _Resp()
+
+    messages = [{"role": "user", "content": "hi"}]
+    with patch("services.model_cascade.requests.post", side_effect=_fake_post):
+        cascade._call_provider_once(provider, messages, max_tokens=100, temperature=0.5)
+    return captured["payload"]
+
+
+def test_deepseek_payload_disables_thinking_and_floors_max_tokens(cascade):
+    """tier_fallback (DeepSeek) must send thinking:disabled and floor max_tokens to 2048."""
+    prov = ProviderConfig(
+        name="tier_fallback",
+        url="https://api.deepseek.com/v1/chat/completions",
+        model="deepseek-v4-pro",
+        api_key="sk-ds",
+    )
+    payload = _capture_openai_payload(cascade, prov)
+    assert payload["thinking"] == {"type": "disabled"}
+    assert payload["max_tokens"] == 2048  # floored up from 100
+
+
+def test_deepseek_detected_by_model_name_even_if_provider_name_differs(cascade):
+    """Detection also works via 'deepseek' in url/model, not only provider name."""
+    prov = ProviderConfig(
+        name="some_other_name",
+        url="https://api.deepseek.com/v1/chat/completions",
+        model="deepseek-v4-pro",
+        api_key="sk-ds",
+    )
+    payload = _capture_openai_payload(cascade, prov)
+    assert payload["thinking"] == {"type": "disabled"}
+
+
+def test_cerebras_payload_does_not_disable_thinking(cascade):
+    """Cerebras (OpenAI-compatible, non-DeepSeek) must NOT get the thinking flag."""
+    prov = ProviderConfig(
+        name="cerebras",
+        url="https://api.cerebras.ai/v1/chat/completions",
+        model="llama-3.3-70b",
+        api_key="csk",
+    )
+    payload = _capture_openai_payload(cascade, prov)
+    assert "thinking" not in payload
+    assert payload["max_tokens"] == 100  # untouched
+
+
+def test_groq_payload_does_not_disable_thinking(cascade):
+    """Groq (OpenAI-compatible, non-DeepSeek) must NOT get the thinking flag."""
+    prov = ProviderConfig(
+        name="groq",
+        url="https://api.groq.com/openai/v1/chat/completions",
+        model="llama-3.3-70b-versatile",
+        api_key="gsk",
+    )
+    payload = _capture_openai_payload(cascade, prov)
+    assert "thinking" not in payload
+    assert payload["max_tokens"] == 100  # untouched
