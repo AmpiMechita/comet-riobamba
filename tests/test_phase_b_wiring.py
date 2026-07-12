@@ -247,7 +247,11 @@ def test_commented_post_ids_persistence():
     _COMMENTED_POSTS_PATH.parent.mkdir(parents=True, exist_ok=True)
     from datetime import datetime
     now = datetime.now()
-    test_ids = {"p1": now.isoformat(), "p2": now.isoformat(), "p3": now.isoformat()}
+    # Keys must be valid UUID post_ids (invalid keys are now filtered on save).
+    p1 = "a1b2c3d4-0000-4000-8000-000000000001"
+    p2 = "a1b2c3d4-0000-4000-8000-000000000002"
+    p3 = "a1b2c3d4-0000-4000-8000-000000000003"
+    test_ids = {p1: now.isoformat(), p2: now.isoformat(), p3: now.isoformat()}
     _save_commented_post_ids(test_ids)
     loaded = _load_commented_post_ids()
     assert loaded.keys() == test_ids.keys()
@@ -456,7 +460,10 @@ def test_agent_comment_ids_persistence():
     """_save_agent_comment_ids and _load_agent_comment_ids round-trip correctly."""
     from phases.phase_b import _save_agent_comment_ids, _load_agent_comment_ids, _AGENT_COMMENT_IDS_PATH
     _AGENT_COMMENT_IDS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    test_data = {"p1": ["c1", "c2"], "p2": ["c3"]}
+    # Keys must be valid UUID post_ids (invalid keys are now filtered on save).
+    p1 = "a1b2c3d4-0000-4000-8000-000000000001"
+    p2 = "a1b2c3d4-0000-4000-8000-000000000002"
+    test_data = {p1: ["c1", "c2"], p2: ["c3"]}
     _save_agent_comment_ids(test_data)
     loaded = _load_agent_comment_ids()
     assert loaded == test_data
@@ -469,3 +476,75 @@ def test_agent_comment_ids_empty_when_missing():
         _AGENT_COMMENT_IDS_PATH.unlink()
     loaded = _load_agent_comment_ids()
     assert loaded == {}
+
+
+# ── Tests: post_id validation on save (invalid keys are filtered) ──
+
+import logging as _logging
+_VALID_UUID = "a1b2c3d4-0000-4000-8000-000000000001"
+
+
+def test_save_commented_post_ids_keeps_valid_uuid():
+    from phases.phase_b import _save_commented_post_ids, _load_commented_post_ids, _COMMENTED_POSTS_PATH
+    from datetime import datetime
+    _COMMENTED_POSTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _save_commented_post_ids({_VALID_UUID: datetime.now().isoformat()})
+    loaded = _load_commented_post_ids()
+    assert _VALID_UUID in loaded
+    _COMMENTED_POSTS_PATH.unlink(missing_ok=True)
+
+
+def test_save_commented_post_ids_discards_non_uuid_string(caplog):
+    from phases.phase_b import _save_commented_post_ids, _load_commented_post_ids, _COMMENTED_POSTS_PATH
+    from datetime import datetime
+    _COMMENTED_POSTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().isoformat()
+    with caplog.at_level(_logging.WARNING, logger="phases.phase_b"):
+        _save_commented_post_ids({_VALID_UUID: ts, "not-a-uuid": ts})
+    loaded = _load_commented_post_ids()
+    assert _VALID_UUID in loaded
+    assert "not-a-uuid" not in loaded
+    assert any("not-a-uuid" in r.message for r in caplog.records), \
+        f"expected WARNING mentioning offending id, got: {[r.message for r in caplog.records]}"
+    _COMMENTED_POSTS_PATH.unlink(missing_ok=True)
+
+
+def test_save_commented_post_ids_discards_none_and_int_keys(caplog):
+    """is_valid_post_id raises TypeError on None/int; the filter must handle it gracefully."""
+    from phases.phase_b import _save_commented_post_ids, _load_commented_post_ids, _COMMENTED_POSTS_PATH
+    from datetime import datetime
+    _COMMENTED_POSTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().isoformat()
+    with caplog.at_level(_logging.WARNING, logger="phases.phase_b"):
+        # dict with a None key and an int key alongside a valid UUID
+        _save_commented_post_ids({_VALID_UUID: ts, None: ts, 123: ts})
+    loaded = _load_commented_post_ids()
+    assert list(loaded.keys()) == [_VALID_UUID]
+    msgs = " ".join(r.message for r in caplog.records)
+    assert "None" in msgs and "123" in msgs
+    _COMMENTED_POSTS_PATH.unlink(missing_ok=True)
+
+
+def test_save_agent_comment_ids_discards_invalid_keys(caplog):
+    from phases.phase_b import _save_agent_comment_ids, _load_agent_comment_ids, _AGENT_COMMENT_IDS_PATH
+    _AGENT_COMMENT_IDS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with caplog.at_level(_logging.WARNING, logger="phases.phase_b"):
+        _save_agent_comment_ids({_VALID_UUID: ["c1"], "bad-id": ["c2"], None: ["c3"], 7: ["c4"]})
+    loaded = _load_agent_comment_ids()
+    assert list(loaded.keys()) == [_VALID_UUID]
+    assert loaded[_VALID_UUID] == ["c1"]
+    msgs = " ".join(r.message for r in caplog.records)
+    assert "bad-id" in msgs and "None" in msgs and "7" in msgs
+    _AGENT_COMMENT_IDS_PATH.unlink(missing_ok=True)
+
+
+def test_save_agent_comment_ids_load_still_works_after_filter():
+    """_load_agent_comment_ids reads the filtered file with correct format."""
+    from phases.phase_b import _save_agent_comment_ids, _load_agent_comment_ids, _AGENT_COMMENT_IDS_PATH
+    _AGENT_COMMENT_IDS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    p1 = "a1b2c3d4-0000-4000-8000-000000000001"
+    p2 = "a1b2c3d4-0000-4000-8000-000000000002"
+    _save_agent_comment_ids({p1: ["c1", "c2"], p2: ["c3"], "junk": ["x"]})
+    loaded = _load_agent_comment_ids()
+    assert loaded == {p1: ["c1", "c2"], p2: ["c3"]}
+    _AGENT_COMMENT_IDS_PATH.unlink(missing_ok=True)
