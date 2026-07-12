@@ -163,6 +163,15 @@ No confundir con los tiers internos al hacer debugging: `tier_premium` = Anthrop
 
 ---
 
+## Deuda de dedup por exact-match en research_agenda
+
+Dedup de `research_agenda.py` usa exact-match de string en `add_topic()` sin normalización
+(lowercase/strip). Funciona hoy porque las reformulaciones son raras (~5-7% en muestra de
+199 topics reales, confirmado 2026-07-11), pero no está protegido si el estilo de generación
+de Phase B cambia. Revisar si empieza a crecer la tasa de near-duplicates.
+
+---
+
 ## Purga de fixture data en research_agenda.json (2026-07-11)
 
 Se detectó una fuga de fixture data de tests (strings "Post N about agents", "Feed post",
