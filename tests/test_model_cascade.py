@@ -592,6 +592,9 @@ def test_anthropic_sdk_path_maps_system_and_messages(cascade):
     assert call_kwargs["system"] == "You are terse."
     assert call_kwargs["model"] == "claude-sonnet-5"
     assert [m["role"] for m in call_kwargs["messages"]] == ["user"]
+    # Regression guard: claude-sonnet-5 rejects `temperature` (HTTP 400). It must
+    # NOT be sent on the Anthropic SDK path.
+    assert "temperature" not in call_kwargs
 
 
 def test_anthropic_http_fallback_when_sdk_missing(cascade):
@@ -624,6 +627,8 @@ def test_anthropic_http_fallback_when_sdk_missing(cascade):
     assert kwargs["headers"]["anthropic-version"] == "2023-06-01"
     assert kwargs["json"]["system"] == "sys"
     assert [m["role"] for m in kwargs["json"]["messages"]] == ["user"]
+    # Regression guard: `temperature` must NOT be in the HTTP payload either.
+    assert "temperature" not in kwargs["json"]
 
 
 def test_extract_anthropic_text_from_dict():

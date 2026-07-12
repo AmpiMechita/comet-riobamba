@@ -765,10 +765,14 @@ class ModelCascade:
         if anthropic is not None:
             try:
                 client = anthropic.Anthropic(api_key=provider.api_key, timeout=provider.timeout)
+                # NOTE: `temperature` is deliberately NOT sent. claude-sonnet-5 rejects
+                # it (HTTP 400 "temperature is deprecated for this model"); omitting the
+                # field is equivalent to the model default and keeps the call valid.
+                # This omission is Anthropic-specific — the OpenAI-compatible path
+                # (DeepSeek et al.) still sends temperature normally.
                 resp = client.messages.create(
                     model=provider.model,
                     max_tokens=int(max_tokens),
-                    temperature=float(temperature),
                     system=system_text or None,
                     messages=chat_messages,
                 )
@@ -789,10 +793,11 @@ class ModelCascade:
             "anthropic-version": "2023-06-01",
         }
         headers.update(provider.extra_headers or {})
+        # NOTE: `temperature` is deliberately omitted (see SDK path above):
+        # claude-sonnet-5 returns HTTP 400 if it is present. Omission == default.
         payload: Dict[str, Any] = {
             "model": provider.model,
             "max_tokens": int(max_tokens),
-            "temperature": float(temperature),
             "messages": chat_messages,
         }
         if system_text:
