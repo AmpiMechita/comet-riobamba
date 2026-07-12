@@ -137,6 +137,7 @@ from services.moltbook_api_client import APIResponse
 from services.dedup_store import DedupStore
 from services.persistence import enqueue_outbox
 from services.claim_checker import extract_claim, check_claim
+from services.own_post_store import is_valid_post_id
 from core.strategy_state import StrategyState
 from core.memory_store import MemoryStore
 from services.self_eval import update_today_metrics
@@ -484,9 +485,32 @@ def _load_commented_post_ids() -> Dict[str, str]:
     return {}
 
 
+def _filter_valid_post_id_keys(ids: Dict[str, Any], source: str) -> Dict[str, Any]:
+    """Return a copy of ``ids`` keeping only entries whose key is a valid UUID
+    post_id. Invalid keys (non-str like None/int, or non-UUID strings) are
+    discarded and logged at WARNING with the offending value.
+
+    is_valid_post_id() calls re.match and raises TypeError on non-str input,
+    so we guard the type before calling it.
+    """
+    filtered: Dict[str, Any] = {}
+    for key, value in ids.items():
+        try:
+            valid = isinstance(key, str) and is_valid_post_id(key)
+        except Exception:
+            valid = False
+        if valid:
+            filtered[key] = value
+        else:
+            logger.warning("%s: descartando entrada con post_id invalido=%r", source, key)
+    return filtered
+
+
 def _save_commented_post_ids(ids: Dict[str, str]) -> None:
-    """Save commented_post_ids dict, preserving existing timestamps for known entries."""
+    """Save commented_post_ids dict, preserving existing timestamps for known entries.
+    Filters out entries with invalid (non-UUID) post_id keys before writing."""
     try:
+        ids = _filter_valid_post_id_keys(ids, "commented_post_ids")
         _COMMENTED_POSTS_PATH.parent.mkdir(parents=True, exist_ok=True)
         _COMMENTED_POSTS_PATH.write_text(
             json.dumps(ids, ensure_ascii=False, indent=2),
@@ -511,7 +535,10 @@ def _load_agent_comment_ids() -> Dict[str, List[str]]:
 
 
 def _save_agent_comment_ids(ids: Dict[str, List[str]]) -> None:
+    """Save agent_comment_ids dict. Filters out entries with invalid (non-UUID)
+    post_id keys before writing."""
     try:
+        ids = _filter_valid_post_id_keys(ids, "agent_comment_ids")
         _AGENT_COMMENT_IDS_PATH.parent.mkdir(parents=True, exist_ok=True)
         _AGENT_COMMENT_IDS_PATH.write_text(
             json.dumps(ids, ensure_ascii=False, indent=2),
