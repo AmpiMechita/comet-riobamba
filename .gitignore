@@ -125,6 +125,7 @@ data/research_agenda.json
 data/research_agenda_archive.json
 data/prune_agenda_last_run.json
 data/stop.flag
+data/shadow_quality_checks.jsonl
 
 # Compressed backups
 _legacy_backup_*.zip

@@ -1181,10 +1181,47 @@ class PhaseB:
             logger.error("Phase B: create_comment error for post %s: %s", post_id, e)
             return None
 
-    def _score_reply_draft(self, reply_text: str, source_text: str) -> tuple[int, List[str]]:
+    def _score_reply_draft(self, reply_text: str, source_text: str, log_context: Optional[Dict[str, Any]] = None) -> tuple[int, List[str]]:
         # v5.1: Permissive scoring mode — base 50, all penalties zeroed for testing
         score = 50
         reasons: List[str] = []
+
+        # ── Shadow quality logging (non-blocking, diagnostics only) ──
+        # Runs the three disabled guardrail functions purely for observability.
+        # If ANY would have flagged the reply, a JSONL record is appended to
+        # data/shadow_quality_checks.jsonl so we can calibrate the penalties
+        # against real data before deciding to reactivate them in the gate.
+        # Wrapped in try/except — a shadow-log I/O failure must never affect
+        # the actual publication flow.
+        if log_context is not None:
+            try:
+                shadow_hits = []
+                if self._reply_has_guardrail_template(reply_text):
+                    shadow_hits.append("guardrail_template")
+                if self._reply_has_ungrounded_numeric_specificity(reply_text, source_text):
+                    shadow_hits.append("ungrounded_numeric_specificity")
+                if not self._reply_mentions_source_terms(reply_text, source_text):
+                    shadow_hits.append("weak_source_anchor")
+                if shadow_hits:
+                    record = {
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "checks": shadow_hits,
+                        "reply_preview": reply_text[:300],
+                        "source_preview": source_text[:300],
+                    }
+                    if log_context.get("post_id"):
+                        record["post_id"] = str(log_context["post_id"])
+                    if log_context.get("comment_id"):
+                        record["comment_id"] = str(log_context["comment_id"])
+                    try:
+                        _sh = getattr(self, "_shadow_quality_log_path", None) or Path("data") / "shadow_quality_checks.jsonl"
+                        _sh.parent.mkdir(parents=True, exist_ok=True)
+                        with open(str(_sh), "a", encoding="utf-8") as _fh:
+                            _fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+                    except Exception:
+                        pass  # never fail the real flow
+            except Exception:
+                pass
 
         # ── Penalties disabled for permissive test mode ──
         # if self._reply_has_guardrail_template(reply_text):
@@ -2069,7 +2106,8 @@ class PhaseB:
                     logger.warning("Phase B: feed reply BLOCKED — repeated historical examples: %s", ", ".join(blocked_examples))
                     return ""
 
-                score, reasons = self._score_reply_draft(reply, f"{title}\n{body}")
+                score, reasons = self._score_reply_draft(reply, f"{title}\n{body}",
+                                                            log_context={"post_id": post.get("id")})
                 if score < 10:
                     logger.warning(
                         "Phase B: feed reply REJECTED — score=%d reasons=%s preview=%s",

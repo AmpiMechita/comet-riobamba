@@ -454,6 +454,70 @@ def test_reply_quality_score_penalizes_repeated_theme():
     assert "repeated_theme" in reasons
 
 
+# ── Shadow quality logging (non-blocking diagnostics) ───────────
+
+
+def test_shadow_log_written_when_guardrail_hits(tmp_path):
+    """_score_reply_draft with log_context writes shadow_quality_checks.jsonl
+    when a guardrail check fires, and the actual score is unchanged (50)."""
+    from phases.deps import PhaseBDeps
+    from phases.phase_b import PhaseB
+    import json as _j
+    from pathlib import Path as _P
+
+    deps = PhaseBDeps(
+        model_cascade=MagicMock(),
+        moltbook_client=MagicMock(),
+        behavior_cfg={"max_comments_per_post": 5, "max_comments_per_day": 10, "max_comment_replies_per_cycle": 3},
+        agent_name="test-agent",
+    )
+    phase_b = PhaseB(deps=deps)
+    phase_b._shadow_quality_log_path = _P(tmp_path / "shadow_quality_checks.jsonl")
+
+    reply = "a practical guardrail is to keep p99 latency under 500 ms"
+    source = "This post discusses deployment strategies for production systems."
+
+    score_before, reasons_before = phase_b._score_reply_draft(reply, source)
+    score, reasons = phase_b._score_reply_draft(
+        reply, source,
+        log_context={"post_id": "p-test", "comment_id": "c-test"},
+    )
+    assert score == score_before
+    assert reasons == reasons_before
+    assert score == 50
+    assert phase_b._shadow_quality_log_path.exists(), "shadow log must exist"
+    lines = phase_b._shadow_quality_log_path.read_text("utf-8").splitlines()
+    assert len(lines) >= 1
+    record = _j.loads(lines[0])
+    assert record["post_id"] == "p-test"
+    assert record["comment_id"] == "c-test"
+    assert len(record["checks"]) >= 1
+
+
+def test_shadow_log_not_written_when_clean_reply(tmp_path):
+    """A clean reply without guardrail triggers must NOT write the shadow log."""
+    from phases.deps import PhaseBDeps
+    from phases.phase_b import PhaseB
+    from pathlib import Path as _P
+
+    deps = PhaseBDeps(
+        model_cascade=MagicMock(),
+        moltbook_client=MagicMock(),
+        behavior_cfg={"max_comments_per_post": 5, "max_comments_per_day": 10, "max_comment_replies_per_cycle": 3},
+        agent_name="test-agent",
+    )
+    phase_b = PhaseB(deps=deps)
+    phase_b._shadow_quality_log_path = _P(tmp_path / "shadow_quality_checks.jsonl")
+
+    reply = "Circuit breakers need a half-open state to probe recovery."
+    source = "This post discusses circuit breaker patterns in distributed systems."
+    phase_b._score_reply_draft(
+        reply, source,
+        log_context={"post_id": "p-clean", "comment_id": "c-clean"},
+    )
+    assert not phase_b._shadow_quality_log_path.exists(), "clean reply must NOT create shadow log"
+
+
 # ── Tests: agent comment ID tracking ────────────────────────────
 
 def test_agent_comment_ids_persistence():
