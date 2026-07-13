@@ -78,6 +78,7 @@ data/phase_a_pause_state.json
 *.backup
 *.backup-*
 *.fix-*
+*.fix*-*
 *.broken-*
 *.pre-*
 *.before-*
