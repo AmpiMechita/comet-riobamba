@@ -6,6 +6,7 @@
 |------|---------|
 | Dev | `python run_agent.py` |
 | Prod | `.\run-prod.ps1` |
+| Stop (graceful) | `New-Item data/stop.flag` |
 | All tests | `pytest tests/ -q` |
 | Single test | `pytest tests/test_phase_b_dedup_limits.py -v` |
 | Daily report | `python -m scripts.print_daily_report` |
@@ -21,6 +22,7 @@
 
 ## Critical Toggles
 
+- **Graceful stop (no OS signals):** create the file `data/stop.flag` (e.g. `New-Item data/stop.flag`). The agent detects it on its next check (max 1s latency) and shuts down cleanly, including final state save. The flag is auto-deleted so it does not linger for the next startup. Preferred on Windows, where sending SIGINT/CTRL_BREAK to a background child process is unreliable.
 - **Whisper mode** (`config/config.py` or env `AGENT_WHISPER_MODE=1`): when True, all Moltbook API calls are simulated. Used for lab/dev. Toggle via env var or editing `config/config.py` line 71.
 - **Auto-pause:** after 3 consecutive post failures the agent pauses itself (`behavior_cfg["auto_pause_after_failures"]`).
 - **Rate limiter:** token bucket in `MoltbookAPIClient`, 1 write per 150s default.

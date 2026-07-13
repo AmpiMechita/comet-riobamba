@@ -151,6 +151,10 @@ class COMETRiobambaAgent:
 
         self.state_file = Path("data/state/agent_state.json")
         self.health_file = Path("data/state/health.json")
+        # Graceful stop without OS signals: create data/stop.flag to request a
+        # clean shutdown (detected within 1s in the main loop). Reliable on
+        # Windows where SIGINT/CTRL_BREAK to a child process is not available.
+        self.stop_flag_file = Path("data/stop.flag")
         self.last_phase_b_run_at = time.time()
         # Load last seen announcement ID from disk
         try:
@@ -816,13 +820,16 @@ class COMETRiobambaAgent:
         base_interval = behavior_cfg.get("cycle_interval_seconds", POLICY.cycle_interval_seconds)
 
         while not self.shutdown_requested:
+            # Detect an out-of-band graceful stop request (data/stop.flag).
+            if self._check_stop_flag():
+                break
             cycle_interval = get_current_interval(base_interval)
             skip, reason = should_skip_cycle()
             if skip:
                 logger.warning("Circuit breaker global abierto. Ciclo omitido. Motivo: %s", reason)
                 logger.info("Esperando %ss antes de reintentar...", cycle_interval)
                 for _ in range(int(cycle_interval)):
-                    if self.shutdown_requested:
+                    if self.shutdown_requested or self._check_stop_flag():
                         break
                     await asyncio.sleep(1)
                 continue
@@ -884,7 +891,7 @@ class COMETRiobambaAgent:
 
             logger.info("Esperando %ss hasta el próximo ciclo", cycle_interval)
             for _ in range(int(cycle_interval)):
-                if self.shutdown_requested:
+                if self.shutdown_requested or self._check_stop_flag():
                     break
                 await asyncio.sleep(1)
                 # Intra-sleep Phase B check: run Phase B-only if interval elapsed
@@ -916,6 +923,26 @@ class COMETRiobambaAgent:
     def request_shutdown(self):
         logger.info("🔄 Shutdown solicitado...")
         self.shutdown_requested = True
+
+    def _check_stop_flag(self) -> bool:
+        """If data/stop.flag exists, request shutdown and remove the flag.
+
+        Returns True if a stop was requested. The flag is deleted so it does not
+        linger and abort the next startup. Checked in the main loop's 1s sleep
+        ticks, so it adds no new latency.
+        """
+        try:
+            if self.stop_flag_file.exists():
+                logger.info("🛑 stop.flag detectado en %s — solicitando shutdown graceful.", self.stop_flag_file)
+                try:
+                    self.stop_flag_file.unlink()
+                except Exception as e:
+                    logger.warning("No se pudo eliminar stop.flag (%s): %s", self.stop_flag_file, e)
+                self.shutdown_requested = True
+                return True
+        except Exception as e:
+            logger.warning("Error revisando stop.flag: %s", e)
+        return False
 
 
 async def main(credentials: Optional[Credentials] = None):
