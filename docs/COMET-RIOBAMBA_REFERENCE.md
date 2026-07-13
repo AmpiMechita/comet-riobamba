@@ -4,7 +4,7 @@
 >
 > Version: 4.3.0 (evolving toward v5.0) · Last updated: 2026-06-14 · Audit pass: 2026-06-14
 > Platform: Windows / Python 3.14 / PowerShell
-> LLM Providers: Gemini (OpenAI-compatible endpoint), OpenRouter (free tier), Cerebras (fallback), Ollama (local: qwen2.5:3b, llama3.2, mistral)
+> LLM Providers: Anthropic claude-sonnet-5 (tier_premium, primary) -> DeepSeek V4 Pro (tier_fallback, fallback pagado). Cerebras reservado explicit_only para CAPTCHA solver. Gemini, OpenRouter, Groq desactivados por flags. Ollama local desactivado (OLLAMA_ENABLED=false). NOTA: AGENTS.md, README.md y README-comet-riobamba-local.md describen cascadas obsoletas y no deben usarse como referencia.
 
 > **NOTA DE MANTENIMIENTO (2026-07-12):** Las referencias a `phases/phase_b.py` en este documento (secciones 3, 5, 8, y los invariantes/failure-taxonomy) corresponden al modulo monolitico previo al commit 705643c. El codigo actual vive en el paquete `phases/phase_b/` (orchestrator.py, scoring.py, candidate_scorer.py, constants.py). Los numeros de linea citados NO son validos contra el codigo actual. Pendiente: actualizar todas las referencias cruzadas (ver seccion 16, Roadmap).
 
@@ -115,12 +115,12 @@ The system is organized in three sequential phases per cycle, orchestrated by `c
 ### Phase B — Community Replies (`phases/phase_b.py`, 2311 lines)
 
 - Priority: Own-post replies first (`_execute_own_post_replies`), then feed replies (`_execute_feed_replies`), then debate continuations (`_execute_debate_continuations`)
-- Relevance scoring (`_compute_relevance_score` in `phase_b.py:480-507`): question (+30, via `POLICY.relevance_boost_question`), name mention (+40, via `POLICY.relevance_boost_mention`), tech keywords ≥2 (+25, via `POLICY.relevance_boost_tech_keyword`), length penalties (<10:-20, <25:-10 via `POLICY.relevance_penalty_short`), fluff/gratitude (-15), long comments >150 chars (+5)
-- Feed post scoring (`_decide_reply_from_post` in `phase_b.py:545-589`): question (+30), tech keywords (up to +40), length >100 chars (+10), help-seeking keywords (+20), spam detection (-30), frontier potential (+20 if no metrics/guardrails/failure modes mentioned, +10 if partially mentioned)
-- Dedup: persistent `replied_comment_ids.json` (keys `{post_id}:{comment_id}`), bigram near-duplicate at 0.6 threshold (`is_near_duplicate_reply`, `_check_and_prevent_duplicate` with 1 auto-regeneration attempt), per-author dedup (`has_replied_to_comment`), topic-level dedup (`has_similar_topic_in_post` at 0.65 Jaccard), semantic alignment check (`_post_reply_alignment` at 0.15 threshold)
-- Claim checker (`services/claim_checker.py`): 2-call LLM pipeline (extract claim → verify reply, tier "haiku"), BLOCKS publication on failure (score < 0.6), fail-open on LLM error (returns `on_topic: True`)
+- Relevance scoring (`_compute_relevance_score` in `phases/phase_b/orchestrator.py:480-507`): question (+30, via `POLICY.relevance_boost_question`), name mention (+40, via `POLICY.relevance_boost_mention`), tech keywords ≥2 (+25, via `POLICY.relevance_boost_tech_keyword`), length penalties (<10:-20, <25:-10 via `POLICY.relevance_penalty_short`), fluff/gratitude (-15), long comments >150 chars (+5)
+- Feed post scoring (`_decide_reply_from_post` in `phases/phase_b/orchestrator.py:545-589`): question (+30), tech keywords (up to +40), length >100 chars (+10), help-seeking keywords (+20), spam detection (-30), frontier potential (+20 if no metrics/guardrails/failure modes mentioned, +10 if partially mentioned)
+- Dedup: persistent `replied_comment_ids.json` (keys `{post_id}:{comment_id}`), bigram near-duplicate at 0.6 threshold (`is_near_duplicate_reply` at orchestrator.py:367, `_check_and_prevent_duplicate` at orchestrator.py:1332 with 1 auto-regeneration attempt), topic-level dedup (`_reply_theme_fingerprint` + `_replied_topic_fingerprints` at orchestrator.py:932 — fingerprint temático, penaliza -10 score si el tema ya fue usado, 'repeated_theme'), semantic alignment via claim checker (`services/claim_checker.py::check_claim()`, invocado en orchestrator.py:2121 — gate: on_topic OR score >= 0.4; NOTA: alinea reply↔post, no reply↔comentario)
+- Claim checker (`services/claim_checker.py`): 2-call LLM pipeline (extract claim → verify reply, tier "fallback"), BLOCKS publication when NOT on_topic AND score < 0.4 (orchestrator.py:2133), fail-open on LLM error (returns `on_topic: True`). NOTA: el 0.6 mencionado en documentación anterior es una guía textual del system prompt hacia el LLM (claim_checker.py:51), no un umbral de código.
 - Debate continuation: `conversation_state.py`, `MAX_TURNS_PER_THREAD = 4`, debate window 48h
-- Submolt filtering: 19 allowed, 8 blocked submolts (hardcoded in `phase_b.py:131-163`)
+- Submolt filtering: 19 allowed, 8 blocked submolts (hardcoded in `phases/phase_b/orchestrator.py:131-163`)
 - Cold-start mode: lower feed relevance threshold (min_score=4) for first 10 posts (`COLD_START_POST_THRESHOLD`)
 - **Home dashboard** (`fetch_home_dashboard` in API client): called at cycle start, logs karma/notifications/activity, detects new Moltbook announcements (`data/last_announcement.json` with `{last_seen_id}` format), populates `_pending_home_post_ids` for Phase B prioritization
 - **Strategic upvotes** (`_maybe_upvote`): feed posts skipped for any reason (dedup, anti-loop, topic-dedup, relevance, STANDARD low-value) may be upvoted if value_level is STANDARD or HIGH_VALUE. Persisted to `data/upvoted_post_ids.json`. Configurable via `UPVOTES_ENABLED` and `MAX_UPVOTES_PER_CYCLE`
@@ -166,8 +166,9 @@ All four capabilities are enabled by default and fail open: if the API endpoint 
 | State | `core/state_manager.py` (119 lines) | AgentState (cycle, posts_today, comments_today, consecutive_failures) with cold-start reconciliation |
 | Policy | `core/write_policy.py` (391 lines) | Content governance: editorial fit, caps, dedup, cooldown, kill switch |
 | Observability | `core/observability.py` (44 lines) + `core/metrics.py` (182 lines) | 13 declared event types → 18-field daily metrics JSON. Additional events handled by `metrics.merge_event()` (e.g., `phase_b_duplicate_skip`, `phase_c_analytics_run`) |
+| Shadow Quality Logging | `phases/phase_b/orchestrator.py:_score_reply_draft()` (v5.1 permissive scoring mode, commit 3e957fc) | 3 guardrails desactivados desde 705643c ahora loguean en paralelo (no bloqueante): `_reply_has_guardrail_template`, `_reply_has_ungrounded_numeric_specificity` (anti-alucinacion de cifras), `_reply_mentions_source_terms`. Los flags se escriben a `data/shadow_quality_checks.jsonl` (gitignored). El score real permanece en 50 con penalties en cero. Objetivo: acumular corpus de falsos positivos reales antes de reactivar algun penalty como bloqueante. |
 | Tracing | `core/tracer.py` (46 lines) | Append-only span-level traces for Phase B decisions via `Span` context manager |
-| Claim Checking | `services/claim_checker.py` (146 lines) | Two-call LLM pipeline (extract_claim → check_claim), blocks publication on score < 0.6, fail-open on LLM error |
+| Claim Checking | `services/claim_checker.py` (146 lines) | Two-call LLM pipeline (extract_claim → check_claim), blocks publication on score < 0.4, fail-open on LLM error |
 | Conversation State | `services/conversation_state.py` (108 lines) | Per-thread turn tracking, `MAX_TURNS_PER_THREAD = 4`, open question detection |
 | Roadmap | `services/roadmap.py` (~115 lines) | Weighted topic series with anti-repetition |
 | Research Agenda | `services/research_agenda.py` (153 lines) | `ResearchAgenda` dataclass: topics, questions, experiments, threads, terms |
@@ -472,7 +473,7 @@ These are non-negotiable engineering contracts. Violations are considered incide
 | Editorial fit validation | Content outside agent niche | Before Phase A publish | `post_outside_agentic_niche`, `missing_named_pattern`, etc. |
 | Similarity guard (85% threshold) | Near-duplicate of recent post | Before Phase A publish | `similar_content_recently_published` in write decision |
 | Kill switch (file-based) | Emergency stop without code change | Before every write decision | `kill_switch_enabled` in write decision |
-| Claim checker (`services/claim_checker.py`) | Off-topic or unsupported replies | Phase B reply generation (both feed and own-post) | `claim_check_failed` / `claim_check_passed` stat, reply discarded on score < 0.6. Fail-open on LLM errors (passes by default) |
+| Claim checker (`services/claim_checker.py`) | Off-topic or unsupported replies | Phase B reply generation (both feed and own-post) | `claim_check_failed` / `claim_check_passed` stat, reply discarded on score < 0.4. Fail-open on LLM errors (passes by default) |
 
 ### 6.3 Rate Limiting / Quotas
 
@@ -507,9 +508,9 @@ These are non-negotiable engineering contracts. Violations are considered incide
 
 | Guardrail | Failure Mode Addressed | Pipeline Position | Evidence Emitted |
 |-----------|----------------------|-------------------|------------------|
-| `has_similar_topic_in_post()` (Jaccard ≥ 0.65) | Reply rehashes same topic as previous reply in same post | During own-post reply processing | `topic_duplicate` skip log |
-| `_post_reply_alignment()` (< 0.15 threshold) | Reply semantically misaligned with post content | After topic dedup, before reply generation | `semantic_misalignment` skip log |
-| `has_replied_to_comment()` (per post+comment+author key) | One reply per comment+author pair (finer than ID-only dedup) | Before `_post_own_reply()` | `already_replied_to_comment` skip log |
+| `_reply_theme_fingerprint()` + `_replied_topic_fingerprints` (fingerprint tematico, no Jaccard) | Reply rehashes same theme as previous reply in same post | During own-post reply scoring (orchestrator.py:932) | -10 penalty, 'repeated_theme' reason |
+| Replaced by claim checker (`services/claim_checker.py::check_claim()`, orchestrator.py:2121 gate: on_topic OR score >= 0.4) | Reply semantically misaligned with post content | After claim extraction, post-generation (Step C) | gate blocks publication when NOT on_topic AND score < 0.4 |
+| Covered by `replied_comment_ids` dedup (Invariant I1) — sin distincion por autor | One reply per comment (ID-level dedup, no author differentiation) | Before `_post_own_reply()` (orchestrator.py:2297, 2451) | dedup check skip |
 | `_check_and_prevent_duplicate()` (bigram ≥ 0.6 + 1 auto-regeneration) | Near-identical reply text in same thread | After generation, before publish | `near_duplicate_after_regeneration` event + tracer span |
 
 ### 6.7 Topic Deduplication
@@ -573,22 +574,22 @@ This section reconciles documented behavior against actual code. Three buckets:
 
 | Behavior | Status | Evidence |
 |----------|--------|----------|
-| Phase B relevance scoring (`_compute_relevance_score`) | aligned | `phase_b.py:480-507` — question(+30), mention(+40), tech keywords(+25), short penalty, fluff(-15), long bonus(+5) |
-| Phase B feed post scoring (`_decide_reply_from_post`) | aligned | `phase_b.py:545-589` — question, tech keywords(up to +40), frontier +20/+10, spam -30 |
-| Phase B _decide_reply for own posts | aligned | `phase_b.py:510-542` — threshold + mention/question/keyword gates |
-| Phase B topic-level dedup (`has_similar_topic_in_post`) | aligned | `phase_b.py:1846-1855` — Jaccard 0.65 threshold |
-| Phase B semantic alignment (`_post_reply_alignment`) | aligned | `phase_b.py:1866-1888` — 0.15 threshold |
-| Phase B persona enforcement (`_enforce_persona`) | aligned | `phase_b.py:936` (feed), `phase_b.py:1569` (own-post) |
-| Phase B claim checker blocking | aligned | `phase_b.py:1238-1248` (feed), `phase_b.py:2034-2044` (own-post) — score<0.6 blocks, fail-open on LLM error |
-| Phase B near-duplicate detection + auto-regeneration | aligned | `phase_b.py:665-722` — bigram 0.6, 1 auto-regen attempt |
-| Phase B dedup before generation | aligned | `phase_b.py:1551` — `dedup_key in self._replied_comment_ids` before gen |
-| Phase B per-comment anti-loop (`has_replied_to_comment`) | aligned | `phase_b.py:1475` (own-post), `phase_b.py:881` (feed) |
+| Phase B relevance scoring (`_compute_relevance_score`) | aligned | `phases/phase_b/orchestrator.py:480-507` — question(+30), mention(+40), tech keywords(+25), short penalty, fluff(-15), long bonus(+5) |
+| Phase B feed post scoring (`_decide_reply_from_post`) | aligned | `phases/phase_b/orchestrator.py:545-589` — question, tech keywords(up to +40), frontier +20/+10, spam -30 |
+| Phase B _decide_reply for own posts | aligned | `phases/phase_b/orchestrator.py:510-542` — threshold + mention/question/keyword gates |
+| Phase B topic-theme dedup (`_reply_theme_fingerprint` + `_replied_topic_fingerprints`) | aligned | `orchestrator.py:932` - fingerprint tematico, penaliza -10 score si el tema ya fue usado. NOTA: `has_similar_topic_in_post` (Jaccard 0.65) nunca fue implementado en codigo; verificado con git log -S sin resultados. |
+| Phase B semantic alignment (claim checker gate) | aligned | `services/claim_checker.py::check_claim()`, invocado en `orchestrator.py:2121` - gate: on_topic OR score >= 0.4 en `orchestrator.py:2133`. NOTA: `_post_reply_alignment` nunca fue implementado. |
+| Phase B persona via system prompt | aligned | La persona se inyecta via system prompt (`prompts/prompt_templates.py`) + `personality/modes.py` (importado en `orchestrator.py:133`). NOTA: `_enforce_persona` nunca fue implementado; el approach es pre-generacion via prompt, no post-filtro. |
+| Phase B claim checker blocking | aligned | `phases/phase_b/orchestrator.py:1238-1248` (feed), `phases/phase_b/orchestrator.py:2034-2044` (own-post) — NOT on_topic AND score < 0.4 (orchestrator.py:2133) blocks, fail-open on LLM error |
+| Phase B near-duplicate detection + auto-regeneration | aligned | `phases/phase_b/orchestrator.py:665-722` — bigram 0.6, 1 auto-regen attempt |
+| Phase B dedup before generation | aligned | `phases/phase_b/orchestrator.py:1551` — `dedup_key in self._replied_comment_ids` before gen |
+| Phase B per-comment anti-loop (`has_replied_to_comment`) | aligned | `phases/phase_b/orchestrator.py:1475` (own-post), `phases/phase_b/orchestrator.py:881` (feed) |
 | Phase B value classification (`_classify_topic_value`, `_classify_comment_value`) | aligned | `phase_b.py` — TRIVIAL/STANDARD/HIGH_VALUE; feed skip on TRIVIAL |
-| Phase B priority ordering (own-post > feed > debate) | aligned | `phase_b.py:600-622` — execute() calls own_post first, feed second, debate third |
-| Phase B cold-start mode | aligned | `phase_b.py:92-94` — threshold=10, min_score=4 |
+| Phase B priority ordering (own-post > feed > debate) | aligned | `phases/phase_b/orchestrator.py:600-622` — execute() calls own_post first, feed second, debate third |
+| Phase B cold-start mode | aligned | `phases/phase_b/orchestrator.py:92-94` — threshold=10, min_score=4 |
 | State reconciliation (`_reconcile_from_persisted`) | aligned | `state_manager.py:43-65` — counts from `own_post_ids.json` + `agent_comment_ids.json`, directional (only increases) |
-| State UUID validation guards | aligned | `services/own_post_store.py` `is_valid_post_id()`; `phase_b.py:309-324`, `351-365` filter on write; `conversation_state.py:24-27` filters on load |
-| State migration guards (list→dict format) | aligned | `phase_b.py:277-306` — `_load_commented_post_ids()` handles old list + new dict format |
+| State UUID validation guards | aligned | `services/own_post_store.py` `is_valid_post_id()`; `phases/phase_b/orchestrator.py:309-324`, `351-365` filter on write; `conversation_state.py:24-27` filters on load |
+| State migration guards (list→dict format) | aligned | `phases/phase_b/orchestrator.py:277-306` — `_load_commented_post_ids()` handles old list + new dict format |
 | Observability events via `send_event()` | aligned | `core/observability.py` — 13 EVENT_TYPES; additional types in `merge_event()` |
 | Observability metrics daily aggregation | aligned | `core/metrics.py` — 18 fields, `ingest_event()` per event |
 | WritePolicyEngine governance | aligned | `core/write_policy.py:259-291` — 6-point editorial fit, daily/submolt caps, cooldown, kill switch |
@@ -616,10 +617,10 @@ This section reconciles documented behavior against actual code. Three buckets:
 | Behavior | Status | Evidence |
 |----------|--------|----------|
 | Home dashboard call at cycle start | **aligned** | `core/agent.py:_check_home_dashboard()` — logs karma/notifications/activity, detects new announcements (`data/last_announcement.json`), populates `_pending_home_posts` set |
-| Strategic upvotes on feed posts visited but not commented | **aligned** | `phases/phase_b.py:_maybe_upvote()` — called at each feed skip point (dedup, anti-loop, topic-dedup, relevance, STANDARD low-value). Persisted to `data/upvoted_post_ids.json` |
-| Strategic following of debate agents on own posts | **aligned** | `phases/phase_b.py:_maybe_follow_author()` — triggered in `_process_own_post()` when an agent's comment value is not "general". Persisted to `data/followed_agents.json` as `{following: [], unfollowed: []}`. Env `MAX_FOLLOWS_PER_CYCLE` |
-| Semantic search as feed complement | **aligned** | `phases/phase_b.py:_fetch_semantic_search_posts()` — queries derived from `data/research_agenda.json` (pending_topics) with fallback to `topic_roadmap.json` then env `SEMANTIC_SEARCH_QUERIES`. Deduplicated, filtered, merged into feed pool |
-| Upvote count in cycle summary | **aligned** | `phases/phase_b.py:execute()` returns `upvotes` count; `core/agent.py:_log_cycle_summary` logs it |
+| Strategic upvotes on feed posts visited but not commented | **aligned** | `phases/phases/phase_b/orchestrator.py:_maybe_upvote()` — called at each feed skip point (dedup, anti-loop, topic-dedup, relevance, STANDARD low-value). Persisted to `data/upvoted_post_ids.json` |
+| Strategic following of debate agents on own posts | **aligned** | `phases/phases/phase_b/orchestrator.py:_maybe_follow_author()` — triggered in `_process_own_post()` when an agent's comment value is not "general". Persisted to `data/followed_agents.json` as `{following: [], unfollowed: []}`. Env `MAX_FOLLOWS_PER_CYCLE` |
+| Semantic search as feed complement | **aligned** | `phases/phases/phase_b/orchestrator.py:_fetch_semantic_search_posts()` — queries derived from `data/research_agenda.json` (pending_topics) with fallback to `topic_roadmap.json` then env `SEMANTIC_SEARCH_QUERIES`. Deduplicated, filtered, merged into feed pool |
+| Upvote count in cycle summary | **aligned** | `phases/phases/phase_b/orchestrator.py:execute()` returns `upvotes` count; `core/agent.py:_log_cycle_summary` logs it |
 | Home-pending post prioritization | **aligned** | `phases/phase_b.py` — feed posts sorted by pending_home_post_ids first; own posts sorted similarly |
 
 ### 📋 Planned / Not Yet Verified
@@ -649,13 +650,13 @@ Every configurable parameter that changes agent behavior:
 | `AGENT_WHISPER_MODE` | `config/config.py:71` | 0 = publish, 1 = dry-run only | Accidentally enabled → silent agent |
 | `AGENT_PHASE_B_ENABLED` | `behavior_cfg` | 1 = enabled, 0 = disabled | Agent won't reply |
 | `AGENT_PHASE_C_ENABLED` | `behavior_cfg` | 1 = enabled, 0 = disabled | No analytics, no research agenda updates |
-| `COLD_START_POST_THRESHOLD` | `phase_b.py:92` | Posts required before exiting cold-start mode. Default 10 | Too high → lax filtering for too long |
-| `COLD_START_MIN_SCORE` | `phase_b.py:93` | Feed relevance threshold during cold-start. Default 4 | Too low → low-quality feed replies |
-| `TOPIC_DEDUP_THRESHOLD` | `phase_b.py:250` | Jaccard similarity threshold for topic dedup. Default 0.65 | False positives or negatives in topic dedup |
-| `SEMANTIC_ALIGNMENT_THRESHOLD` | `phase_b.py:251` | Minimum alignment score for replies. Default 0.15 | Blocking valid replies or missing misaligned ones |
+| `COLD_START_POST_THRESHOLD` | `phases/phase_b/orchestrator.py:92` | Posts required before exiting cold-start mode. Default 10 | Too high → lax filtering for too long |
+| `COLD_START_MIN_SCORE` | `phases/phase_b/orchestrator.py:93` | Feed relevance threshold during cold-start. Default 3 | Too low → low-quality feed replies |
+| `TOPIC_DEDUP_THRESHOLD` | `phases/phase_b/orchestrator.py:250` | Jaccard similarity threshold for topic dedup. Default 0.65 | False positives or negatives in topic dedup |
+| `SEMANTIC_ALIGNMENT_THRESHOLD` | `phases/phase_b/orchestrator.py:251` | Minimum alignment score for replies. Default 0.15 | Blocking valid replies or missing misaligned ones |
 | `PHASE_C_INTERVAL` | `agent.py:401` | Cycle modulo for Phase C analytics. Default 3 | Too low → excessive analytics runs |
-| `DEBATE_WINDOW_HOURS` | `phase_b.py:461` | Hours to scan for debate continuations. Default 48 | Missing or excessive debate replies |
-| `CLAIM_CHECKER_TIER` | `phase_b.py:468` | LLM tier for claim checker. Default "haiku" | Slower/expensive checks if set to higher tier |
+| `DEBATE_WINDOW_HOURS` | `phases/phase_b/orchestrator.py:461` | Hours to scan for debate continuations. Default 48 | Missing or excessive debate replies |
+| `CLAIM_CHECKER_TIER` | `orchestrator.py:2079 (via getattr(self, "_claim_checker_tier", "fallback"))` | LLM tier for claim checker. Default "fallback" | Slower/expensive checks if set to higher tier |
 | `GLOBAL_CIRCUIT_COMPRESS_AFTER` | `global_circuit.py:50` | Clean cycles before compressing interval. Default 3 | Interval compresses too fast or too slow |
 | `GLOBAL_CIRCUIT_EXPAND_FACTOR` | `global_circuit.py:51` | Error backoff multiplier. Default 1.5 | Overly aggressive or weak backoff |
 | `HOME_DASHBOARD_ENABLED` | `core/agent.py` | Enable /home dashboard call at cycle start. Default `true` | Disabling hides activity/announcement detection |
@@ -765,7 +766,7 @@ Every configurable parameter that changes agent behavior:
 | **Trigger** | LLM provider changes, prompt drift over time, or template modification without eval update |
 | **Symptom** | Agent posts content that deviates from persona, tone, or editorial niche |
 | **Likely Root Cause** | No systematic regression tests for generated content quality; SYSTEM_PROMPT degrades over long contexts |
-| **Containment** | WritePolicyEngine editorial fit checks filter out-of-niche content at publish time |
+| **Containment** | WritePolicyEngine editorial fit checks filter out-of-niche content at publish time. Nota 2026-07-12: existio un modulo de embedding similarity (`services/semantic_dedup.py`, sentence-transformers) pero estaba huerfano (nunca importado por el pipeline activo) y fue ELIMINADO en commit b39846d. El dedup de posts/topics se resuelve via `_is_similar_to_recent()` (write_policy.py, TF-IDF 0.85) y `_is_topic_recently_used()` (phase_a_content.py, SequenceMatcher 0.75). |
 | **Long-Term Fix** | Add content embedding similarity to reference posts; periodic persona self-evaluation via Phase C |
 
 ### F4: Malformed Persisted State
@@ -784,7 +785,7 @@ Every configurable parameter that changes agent behavior:
 |-----------|--------|
 | **Trigger** | Moltbook API returns 429 (rate limit). The system must distinguish this from other errors |
 | **Symptom** | Circuit breaker opens unnecessarily (if 429 is treated as server error) or fails to open (if 429 is ignored) |
-| **Likely Root Cause** | `_is_server_error()` in `global_circuit.py` classifies 429 as non-server-error for the purpose of circuit-breaking (correct), but overall error handling may not distinguish well |
+| **Likely Root Cause** | `_is_server_error()` does not exist in `global_circuit.py`. The real 429 handling lives in `services/model_cascade.py::_classify_http_error()` (classifies 429 as rate_limit, opens circuit 1h) and `services/moltbook_api_client.py` (retry with Retry-After on 429). The doc was referencing the wrong file. |
 | **Containment** | API client handles `Retry-After` header; 429 does not increment circuit breaker failure count |
 | **Long-Term Fix** | Add explicit rate-limit counter separate from circuit breaker; log rate-limit events to a dedicated metric |
 
@@ -804,8 +805,8 @@ Every configurable parameter that changes agent behavior:
 |-----------|--------|
 | **Trigger** | Claim checker (`services/claim_checker.py`) incorrectly validates or rejects a claim in an LLM-generated reply |
 | **Symptom** | Agent publishes off-topic reply (false pass), or discards a valid reply (false fail) |
-| **Likely Root Cause** | Claim checker uses a separate LLM call (tier "haiku") to extract claim and verify; LLM disagreement between generator and checker; truncated prompt (1500-char post, 500-char comment) misses context |
-| **Containment** | Claim checker DOES block publication (returns `""` on score < 0.6). Fail-open on LLM error (returns `on_topic: True`). This means false passes are more likely than false fails when the LLM is degraded |
+| **Likely Root Cause** | Claim checker uses a separate LLM call (tier "fallback") to extract claim and verify; LLM disagreement between generator and checker; truncated prompt (1500-char post, 500-char comment) misses context |
+| **Containment** | Claim checker DOES block publication (returns `""` on score < 0.4). Fail-open on LLM error (returns `on_topic: True`). This means false passes are more likely than false fails when the LLM is degraded |
 | **Long-Term Fix** | Add confidence threshold logging; tune fail-open behavior based on empirical false-pass rate; add secondary rule-based check for objective claims |
 
 ### F8: Observability Gaps
@@ -832,13 +833,13 @@ These patterns are derived from repository evidence (code comments, state file a
 
 ### P2: State File Format Migration
 
-**Evidence**: `_load_commented_post_ids()` (phase_b.py:277-306) explicitly handles migration from old list format `[id1, id2]` to current dict format `{id: timestamp}`. `_load_replied_comment_ids()` expects a list (converted to set). These migrations imply format changes over the project's history that could cause crashes on missing migration paths.
+**Evidence**: `_load_commented_post_ids()` (phases/phase_b/orchestrator.py:277-306) explicitly handles migration from old list format `[id1, id2]` to current dict format `{id: timestamp}`. `_load_replied_comment_ids()` expects a list (converted to set). These migrations imply format changes over the project's history that could cause crashes on missing migration paths.
 
 **Current Protection**: Both loaders handle multiple formats gracefully. Errors degrade to empty state rather than crash.
 
 ### P3: `performance_summary.json` Zero-Filled Fields
 
-**Evidence**: In `phase_b.py:115-121`, the code reads `perf.get("low_relevance", 0)` from `_load_performance_summary()`. The Phase A code writes this file (via Phase C) but analysis shows `low_relevance` is always `0.0` — a placeholder. The feedback loop (tightening feed min_score when low_relevance > 0.30) is effectively a no-op.
+**Evidence**: In `phases/phase_b/orchestrator.py:115-121`, the code reads `perf.get("low_relevance", 0)` from `_load_performance_summary()`. The Phase A code writes this file (via Phase C) but analysis shows `low_relevance` is always `0.0` — a placeholder. The feedback loop (tightening feed min_score when low_relevance > 0.30) is effectively a no-op.
 
 **Current Protection**: The feedback loop exists in code but produces no behavioral change. Not a safety issue — the default path (no adjustment) is correct.
 
@@ -886,7 +887,7 @@ These patterns are derived from repository evidence (code comments, state file a
 - **Symptom**: `replied_comment_ids.json` contained keys like `"None:None"` and other non-UUID strings, causing parse failures and skipped dedup checks
 - **Root Cause**: Historical code wrote raw API response fields without validation; API sometimes returned `null` or missing ID fields
 - **Fix Applied**: `is_valid_post_id()` in `services/own_post_store.py` validates UUID format before persisting. All state-file reads wrapped in try/except.
-- **Status**: Confirmed at multiple write paths: `_save_commented_post_ids()` (phase_b.py:309-324) filters via `is_valid_post_id()`, `_save_agent_comment_ids()` (phase_b.py:351-365) filters via `is_valid_post_id()`, `conversation_state.py:24-27` filters on load, `_save_conversations` does NOT validate on write (relies on get_or_create_thread validation). **Root cause addressed at most write paths; `conversations.json` write lacks validation.**
+- **Status**: Confirmed at multiple write paths: `_save_commented_post_ids()` (phases/phase_b/orchestrator.py:309-324) filters via `is_valid_post_id()`, `_save_agent_comment_ids()` (phases/phase_b/orchestrator.py:351-365) filters via `is_valid_post_id()`, `conversation_state.py:24-27` filters on load, `_save_conversations` does NOT validate on write (relies on get_or_create_thread validation). **Root cause addressed at most write paths; `conversations.json` write lacks validation.**
 
   **Actualizacion 2026-07-12:** cerrado el ultimo gap conocido — `_save_commented_post_ids()` y `_save_agent_comment_ids()` en `phases/phase_b/orchestrator.py` ahora filtran claves invalidas via `_filter_valid_post_id_keys()`, replicando el patron de validacion ya existente en `conversation_state.py`. INC-001 queda resuelto en los tres puntos de escritura conocidos.
 
@@ -895,8 +896,8 @@ These patterns are derived from repository evidence (code comments, state file a
 - **Date**: Unknown (pre-v4.3 analysis)
 - **Symptom**: Agent replied twice to the same comment in the same thread
 - **Root Cause**: `replied_comment_ids.json` dedup missed because the comment ID format differed between API responses (string vs int), or dedup check ran after generation instead of before
-- **Fix Applied**: Near-duplicate reply detection (`is_near_duplicate_reply` at 0.6 bigram threshold) + auto-regeneration added (`_check_and_prevent_duplicate` in phase_b.py:665-722). Dedup check (`dedup_key in self._replied_comment_ids`) runs BEFORE generation at `_post_own_reply` line 1551.
-- **Status**: ID-level dedup is consistently before generation (confirmed at phase_b.py:1551). Near-duplicate check remains AFTER generation (phase_b.py:1573) and uses auto-regeneration as mitigation. Bigram threshold (0.6) may miss very short replies.
+- **Fix Applied**: Near-duplicate reply detection (`is_near_duplicate_reply` at 0.6 bigram threshold) + auto-regeneration added (`_check_and_prevent_duplicate` in phases/phase_b/orchestrator.py:665-722). Dedup check (`dedup_key in self._replied_comment_ids`) runs BEFORE generation at `_post_own_reply` line 1551.
+- **Status**: ID-level dedup is consistently before generation (confirmed at phases/phase_b/orchestrator.py:1551). Near-duplicate check remains AFTER generation (phases/phase_b/orchestrator.py:1573) and uses auto-regeneration as mitigation. Bigram threshold (0.6) may miss very short replies.
 
 ### INC-003: Uncertainty About Whether Production Was Running the Expected Code
 
