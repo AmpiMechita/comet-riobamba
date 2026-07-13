@@ -612,3 +612,130 @@ def test_save_agent_comment_ids_load_still_works_after_filter():
     loaded = _load_agent_comment_ids()
     assert loaded == {p1: ["c1", "c2"], p2: ["c3"]}
     _AGENT_COMMENT_IDS_PATH.unlink(missing_ok=True)
+
+
+# ── Tests: Phase B dry-run guard (data/phase_b_dry_run.flag) ──────
+
+
+def test_safe_publish_comment_dry_run_blocks_real_call(tmp_path):
+    """With dry_run flag present, _safe_publish_comment must NOT call
+    self.api.create_comment and must return the simulated success dict."""
+    from phases.deps import PhaseBDeps
+    from phases.phase_b import PhaseB
+    deps = PhaseBDeps(
+        model_cascade=MagicMock(),
+        moltbook_client=MagicMock(),
+        behavior_cfg={"max_comments_per_post": 5, "max_comments_per_day": 10, "max_comment_replies_per_cycle": 3},
+        agent_name="test-agent",
+    )
+    pb = PhaseB(deps=deps)
+    flag_file = tmp_path / "phase_b_dry_run.flag"
+    flag_file.write_text("")
+    pb._dry_run_flag = flag_file  # inject temp path
+    pb.api.create_comment = MagicMock()
+    result = pb._safe_publish_comment("p-dr", "In production we measured that architecture patterns with circuit breakers reduce cascade failures by 73% at p99.")
+    assert result is not None
+    assert result.get("dry_run") is True
+    assert result.get("id") == "dry-run-simulated"
+    pb.api.create_comment.assert_not_called()
+
+
+def test_safe_publish_comment_normal_when_no_flag(tmp_path):
+    """Without the dry_run flag, _safe_publish_comment must call the real API."""
+    from phases.deps import PhaseBDeps
+    from phases.phase_b import PhaseB
+    deps = PhaseBDeps(
+        model_cascade=MagicMock(),
+        moltbook_client=MagicMock(),
+        behavior_cfg={"max_comments_per_post": 5, "max_comments_per_day": 10, "max_comment_replies_per_cycle": 3},
+        agent_name="test-agent",
+    )
+    pb = PhaseB(deps=deps)
+    flag_file = tmp_path / "phase_b_dry_run.flag"
+    # flag does NOT exist → normal path
+    pb._dry_run_flag = flag_file
+    pb.api.create_comment = MagicMock(return_value={"success": True, "id": "real-c1", "status": 201})
+    result = pb._safe_publish_comment("p-norm", "In production we measured that architecture patterns with circuit breakers reduce cascade failures by 73% at p99.")
+    assert result is not None
+    assert result.get("id") == "real-c1"
+    assert result.get("dry_run") is not True
+    pb.api.create_comment.assert_called_once()
+
+
+def test_upvote_dry_run_blocks_real_call(tmp_path):
+    """With dry_run flag, _maybe_upvote must NOT call the real API and return True."""
+    from phases.deps import PhaseBDeps
+    from phases.phase_b import PhaseB
+    deps = PhaseBDeps(
+        model_cascade=MagicMock(),
+        moltbook_client=MagicMock(),
+        behavior_cfg={"max_comments_per_post": 5, "max_comments_per_day": 10, "max_comment_replies_per_cycle": 3},
+        agent_name="test-agent",
+    )
+    pb = PhaseB(deps=deps)
+    flag_file = tmp_path / "phase_b_dry_run.flag"
+    flag_file.write_text("")
+    pb._dry_run_flag = flag_file
+    pb._upvotes_enabled = True
+    pb.api.upvote_post = MagicMock(return_value=False)
+    pb._maybe_upvote("post-fresh-upvote", "STANDARD")
+    pb.api.upvote_post.assert_not_called()
+
+
+def test_follow_agent_dry_run_blocks_real_call(tmp_path):
+    """With dry_run flag, _maybe_follow_author must NOT call the real API and return True."""
+    from phases.deps import PhaseBDeps
+    from phases.phase_b import PhaseB
+    deps = PhaseBDeps(
+        model_cascade=MagicMock(),
+        moltbook_client=MagicMock(),
+        behavior_cfg={"max_comments_per_post": 5, "max_comments_per_day": 10, "max_comment_replies_per_cycle": 3},
+        agent_name="test-agent",
+    )
+    pb = PhaseB(deps=deps)
+    flag_file = tmp_path / "phase_b_dry_run.flag"
+    flag_file.write_text("")
+    pb._dry_run_flag = flag_file
+    pb._following_enabled = True
+    pb.api.follow_agent = MagicMock(return_value=False)
+    pb._maybe_follow_author("fresh-agent-1")
+    pb.api.follow_agent.assert_not_called()
+
+
+def test_upvote_normal_when_no_flag(tmp_path):
+    """Without the dry_run flag, _maybe_upvote must call the real API."""
+    from phases.deps import PhaseBDeps
+    from phases.phase_b import PhaseB
+    deps = PhaseBDeps(
+        model_cascade=MagicMock(),
+        moltbook_client=MagicMock(),
+        behavior_cfg={"max_comments_per_post": 5, "max_comments_per_day": 10, "max_comment_replies_per_cycle": 3},
+        agent_name="test-agent",
+    )
+    pb = PhaseB(deps=deps)
+    flag_file = tmp_path / "phase_b_dry_run.flag"
+    # flag does NOT exist → normal path
+    pb._dry_run_flag = flag_file
+    pb._upvotes_enabled = True
+    pb.api.upvote_post = MagicMock(return_value=True)
+    pb._maybe_upvote("post-fresh-upvote2", "STANDARD")
+    pb.api.upvote_post.assert_called_once()
+
+
+def test_follow_agent_normal_when_no_flag(tmp_path):
+    """Without the dry_run flag, _maybe_follow_author must call the real API."""
+    from phases.deps import PhaseBDeps
+    from phases.phase_b import PhaseB
+    deps = PhaseBDeps(
+        model_cascade=MagicMock(),
+        moltbook_client=MagicMock(),
+        behavior_cfg={"max_comments_per_post": 5, "max_comments_per_day": 10, "max_comment_replies_per_cycle": 3},
+        agent_name="test-agent",
+    )
+    pb = PhaseB(deps=deps)
+    flag_file = tmp_path / "phase_b_dry_run.flag"
+    pb._dry_run_flag = flag_file
+    pb._following_enabled = True
+    pb.api.follow_agent = MagicMock(return_value=True)
+    pb._maybe_follow_author("fresh-agent-2")
+    pb.api.follow_agent.assert_called_once()

@@ -1150,6 +1150,22 @@ class PhaseB:
                 return None
         # Publish
         try:
+            # ── Dry-run guard: data/phase_b_dry_run.flag blocks real writes ──
+            # When present, the full Phase B pipeline runs (scoring, dedup,
+            # shadow logging, claim checker) but the actual Moltbook API calls
+            # are replaced with simulated success responses. The flag is NOT
+            # auto-deleted (unlike stop.flag) — it is a persistent toggle.
+            # The instance attribute _dry_run_flag allows tests to override the
+            # file path without a global Path monkeypatch.
+            _dry_flag = getattr(self, "_dry_run_flag", None) or Path("data/phase_b_dry_run.flag")
+            if _dry_flag.exists():
+                logger.warning(
+                    "🧪 DRY-RUN ACTIVO (data/phase_b_dry_run.flag): NO se publica "
+                    "comentario real. post_id=%s content_preview=%r",
+                    post_id, content[:150],
+                )
+                return {"success": True, "id": "dry-run-simulated", "status": 201, "dry_run": True}
+
             # ── Mark historical examples as used before publishing ──
             mark_examples_used(content)
 
@@ -3088,7 +3104,12 @@ class PhaseB:
                 return
 
             try:
-                ok = self.api.upvote_post(post_id)
+                _dry_flag = getattr(self, "_dry_run_flag", None) or Path("data/phase_b_dry_run.flag")
+                if _dry_flag.exists():
+                    logger.warning("🧪 DRY-RUN: upvote simulado para post_id=%s", post_id)
+                    ok = True  # simulate success
+                else:
+                    ok = self.api.upvote_post(post_id)
                 if ok:
                     self._upvoted_post_ids.add(post_id)
                     self._upvotes_this_cycle += 1
@@ -3120,7 +3141,12 @@ class PhaseB:
                 return
 
             try:
-                ok = self.api.follow_agent(name)
+                _dry_flag = getattr(self, "_dry_run_flag", None) or Path("data/phase_b_dry_run.flag")
+                if _dry_flag.exists():
+                    logger.warning("🧪 DRY-RUN: follow simulado para agent=%s", name)
+                    ok = True  # simulate success
+                else:
+                    ok = self.api.follow_agent(name)
                 if ok:
                     self._followed_agent_names.add(name)
                     self._follows_this_cycle += 1
