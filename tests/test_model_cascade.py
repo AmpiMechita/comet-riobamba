@@ -775,3 +775,69 @@ def test_groq_payload_does_not_disable_thinking(cascade):
     payload = _capture_openai_payload(cascade, prov)
     assert "thinking" not in payload
     assert payload["max_tokens"] == 100  # untouched
+
+
+# ── Silent tier-fallback visibility warning ────────────────────────
+
+_FALLBACK_WARN_MARKER = "no resuelve a un provider registrado/habilitado"
+
+
+@pytest.mark.asyncio
+async def test_unresolved_tier_logs_fallback_warning(cascade, caplog):
+    """A tier that maps to an unregistered provider (e.g. tier='default' →
+    ollama_local with OLLAMA_ENABLED off) must emit a WARNING naming the
+    requested tier and the fallback provider actually used."""
+    # tier_premium is registered; ollama_local (the target of 'default') is NOT.
+    _add_provider(cascade, "tier_premium", model="claude-sonnet-5")
+    _add_provider(cascade, "tier_fallback", model="deepseek-v4-pro")
+    caplog.set_level(logging.WARNING)
+
+    with (
+        patch.object(cascade, "_call_with_retries", return_value="ok"),
+        patch.object(cascade, "_is_circuit_open", return_value=False),
+    ):
+        result = await cascade.generate(prompt="hello", tier="default")
+
+    assert result == "ok"
+    warn_msgs = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    fallback_line = next((m for m in warn_msgs if _FALLBACK_WARN_MARKER in m), None)
+    assert fallback_line is not None, f"No fallback WARNING found in: {warn_msgs}"
+    # Must name the requested tier and the fallback provider actually used.
+    assert "'default'" in fallback_line
+    assert "tier_premium" in fallback_line
+
+
+@pytest.mark.asyncio
+async def test_resolved_tier_premium_does_not_log_fallback_warning(cascade, caplog):
+    """tier='premium' resolves to a registered provider → no fallback WARNING."""
+    _add_provider(cascade, "tier_premium", model="claude-sonnet-5")
+    _add_provider(cascade, "tier_fallback", model="deepseek-v4-pro")
+    caplog.set_level(logging.WARNING)
+
+    with (
+        patch.object(cascade, "_call_with_retries", return_value="ok"),
+        patch.object(cascade, "_is_circuit_open", return_value=False),
+    ):
+        result = await cascade.generate(prompt="hello", tier="premium")
+
+    assert result == "ok"
+    assert not any(_FALLBACK_WARN_MARKER in r.message for r in caplog.records), \
+        "tier='premium' resolves directly and must NOT emit the fallback WARNING"
+
+
+@pytest.mark.asyncio
+async def test_resolved_tier_fallback_does_not_log_fallback_warning(cascade, caplog):
+    """tier='fallback' resolves to a registered provider → no fallback WARNING."""
+    _add_provider(cascade, "tier_premium", model="claude-sonnet-5")
+    _add_provider(cascade, "tier_fallback", model="deepseek-v4-pro")
+    caplog.set_level(logging.WARNING)
+
+    with (
+        patch.object(cascade, "_call_with_retries", return_value="ok"),
+        patch.object(cascade, "_is_circuit_open", return_value=False),
+    ):
+        result = await cascade.generate(prompt="hello", tier="fallback")
+
+    assert result == "ok"
+    assert not any(_FALLBACK_WARN_MARKER in r.message for r in caplog.records), \
+        "tier='fallback' resolves directly and must NOT emit the fallback WARNING"

@@ -331,6 +331,17 @@ class ModelCascade:
             ordered_providers = [preferred] + fallback_pool
         else:
             ordered_providers = [p for p in self.providers if p.enabled and not p.explicit_only]
+            # Visibilidad: el tier solicitado no resolvio a un provider
+            # registrado/habilitado (p.ej. tier="default" -> ollama_local con
+            # OLLAMA_ENABLED=false). Se cae al primer provider disponible, que
+            # puede ser mas caro de lo intencionado (p.ej. tier_premium/Anthropic).
+            logger.warning(
+                "Tier '%s' solicitado no resuelve a un provider registrado/habilitado "
+                "(mapeado a '%s'); cayendo a fallback automatico, primer provider "
+                "disponible: '%s'",
+                tier, provider_name,
+                ordered_providers[0].name if ordered_providers else "NINGUNO",
+            )
 
         if system_prompt is None and "systemprompt" in kwargs:
             system_prompt = kwargs.pop("systemprompt")
