@@ -669,6 +669,23 @@ class PhaseAContentGeneration:
         validate_phase_deps(deps, ["model_cascade", "moltbook_client", "behavior_cfg"])
         self.moltbook = deps.moltbook_client
 
+    def _safe_publish_post(self, generated_post: Dict[str, Any]) -> Dict[str, Any]:
+        """Publish post with dry-run guard. Returns result dict."""
+        _dry_flag = getattr(self, "_dry_run_flag_phase_a", None) or Path("data/phase_a_dry_run.flag")
+        if _dry_flag.exists():
+            title_snippet = generated_post.get("title", "")[:100]
+            body_snippet = generated_post.get("body", "")[:200]
+            logger.warning(
+                "🧪 DRY-RUN Phase A ACTIVO (data/phase_a_dry_run.flag): NO se publica post real. "
+                "title=%r body_preview=%r", title_snippet, body_snippet
+            )
+            return {"success": True, "status": 201, "id": "dry-run-post-simulated", "raw": {}}
+        return self.moltbook.create_post(
+            title=generated_post["title"],
+            body=generated_post["body"],
+            metadata=generated_post.get("metadata", {}),
+        )
+
     async def _auto_verify_post(self, result: Dict[str, Any], generated_post: Dict[str, Any]) -> None:
         raw = result.get("raw") or {}
         post_obj = raw.get("post") if isinstance(raw, dict) else {}
@@ -960,7 +977,7 @@ class PhaseAContentGeneration:
 
             try:
                 logger.info("Phase A: publicando post en Moltbook...")
-                result = self.moltbook.create_post(title=generated_post["title"], body=generated_post["body"], metadata=generated_post.get("metadata", {}))
+                result = self._safe_publish_post(generated_post)
                 status = result.get("status")
                 success = result.get("success") or status == 201
                 if success:

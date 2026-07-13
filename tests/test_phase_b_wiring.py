@@ -747,3 +747,77 @@ def test_follow_agent_normal_when_no_flag(tmp_path):
     pb.api.follow_agent = MagicMock(return_value=True)
     pb._maybe_follow_author("fol-ok-1")
     pb.api.follow_agent.assert_called_once()
+
+
+# ── Tests: Phase A dry-run ────────────────────────────────────
+
+def test_phase_a_dry_run_blocks_create_post(tmp_path):
+    """With phase_a_dry_run.flag present, create_post must NOT be called
+    and the result must be the simulated success dict."""
+    from unittest.mock import MagicMock
+    from pathlib import Path
+    from phases.deps import PhaseADeps
+    from phases.phase_a_content import PhaseAContentGeneration
+
+    deps = PhaseADeps(
+        model_cascade=MagicMock(),
+        moltbook_client=MagicMock(),
+        behavior_cfg={"max_posts_per_day": 10},
+        posts_today=0,
+    )
+    pa = PhaseAContentGeneration(deps=deps)
+    flag_file = tmp_path / "phase_a_dry_run.flag"
+    flag_file.write_text("")
+    pa._dry_run_flag_phase_a = flag_file
+    deps.moltbook_client.create_post = MagicMock()
+
+    generated_post = {
+        "title": "Test Dry-Run Title",
+        "body": "This is a test post body that would have been published to Moltbook if the dry-run flag was not active.",
+        "metadata": {"topic": "test-topic"},
+    }
+
+    result = pa._safe_publish_post(generated_post)
+
+    assert result is not None
+    assert result.get("success") is True
+    assert result.get("status") == 201
+    assert result.get("id") == "dry-run-post-simulated"
+    deps.moltbook_client.create_post.assert_not_called()
+
+
+def test_phase_a_normal_calls_create_post_when_no_flag(tmp_path):
+    """Without the dry_run flag, _safe_publish_post must call create_post normally."""
+    from unittest.mock import MagicMock
+    from pathlib import Path
+    from phases.deps import PhaseADeps
+    from phases.phase_a_content import PhaseAContentGeneration
+
+    deps = PhaseADeps(
+        model_cascade=MagicMock(),
+        moltbook_client=MagicMock(),
+        behavior_cfg={"max_posts_per_day": 10},
+        posts_today=0,
+    )
+    pa = PhaseAContentGeneration(deps=deps)
+    flag_file = tmp_path / "phase_a_dry_run.flag"
+    pa._dry_run_flag_phase_a = flag_file
+    deps.moltbook_client.create_post = MagicMock(return_value={
+        "success": True, "status": 201, "id": "real-post-abc", "raw": {},
+    })
+
+    generated_post = {
+        "title": "Test Normal Title",
+        "body": "This is a test post body.",
+        "metadata": {"topic": "test-topic"},
+    }
+
+    result = pa._safe_publish_post(generated_post)
+
+    assert result is not None
+    assert result.get("id") == "real-post-abc"
+    deps.moltbook_client.create_post.assert_called_once_with(
+        title="Test Normal Title",
+        body="This is a test post body.",
+        metadata={"topic": "test-topic"},
+    )

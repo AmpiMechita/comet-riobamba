@@ -126,6 +126,7 @@ data/research_agenda_archive.json
 data/prune_agenda_last_run.json
 data/stop.flag
 data/phase_b_dry_run.flag
+data/phase_a_dry_run.flag
 data/shadow_quality_checks.jsonl
 
 # Compressed backups
