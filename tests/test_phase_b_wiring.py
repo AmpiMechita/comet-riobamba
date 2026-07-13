@@ -27,28 +27,36 @@ TEST_DB = Path("data/test_phase_b_wiring.db")
 def _isolate_db():
     import services.persistence as _p
     import services.research_agenda as _ra
+    import services.dedup_store as _ds
+    import phases.phase_b as _pb
     _original = _p.DB_PATH
     _p.DB_PATH = TEST_DB
-    # Feed-reply tests exercise _add_topic_to_agenda -> load_agenda/save_agenda,
-    # which use module-level AGENDA_PATH. Redirect to a throwaway temp file so
-    # fixture posts ("New", "Repeat", ...) never leak into the real
-    # data/research_agenda.json (root cause of the fixture-data leak).
     _orig_agenda = _ra.AGENDA_PATH
     _orig_archive = _ra.ARCHIVE_PATH
+    _orig_upvoted = _pb._UPVOTED_POST_IDS_PATH
+    _orig_followed = _pb._FOLLOWED_AGENTS_PATH
+    _orig_dedup_db = _ds.DedupStore._default_db_path
     _tmp_agenda = Path("data/test_phase_b_wiring_agenda.json")
     _ra.AGENDA_PATH = _tmp_agenda
     _ra.ARCHIVE_PATH = Path("data/test_phase_b_wiring_agenda_archive.json")
+    _pb._UPVOTED_POST_IDS_PATH = Path("data/test_phase_b_wiring_upvoted.json")
+    _pb._FOLLOWED_AGENTS_PATH = Path("data/test_phase_b_wiring_followed.json")
+    _ds.DedupStore._default_db_path = Path("data/test_phase_b_wiring_dedup.db")
     if TEST_DB.exists():
         TEST_DB.unlink()
     yield
     if TEST_DB.exists():
         TEST_DB.unlink()
-    for _f in (_tmp_agenda, _ra.ARCHIVE_PATH):
-        if Path(_f).exists():
-            Path(_f).unlink()
+    _tmp_dedup_db = _ds.DedupStore._default_db_path
+    for _f in (_tmp_agenda, _ra.ARCHIVE_PATH, _pb._UPVOTED_POST_IDS_PATH, _pb._FOLLOWED_AGENTS_PATH, _tmp_dedup_db):
+        if _f.exists():
+            _f.unlink()
     _p.DB_PATH = _original
     _ra.AGENDA_PATH = _orig_agenda
     _ra.ARCHIVE_PATH = _orig_archive
+    _pb._UPVOTED_POST_IDS_PATH = _orig_upvoted
+    _pb._FOLLOWED_AGENTS_PATH = _orig_followed
+    _ds.DedupStore._default_db_path = _orig_dedup_db
 
 
 @pytest.fixture
@@ -326,7 +334,7 @@ async def test_feed_reply_persists_dedup_key():
     phase_b.incr_comments_today = lambda: None
 
     posts = [
-        {"id": "new_post", "title": "New", "content": "How are you?", "comments": []},
+        {"id": "new_post", "title": "New", "content": "System reliability engineering is a critical discipline in modern software development that requires rigorous testing and monitoring.", "comments": []},
     ]
 
     with (
@@ -678,7 +686,7 @@ def test_upvote_dry_run_blocks_real_call(tmp_path):
     pb._dry_run_flag = flag_file
     pb._upvotes_enabled = True
     pb.api.upvote_post = MagicMock(return_value=False)
-    pb._maybe_upvote("post-fresh-upvote", "STANDARD")
+    pb._maybe_upvote("upv-dr-1", "STANDARD")
     pb.api.upvote_post.assert_not_called()
 
 
@@ -698,7 +706,7 @@ def test_follow_agent_dry_run_blocks_real_call(tmp_path):
     pb._dry_run_flag = flag_file
     pb._following_enabled = True
     pb.api.follow_agent = MagicMock(return_value=False)
-    pb._maybe_follow_author("fresh-agent-1")
+    pb._maybe_follow_author("fol-dr-1")
     pb.api.follow_agent.assert_not_called()
 
 
@@ -718,7 +726,7 @@ def test_upvote_normal_when_no_flag(tmp_path):
     pb._dry_run_flag = flag_file
     pb._upvotes_enabled = True
     pb.api.upvote_post = MagicMock(return_value=True)
-    pb._maybe_upvote("post-fresh-upvote2", "STANDARD")
+    pb._maybe_upvote("upv-ok-1", "STANDARD")
     pb.api.upvote_post.assert_called_once()
 
 
@@ -737,5 +745,5 @@ def test_follow_agent_normal_when_no_flag(tmp_path):
     pb._dry_run_flag = flag_file
     pb._following_enabled = True
     pb.api.follow_agent = MagicMock(return_value=True)
-    pb._maybe_follow_author("fresh-agent-2")
+    pb._maybe_follow_author("fol-ok-1")
     pb.api.follow_agent.assert_called_once()

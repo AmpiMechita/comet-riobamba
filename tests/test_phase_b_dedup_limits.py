@@ -66,12 +66,16 @@ def _redirect_paths(tmp_path):
     orig_rep = pb._REPLIED_IDS_PATH
     orig_com = pb._COMMENTED_POSTS_PATH
     orig_agc = pb._AGENT_COMMENT_IDS_PATH
+    orig_upv = pb._UPVOTED_POST_IDS_PATH
+    orig_fol = pb._FOLLOWED_AGENTS_PATH
     orig_dedup = ds.DedupStore._default_db_path
     orig_agenda = ra.AGENDA_PATH
     cs.CONVERSATIONS_PATH = tmp_path / "conversations.json"
     pb._REPLIED_IDS_PATH = tmp_path / "replied_comment_ids.json"
     pb._COMMENTED_POSTS_PATH = tmp_path / "commented_post_ids.json"
     pb._AGENT_COMMENT_IDS_PATH = tmp_path / "agent_comment_ids.json"
+    pb._UPVOTED_POST_IDS_PATH = tmp_path / "upvoted_post_ids.json"
+    pb._FOLLOWED_AGENTS_PATH = tmp_path / "followed_agents.json"
     ds.DedupStore._default_db_path = tmp_path / "comet_dedup.db"
     # Phase B feed replies call _add_topic_to_agenda -> load_agenda/save_agenda,
     # which use the module-level AGENDA_PATH. Redirect it so fixture posts never
@@ -92,6 +96,8 @@ def _redirect_paths(tmp_path):
     pb._REPLIED_IDS_PATH = orig_rep
     pb._COMMENTED_POSTS_PATH = orig_com
     pb._AGENT_COMMENT_IDS_PATH = orig_agc
+    pb._UPVOTED_POST_IDS_PATH = orig_upv
+    pb._FOLLOWED_AGENTS_PATH = orig_fol
     ds.DedupStore._default_db_path = orig_dedup
     ra.AGENDA_PATH = orig_agenda
 
