@@ -52,7 +52,7 @@ class ChallengeSolver:
                 elif isinstance(node, ast.UnaryOp):
                     if type(node.op) not in (ast.USub,):
                         return None
-                elif isinstance(node, (ast.Expression, ast.Constant)):
+                elif isinstance(node, (ast.Expression, ast.Constant, ast.operator, ast.unaryop)):
                     continue
                 else:
                     return None
@@ -178,8 +178,8 @@ class ChallengeSolver:
 
 
     async def _generate_with_captcha_fallback(self, prompt: str, system_prompt: str) -> str:
-        """Intenta opus primero, luego cerebras si falla."""
-        for _tier in ["opus", "cerebras"]:
+        """Intenta premium (Anthropic) primero, luego cerebras si falla."""
+        for _tier in ["premium", "cerebras"]:
             try:
                 response = await self.model_cascade.generate(
                     prompt=prompt,
@@ -193,7 +193,7 @@ class ChallengeSolver:
                     return response
             except Exception as _e:
                 logger.warning(f"ChallengeSolver: tier={_tier} fallido: {_e}. Intentando siguiente...")
-        raise Exception("Todos los tiers CAPTCHA fallaron (opus, cerebras)")
+        raise Exception("Todos los tiers CAPTCHA fallaron (premium, cerebras)")
 
     async def _solve_with_llm(self, text: str) -> Optional[str]:
         if not self.model_cascade:

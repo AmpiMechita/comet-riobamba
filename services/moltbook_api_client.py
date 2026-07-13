@@ -29,6 +29,9 @@ from core.challenge_solver import solve_sync, LLMClientAdapter
 from core.tracer import Span
 from services.tool_feedback import ToolResultReceipt, compute_confidence, should_trip_circuit
 from services.tool_quality_metrics import ToolQualityWindow, update_window
+from services.platform_client import (
+    PlatformClient, PlatformPost, PlatformComment, PublishResult,
+)
 
 logger = logging.getLogger("services.moltbook")
 
@@ -42,7 +45,7 @@ class APIResponse:
     error: Optional[str] = None
 
 
-class MoltbookAPIClient:
+class MoltbookAPIClient(PlatformClient):
     def __init__(
         self,
         credentials: Optional[Credentials] = None,
@@ -75,11 +78,38 @@ class MoltbookAPIClient:
             self.base_url = self.base_url.rstrip("/") + "/api/v1"
 
         # ── Token-bucket rate limiter for write endpoints ────────
+        # ── Separate token-bucket rate limiters by write type ────────
         self._lock = threading.Lock()
-        self._max_write_tokens = float(os.getenv("MOLTBOOK_RATE_LIMIT_CALLS", "1"))
-        self._write_tokens = self._max_write_tokens
-        self._rate_limit_window = float(os.getenv("MOLTBOOK_RATE_LIMIT_WINDOW_SECONDS", "150.0"))
-        self._last_refill = time.monotonic()
+        self._buckets = {
+            "post": {
+                "tokens": 1.0,
+                "max": 1.0,
+                "window": float(os.getenv("MOLTBOOK_POST_RATE_LIMIT_SECONDS", "300.0")),
+                "last_refill": time.monotonic(),
+            },
+            "comment": {
+                "tokens": 1.0,
+                "max": 1.0,
+                "window": float(os.getenv("MOLTBOOK_COMMENT_RATE_LIMIT_SECONDS", "60.0")),
+                "last_refill": time.monotonic(),
+            },
+            "action": {
+                "tokens": 1.0,
+                "max": 1.0,
+                "window": float(os.getenv("MOLTBOOK_ACTION_RATE_LIMIT_SECONDS", "30.0")),
+                "last_refill": time.monotonic(),
+            },
+        }
+        # Legacy env vars: if set, override buckets to preserve old behavior
+        _legacy_window = os.getenv("MOLTBOOK_RATE_LIMIT_WINDOW_SECONDS")
+        _legacy_calls = os.getenv("MOLTBOOK_RATE_LIMIT_CALLS")
+        if _legacy_window or _legacy_calls:
+            _lw = float(_legacy_window) if _legacy_window else 150.0
+            _lc = float(_legacy_calls) if _legacy_calls else 1.0
+            for b in self._buckets.values():
+                b["window"] = _lw
+                b["max"] = _lc
+                b["tokens"] = _lc
         self._latency_baselines_ms: Dict[str, float] = {}
         self._quality_window = ToolQualityWindow()
 
@@ -90,59 +120,96 @@ class MoltbookAPIClient:
 
         logger.info("MoltbookAPIClient inicializado. base_url=%s", self.base_url)
 
-    def _wait_for_write_token(self, endpoint_name: str) -> None:
-        """Token-bucket rate limiter for write endpoints (create_post, create_comment).
+    @property
+    def platform_name(self) -> str:
+        return "moltbook"
 
-        Blocks the calling thread until a write token is available. The bucket
-        refills at a rate of MOLTBOOK_RATE_LIMIT_CALLS (default 1) per
-        MOLTBOOK_RATE_LIMIT_WINDOW_SECONDS (default 150.0). Read-only endpoints
-        (get_feed, get_comments, etc.) bypass this limiter entirely.
+    @property
+    def _write_tokens(self) -> float:
+        """Backward-compat property: returns tokens from the comment bucket (legacy view)."""
+        return self._buckets["comment"]["tokens"]
+
+    def _wait_for_write_token(self, endpoint_name: str, bucket_type: str = "comment") -> None:
+        """Token-bucket rate limiter with separate buckets per write type.
+
+        bucket_type: "post", "comment", or "action"
+        Blocks the calling thread until a token is available in the specified bucket.
         """
         with self._lock:
+            bucket = self._buckets.get(bucket_type, self._buckets["comment"])
             now = time.monotonic()
-            elapsed = now - self._last_refill
-            rate = self._max_write_tokens / self._rate_limit_window
-            self._write_tokens = min(self._max_write_tokens, self._write_tokens + elapsed * rate)
-            self._last_refill = now
+            elapsed = now - bucket["last_refill"]
+            rate = bucket["max"] / bucket["window"]
+            bucket["tokens"] = min(bucket["max"], bucket["tokens"] + elapsed * rate)
+            bucket["last_refill"] = now
 
-            if self._write_tokens < 1.0:
-                wait = (1.0 - self._write_tokens) / rate
+            if bucket["tokens"] < 1.0:
+                wait = (1.0 - bucket["tokens"]) / rate
                 logger.warning(
-                    "Rate limiter: %s bloqueado por %.1fs (sin tokens disponibles)",
-                    endpoint_name, wait,
+                    "Rate limiter [%s]: %s bloqueado por %.1fs",
+                    bucket_type, endpoint_name, wait,
                 )
                 time.sleep(wait)
-                # Refill after sleep
                 now = time.monotonic()
-                elapsed = now - self._last_refill
-                self._write_tokens = min(
-                    self._max_write_tokens, self._write_tokens + elapsed * rate
-                )
-                self._last_refill = now
+                elapsed = now - bucket["last_refill"]
+                bucket["tokens"] = min(bucket["max"], bucket["tokens"] + elapsed * rate)
+                bucket["last_refill"] = now
 
-            self._write_tokens -= 1.0
+            bucket["tokens"] -= 1.0
 
     def _call_write(self, method: str, path: str, *, json_body=None) -> Dict[str, Any]:
-        """Call _request with 429 retry-once logic for write endpoints.
+        """Call _request with retry logic for write endpoints.
 
-        If Moltbook returns 429 despite the client-side limiter, waits for the
-        Retry-After duration (if present) and retries once. A second 429 raises
-        RuntimeError — no infinite loop.
+        - 429: retry-once usando el header Retry-After si está presente.
+        - 5xx: hasta _5XX_MAX_RETRIES reintentos con backoff exponencial.
         """
+        _5XX_MAX_RETRIES = 2
+        _5XX_BACKOFF_BASE = 5   # segundos
+        _5XX_BACKOFF_MAX = 60   # techo de espera
+
         result = self._request(method, path, json_body=json_body, record_success=False)
-        if result["status"] == 429:
+
+        # ── 429: retry-once con Retry-After ──────────────────────────────────────
+        if result.get("status") == 429:
             retry_after = result.get("retry_after_seconds")
             logger.error(
-                "429 after client-side limiter; Retry-After=%ss; retrying once.",
-                retry_after or "unknown",
+                "_call_write: 429 tras limiter local; Retry-After=%ss; reintentando una vez.",
+                retry_after or "desconocido",
             )
             if retry_after:
                 time.sleep(retry_after)
             result = self._request(method, path, json_body=json_body, record_success=False)
-            if result["status"] == 429:
+            if result.get("status") == 429:
                 raise RuntimeError(
                     f"Moltbook retornó 429 incluso tras esperar {retry_after}s (Retry-After)"
                 )
+
+        # ── 5xx: backoff exponencial ──────────────────────────────────────────────
+        attempt = 0
+        while result.get("status", 0) >= 500 and attempt < _5XX_MAX_RETRIES:
+            attempt += 1
+            delay = min(_5XX_BACKOFF_BASE * (2 ** (attempt - 1)), _5XX_BACKOFF_MAX)
+            logger.warning(
+                "_call_write: 5xx (%s) en %s %s — intento %d/%d, esperando %ds",
+                result.get("status"),
+                method,
+                path,
+                attempt,
+                _5XX_MAX_RETRIES,
+                delay,
+            )
+            time.sleep(delay)
+            result = self._request(method, path, json_body=json_body, record_success=False)
+
+        if result.get("status", 0) >= 500:
+            logger.error(
+                "_call_write: 5xx persistente (%s) en %s %s tras %d reintentos — abortando.",
+                result.get("status"),
+                method,
+                path,
+                _5XX_MAX_RETRIES,
+            )
+
         return result
 
     def _request(
@@ -315,7 +382,7 @@ class MoltbookAPIClient:
         }
 
         try:
-            self._wait_for_write_token("create_post")
+            self._wait_for_write_token("create_post", bucket_type="post")
             result = self._call_write("POST", "/posts", json_body=payload)
         except Exception as e:
             latency_ms = (time.monotonic() - t0) * 1000
@@ -396,7 +463,7 @@ class MoltbookAPIClient:
         path = f"/posts/{post_id}/comments"
 
         try:
-            self._wait_for_write_token("create_comment")
+            self._wait_for_write_token("create_comment", bucket_type="comment")
             result = self._call_write("POST", path, json_body=payload)
         except Exception as e:
             latency_ms = (time.monotonic() - t0) * 1000
@@ -608,11 +675,20 @@ class MoltbookAPIClient:
             content=reply_text,
             parent_comment_id=comment_id,
         )
-        if result.get("success"):
-            return result
 
-        logger.warning("post_reply: parent_comment_id no soportado, usando comentario de nivel superior")
-        return self.create_comment(post_id=post_id, content=reply_text)
+        # NEVER fall back to a top-level comment.  The comment may have been
+        # created server-side before an error response — retrying without
+        # parent_comment_id would create a duplicate top-level comment,
+        # damaging the agent's reputation.  Outbox retries handle persistence.
+        if not result.get("success"):
+            logger.warning(
+                "post_reply: reply to comment %s on post %s failed (status=%s, error=%s); "
+                "not retrying as top-level to avoid duplicate.",
+                comment_id, post_id,
+                result.get("status"), result.get("error"),
+            )
+
+        return result
 
     def fetch_posts(self, limit: int = 20, sort: str = "hot", **kwargs) -> List[Dict[str, Any]]:
         try:
@@ -694,6 +770,28 @@ class MoltbookAPIClient:
         return {}
 
     # ==========================
+    # Profile
+    # ==========================
+
+    def update_agent_profile(self, bio: str, tagline: Optional[str] = None) -> bool:
+        """PATCH /api/v1/agents/me — update the agent's bio on Moltbook."""
+        if not bio:
+            return False
+        payload: Dict[str, Any] = {"bio": bio}
+        try:
+            result = self._request("PATCH", "/agents/me", json_body=payload)
+            success = 200 <= result["status"] < 300
+            if success:
+                logger.info("Perfil actualizado correctamente en Moltbook. Status: %s", result["status"])
+            else:
+                logger.warning("MoltbookAPIClient: profile update failed — HTTP %s: %s",
+                               result["status"], result.get("data", {}))
+            return success
+        except Exception as e:
+            logger.warning("MoltbookAPIClient.update_agent_profile: %s", e)
+            return False
+
+    # ==========================
     # Upvotes
     # ==========================
 
@@ -702,7 +800,7 @@ class MoltbookAPIClient:
         if not post_id:
             return False
         try:
-            self._wait_for_write_token("upvote_post")
+            self._wait_for_write_token("upvote_post", bucket_type="action")
             result = self._call_write("POST", f"/posts/{post_id}/upvote")
             success = 200 <= result["status"] < 300
             if success:
@@ -724,7 +822,7 @@ class MoltbookAPIClient:
             return False
         name = agent_name.strip()
         try:
-            self._wait_for_write_token("follow_agent")
+            self._wait_for_write_token("follow_agent", bucket_type="action")
             result = self._call_write("POST", f"/agents/{name}/follow")
             success = 200 <= result["status"] < 300
             if success:
@@ -793,3 +891,99 @@ class MoltbookAPIClient:
                 data={"items": [], "comments": []},
                 error=str(e),
             )
+
+    # ── PlatformClient interface implementation ──────────────────────
+
+    def publish_post(self, title: str, body: str, metadata: Optional[Dict] = None) -> PublishResult:
+        """PlatformClient adapter for create_post."""
+        result = self.create_post(title, body, metadata)
+        if result.get("success"):
+            return PublishResult(
+                success=True,
+                id=result.get("id"),
+                requires_verification=bool(result.get("raw", {}).get("verification_required")),
+            )
+        return PublishResult(success=False, error=result.get("error", "unknown"))
+
+    def publish_comment(self, post_id: str, content: str, parent_comment_id: Optional[str] = None) -> PublishResult:
+        """PlatformClient adapter for create_comment."""
+        result = self.create_comment(post_id=post_id, content=content, parent_comment_id=parent_comment_id)
+        if result.get("success"):
+            return PublishResult(success=True, id=result.get("id"))
+        return PublishResult(success=False, error=result.get("error", "unknown"))
+
+    def upvote(self, post_id: str) -> bool:
+        """PlatformClient adapter for upvote_post."""
+        return self.upvote_post(post_id)
+
+    def get_own_posts(self, limit: int = 10) -> List[PlatformPost]:
+        """PlatformClient adapter for fetch_my_posts."""
+        raw = self.fetch_my_posts(limit=limit)
+        return [
+            PlatformPost(
+                id=p.get("id", ""),
+                title=p.get("title", ""),
+                body=p.get("body") or p.get("content", ""),
+                author=p.get("author", ""),
+                created_at=p.get("created_at", ""),
+                upvotes=p.get("upvotes", 0),
+                comment_count=p.get("comment_count", 0),
+                url=p.get("url"),
+                metadata=p,
+            )
+            for p in raw
+        ]
+
+    def get_feed_posts(self, limit: int = 20, sort: str = "hot") -> List[PlatformPost]:
+        """PlatformClient adapter for fetch_posts."""
+        raw = self.fetch_posts(limit=limit, sort=sort)
+        return [
+            PlatformPost(
+                id=p.get("id", ""),
+                title=p.get("title", ""),
+                body=p.get("body") or p.get("content", ""),
+                author=p.get("author", ""),
+                created_at=p.get("created_at", ""),
+                upvotes=p.get("upvotes", 0),
+                comment_count=p.get("comment_count", 0),
+                url=p.get("url"),
+                metadata=p,
+            )
+            for p in raw
+        ]
+
+    def get_comments_normalized(self, post_id: str) -> List[PlatformComment]:
+        """PlatformClient adapter for fetch_post_comments."""
+        raw = self.fetch_post_comments(post_id)
+        return [
+            PlatformComment(
+                id=c.get("id", ""),
+                post_id=post_id,
+                author=c.get("author", ""),
+                content=c.get("content") or c.get("body", ""),
+                created_at=c.get("created_at", ""),
+                parent_comment_id=c.get("parent_id"),
+                upvotes=c.get("upvotes", 0),
+                metadata=c,
+            )
+            for c in raw
+        ]
+
+    def follow_user(self, username: str) -> bool:
+        """PlatformClient adapter for follow_agent."""
+        return self.follow_agent(username)
+
+    def search(self, query: str, limit: int = 20) -> List[PlatformPost]:
+        """PlatformClient adapter for semantic_search."""
+        raw = self.semantic_search(query, limit=limit)
+        return [
+            PlatformPost(
+                id=p.get("id", ""),
+                title=p.get("title", ""),
+                body=p.get("body") or p.get("content", ""),
+                author=p.get("author", ""),
+                created_at=p.get("created_at", ""),
+                metadata=p,
+            )
+            for p in raw
+        ]

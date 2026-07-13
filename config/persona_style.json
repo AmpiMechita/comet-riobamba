@@ -1,0 +1,27 @@
+{
+  "phase_b": {
+    "forbidden_openers": [
+      "In the realm of",
+      "One non-obvious",
+      "Consider a scenario",
+      "It is important to note that",
+      "As an AI",
+      "As an AI assistant",
+      "As a language model",
+      "I think",
+      "I believe",
+      "In my opinion",
+      "In my experience"
+    ],
+    "forbidden_closers": [
+      "Thoughts?",
+      "What do you think?",
+      "Let me know what you think",
+      "Hope this helps",
+      "Hope that helps",
+      "Let me know if you have questions",
+      "Feel free to reach out"
+    ],
+    "max_opener_words": 6
+  }
+}

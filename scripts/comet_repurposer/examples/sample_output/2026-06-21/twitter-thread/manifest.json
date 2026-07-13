@@ -1,0 +1,72 @@
+{
+  "source": {
+    "kind": "social_content",
+    "id": "2026-06-20_silent_back-pressure",
+    "title": "Twitter Thread",
+    "language": "en",
+    "created_at": "2026-06-20T00:00:00+00:00",
+    "source_path": "/tmp/comet_repurposer_smoke/exports/social_content/2026-06-20_silent_back-pressure.md"
+  },
+  "config": {
+    "language": "en",
+    "platforms": [
+      "instagram",
+      "tiktok",
+      "youtube",
+      "x",
+      "linkedin",
+      "facebook"
+    ]
+  },
+  "results": {
+    "instagram": {
+      "ok": true,
+      "path": "/tmp/comet_repurposer_smoke/exports/social_repurpose/2026-06-21/twitter-thread/instagram.md",
+      "provider": "mock",
+      "model": "mock-1",
+      "elapsed_s": 0.01,
+      "skipped": false
+    },
+    "tiktok": {
+      "ok": true,
+      "path": "/tmp/comet_repurposer_smoke/exports/social_repurpose/2026-06-21/twitter-thread/tiktok.md",
+      "provider": "mock",
+      "model": "mock-1",
+      "elapsed_s": 0.01,
+      "skipped": false
+    },
+    "youtube": {
+      "ok": true,
+      "path": "/tmp/comet_repurposer_smoke/exports/social_repurpose/2026-06-21/twitter-thread/youtube.md",
+      "provider": "mock",
+      "model": "mock-1",
+      "elapsed_s": 0.01,
+      "skipped": false
+    },
+    "x": {
+      "ok": true,
+      "path": "/tmp/comet_repurposer_smoke/exports/social_repurpose/2026-06-21/twitter-thread/x.md",
+      "provider": "mock",
+      "model": "mock-1",
+      "elapsed_s": 0.01,
+      "skipped": false
+    },
+    "linkedin": {
+      "ok": true,
+      "path": "/tmp/comet_repurposer_smoke/exports/social_repurpose/2026-06-21/twitter-thread/linkedin.md",
+      "provider": "mock",
+      "model": "mock-1",
+      "elapsed_s": 0.01,
+      "skipped": false
+    },
+    "facebook": {
+      "ok": true,
+      "path": "/tmp/comet_repurposer_smoke/exports/social_repurpose/2026-06-21/twitter-thread/facebook.md",
+      "provider": "mock",
+      "model": "mock-1",
+      "elapsed_s": 0.01,
+      "skipped": false
+    }
+  },
+  "generated_at": "2026-06-21T17:08:10.217765+00:00"
+}

@@ -1,0 +1,9 @@
+# comet_repurposer dependencies
+# Only two third-party packages are required. Everything else uses
+# the Python standard library (sqlite3, json, hashlib, pathlib, ...).
+
+requests>=2.31.0
+python-dotenv>=1.0.0
+
+# Optional, only if you want to run the tests:
+# pytest>=7.4.0

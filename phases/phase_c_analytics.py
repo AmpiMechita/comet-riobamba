@@ -1,20 +1,24 @@
 # -*- coding: utf-8 -*-
 """Fase C: Analytics, métricas, auto-optimización y agenda de investigación."""
+import asyncio
 import logging
 import json
 import math
 import re
+from collections import Counter
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from config import behavior_cfg, content_cfg
 from config.agent_policy import POLICY
+from core.strategy_state import StrategyState
 from phases.deps import PhaseCDeps
 from services.telegram_client import create_telegram_client
 from services.roadmap import load_roadmap, save_roadmap, update_series_weight
 from services.persistence import load_topic_engagement
-from services.research_agenda import load_agenda, save_agenda, ResearchAgenda
+from prompts.prompt_templates import SOCIAL_REPURPOSING_TEMPLATE
+from services.research_agenda import load_agenda, save_agenda, prune_agenda, ResearchAgenda
 from services.self_improvement import log_proposal
 from utils.phase_utils import phase_error_boundary, validate_phase_deps
 
@@ -72,6 +76,115 @@ class PhaseCAnalytics:
         with open(self.state_file, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=2, default=str)
     
+    async def _run_social_harvester(self):
+        """Genera contenido para redes sociales a partir de debates de alto valor en nuestros posts."""
+        try:
+            logger.info("Phase C: Iniciando Harvester de Insights para Redes Sociales...")
+            posts = self.moltbook.fetch_my_posts(limit=3)
+            if not posts:
+                return
+
+            for post in posts:
+                post_id = post.get("id")
+                if not post_id:
+                    continue
+                
+                comments = self.moltbook.fetch_post_comments(post_id)
+                # Solo sintetizar hilos donde hubo un debate real (3+ comentarios)
+                if len(comments) < 3:
+                    continue
+
+                # Construir el texto del debate
+                debate_lines = []
+                for c in comments:
+                    author_raw = c.get("author")
+                    author = author_raw.get("name", "User") if isinstance(author_raw, dict) else str(author_raw or "User")
+                    text = c.get("content") or c.get("text") or ""
+                    debate_lines.append(f"{author}: {text}")
+                
+                debate_text = "\n".join(debate_lines)
+                topic = post.get("title", "Technical Agent Debate")
+
+                prompt = SOCIAL_REPURPOSING_TEMPLATE.format(topic=topic, debate_text=debate_text)
+                
+                result = await self.deps.model_cascade.generate(
+                    prompt=prompt,
+                    system_prompt="You are an expert technical writer. Output ONLY valid JSON.",
+                    max_tokens=2000,
+                    temperature=0.6,
+                    tier="fallback"
+                )
+
+                if result:
+                    result = result.strip().replace("```json", "").replace("```", "").strip()
+                    data = json.loads(result)
+                    
+                    export_dir = Path("exports/social_content")
+                    export_dir.mkdir(parents=True, exist_ok=True)
+                    filepath = export_dir / f"{datetime.now().strftime('%Y-%m-%d')}_{post_id[:8]}.md"
+                    
+                    with open(filepath, "w", encoding="utf-8") as f:
+                        f.write(f"# Síntesis de Debate: {topic}\n\n")
+                        f.write("## 🧵 Twitter Thread\n\n")
+                        for tw in data.get("twitter_thread", []):
+                            f.write(f"- {tw}\n")
+                        f.write("\n## 💼 LinkedIn Post\n\n")
+                        f.write(data.get("linkedin_post", "N/A") + "\n")
+                    
+                    logger.info(f"Phase C: Contenido social sintetizado y guardado en {filepath}")
+
+        except Exception as e:
+            logger.warning(f"Phase C: Error en Social Harvester: {e}")
+
+    async def _update_research_agenda_from_feedback(self):
+        """Extrae keywords de posts exitosos y alimenta la research_agenda para mañana."""
+        try:
+            posts = self.moltbook.fetch_my_posts(limit=5)
+            if not posts:
+                return
+            
+            # Filtrar posts con buen engagement (3 o más comentarios)
+            successful_posts = [p for p in posts if (p.get("comment_count", 0) or len(p.get("comments", [])) or 0) >= 3]
+            if not successful_posts:
+                return
+            
+            all_text = ' '.join([p.get("content", "") + " " + p.get("title", "") for p in successful_posts])
+            words = re.findall(r'\b[a-zA-Z]{4,}\b', all_text.lower())
+            
+            # Stopwords básicas (inglés y español)
+            stopwords = {'para', 'este', 'sobre', 'como', 'muy', 'con', 'the', 'that', 'this', 'with', 'from', 'have', 'your', 'will', 'they', 'their'}
+            keywords = [w for w in words if w not in stopwords]
+            
+            # Umbral de frecuencia: count >= 2 para evitar ruido contextual
+            top_keywords = [word for word, count in Counter(keywords).most_common(8) if count >= 2]
+            
+            # Extraer hook estructural del post con más comentarios
+            best_post = max(successful_posts, key=lambda p: p.get("comment_count", 0))
+            best_hook = (best_post.get("content", "") or "").split('.')[0][:150]
+            if best_hook:
+                agenda["hook_template"] = best_hook
+                logger.info(f"Phase C: Hook estructural exitoso guardado: {best_hook}")
+
+            if not top_keywords:
+                return
+                
+            # Generar temas para la agenda
+            new_topics = [f"{kw} implementation patterns" for kw in top_keywords[:3]]
+            
+            # Cargar agenda existente y añadir nuevos temas sin duplicar
+            agenda = load_agenda()
+            existing_topics = set(t.get("topic", "").lower() for t in agenda.get("topics", []))
+            
+            for topic in new_topics:
+                if topic.lower() not in existing_topics:
+                    agenda.setdefault("topics", []).append({"topic": topic, "source": "phase_c_feedback"})
+                    
+            save_agenda(agenda)
+            logger.info(f"Phase C: Research Agenda actualizada con keywords exitosas: {top_keywords[:3]}")
+            
+        except Exception as e:
+            logger.warning(f"Phase C: Error actualizando research agenda: {e}")
+
     def _should_run_analytics(self, state: Dict) -> bool:
         """Determina si es tiempo de ejecutar analytics."""
         last_run = state.get("last_analytics_run")
@@ -279,6 +392,218 @@ class PhaseCAnalytics:
             logger.debug("Phase C: could not fetch posts for agenda: %s", e)
             return []
 
+    def _maybe_run_energy_intel(self) -> None:
+        """Run energy intel ingest + Telegram alerts if throttle allows (1h interval)."""
+        if not self.telegram or not self.telegram.enabled:
+            return
+        try:
+            from services.energy_intel_telegram import (
+                should_run_energy_intel, run_energy_intel_with_alerts, minutes_since_last_run,
+                run_funding_scan, run_tech_radar_scan,
+                should_run_weekly_digest, run_weekly_digest,
+            )
+        except ImportError as e:
+            logger.warning("Energy Intel: cannot import module — %s", e)
+            return
+
+        if not should_run_energy_intel():
+            mins = minutes_since_last_run()
+            logger.debug("Energy Intel: throttled (last run %.0f min ago, interval=60 min)", mins or 0)
+            return
+
+        mins = minutes_since_last_run()
+        last_run_info = f"{mins:.0f} min atrás" if mins is not None else "nunca"
+        logger.info("Energy Intel: ejecutando ingest (última ejecución: %s)", last_run_info)
+
+        try:
+            new_count = run_energy_intel_with_alerts(self.telegram)
+            if new_count == 0:
+                logger.info("Energy Intel: sin nuevas tecnologías de frontera")
+            else:
+                logger.info("Energy Intel: %d claim(s) ingerido(s)", new_count)
+        except Exception as e:
+            logger.warning("Energy Intel: error en ejecución — %s", e)
+
+        # Funding & Tech Radar (same hourly throttle)
+        try:
+            funding_count = run_funding_scan(self.telegram)
+            radar_count = run_tech_radar_scan(self.telegram)
+            if funding_count or radar_count:
+                logger.info("Energy Intel: %d funding, %d radar entries", funding_count, radar_count)
+        except Exception as e:
+            logger.warning("Energy Intel: funding/radar scan error — %s", e)
+
+        # Weekly digest (Mondays only)
+        try:
+            if should_run_weekly_digest():
+                run_weekly_digest(self.telegram)
+                logger.info("Energy Intel: weekly digest enviado")
+        except Exception as e:
+            logger.warning("Energy Intel: weekly digest error — %s", e)
+
+    @phase_error_boundary(logger, "phase_c_analytics")
+    async def _maybe_generate_proposal(self, results: Dict, metrics: Dict) -> None:
+        """Generate a self-improvement proposal grounded in REAL telemetry.
+
+        Instead of asking the LLM to guess what to improve, we mine the agent's
+        own operational logs (data/dual_scores.jsonl + data/cascade_telemetry.jsonl)
+        for concrete failure metrics, then ask the LLM to turn those numbers into a
+        concise, actionable code-change proposal.
+        """
+        try:
+            findings = self._collect_telemetry_metrics(window=50)
+
+            if not findings.get("has_signal"):
+                logger.debug(
+                    "Phase C: no significant friction in telemetry — skipping proposal generation"
+                )
+                return
+
+            model_cascade = self.deps.model_cascade
+            if not model_cascade:
+                return
+
+            metrics_block = "\n".join(f"- {line}" for line in findings["lines"])
+            proposal_prompt = (
+                "Analiza estas métricas de fallo de tu propio sistema, extraídas de "
+                "tus logs de telemetría (dual_scores.jsonl y cascade_telemetry.jsonl):\n\n"
+                f"{metrics_block}\n\n"
+                "Redacta una propuesta técnica concisa (máx 3 líneas) para que el "
+                "administrador modifique el código. Basáte SOLO en las métricas de "
+                "arriba, no inventes datos. Indica el archivo y el cambio concreto.\n"
+                "Ejemplo: 'Métrica: 15 fallos por longitud. Propuesta: Aumentar "
+                "max_len en constants.py'."
+            )
+            try:
+                response = await model_cascade.generate(
+                    prompt=proposal_prompt,
+                    system_prompt=(
+                        "Eres un agente autónomo proponiendo mejoras a tu propio código "
+                        "basándote en datos de telemetría reales. No alucines métricas."
+                    ),
+                    max_tokens=200,
+                    temperature=0.5,
+                    tier="premium",
+                    caller="phase_c_proposal",
+                )
+                response = (response or "").strip()
+                if response and len(response) > 10:
+                    from services.telegram_control import log_proposal
+                    proposal_text = (
+                        f"{response}\n\n"
+                        f"[Telemetría base: {' | '.join(findings['lines'])}]"
+                    )
+                    log_proposal(proposal_text)
+                    logger.info(
+                        "Phase C: telemetry-grounded proposal generated (%d chars, %d metrics)",
+                        len(response), len(findings["lines"]),
+                    )
+            except Exception as e:
+                logger.debug("Phase C: proposal generation skipped (LLM unavailable): %s", e)
+        except Exception as e:
+            logger.warning("Phase C: proposal generation error: %s", e)
+
+    def _collect_telemetry_metrics(self, window: int = 50) -> Dict[str, Any]:
+        """Mine dual_scores + cascade_telemetry for concrete failure metrics.
+
+        Returns {"has_signal": bool, "lines": [str, ...]} where each line is a
+        human-readable, data-grounded metric suitable for feeding to the LLM.
+        """
+        lines: List[str] = []
+
+        # ── 1) Content quality friction from dual_scores.jsonl ──────────
+        # Read ONLY the active file, never the rotated {name}.archive sibling,
+        # so this stays bounded to the last ~1000 records (see utils.jsonl_rotation).
+        try:
+            dual_scores_path = Path("data/dual_scores.jsonl")
+            if dual_scores_path.exists():
+                entries: List[Dict[str, Any]] = []
+                for line in dual_scores_path.read_text(encoding="utf-8").splitlines():
+                    if not line.strip():
+                        continue
+                    try:
+                        entries.append(json.loads(line.strip()))
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+                recent = entries[-window:]
+                if recent:
+                    low_value = sum(
+                        1 for e in recent
+                        if float(e.get("composite", e.get("score", 1.0)) or 0.0) < 0.5
+                    )
+                    type_counts = Counter(str(e.get("type", "unknown")) for e in recent)
+                    low_signal_types = ("repetition", "agreement", "clarification")
+                    low_signal = sum(type_counts.get(t, 0) for t in low_signal_types)
+                    if low_value:
+                        lines.append(
+                            f"En los últimos {len(recent)} ciclos, "
+                            f"{low_value} respuestas tuvieron composite score < 0.5 (bajo valor)."
+                        )
+                    if low_signal:
+                        top_type, top_n = max(
+                            ((t, type_counts.get(t, 0)) for t in low_signal_types),
+                            key=lambda x: x[1],
+                        )
+                        lines.append(
+                            f"{low_signal}/{len(recent)} respuestas fueron de bajo aporte "
+                            f"(el tipo más frecuente fue '{top_type}' con {top_n})."
+                        )
+        except Exception as e:
+            logger.debug("Phase C: dual_scores telemetry read failed: %s", e)
+
+        # ── 2) Cascade reliability + latency from cascade_telemetry.jsonl ──
+        try:
+            cascade_path = Path("data/cascade_telemetry.jsonl")
+            if cascade_path.exists():
+                entries = []
+                for line in cascade_path.read_text(encoding="utf-8").splitlines():
+                    if not line.strip():
+                        continue
+                    try:
+                        entries.append(json.loads(line.strip()))
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+                recent = entries[-window:]
+                if recent:
+                    error_counts = Counter(
+                        str(e.get("error"))
+                        for e in recent
+                        if not e.get("success") and e.get("error")
+                    )
+                    for err_type, count in error_counts.most_common(3):
+                        lines.append(
+                            f"El error de cascada '{err_type}' se activó {count} veces "
+                            f"en los últimos {len(recent)} ciclos."
+                        )
+                    # p95 latency per provider (successful calls only)
+                    by_provider: Dict[str, List[int]] = {}
+                    for e in recent:
+                        if e.get("success") and isinstance(e.get("latency_ms"), (int, float)):
+                            by_provider.setdefault(str(e.get("provider")), []).append(
+                                int(e["latency_ms"])
+                            )
+                    for provider, lats in by_provider.items():
+                        if len(lats) >= 5:
+                            p95 = self._percentile(lats, 95)
+                            if p95 >= 4000:
+                                lines.append(
+                                    f"Latencia p95 de '{provider}' subió a "
+                                    f"{p95 / 1000:.1f}s ({len(lats)} muestras)."
+                                )
+        except Exception as e:
+            logger.debug("Phase C: cascade telemetry read failed: %s", e)
+
+        return {"has_signal": len(lines) >= 1, "lines": lines}
+
+    @staticmethod
+    def _percentile(values: List[int], pct: float) -> float:
+        """Nearest-rank percentile of a list of numbers (no numpy dependency)."""
+        if not values:
+            return 0.0
+        ordered = sorted(values)
+        k = max(0, min(len(ordered) - 1, int(round((pct / 100.0) * len(ordered) + 0.5)) - 1))
+        return float(ordered[k])
+
     @phase_error_boundary(logger, "phase_c_analytics")
     async def execute(self) -> Dict[str, Any]:
         """Ejecuta Fase C: analytics → insights → optimización."""
@@ -375,6 +700,26 @@ class PhaseCAnalytics:
         except Exception as e:
             logger.warning("Phase C: research agenda update failed: %s", e)
             results["research_agenda_updated"] = False
+
+        # Prune the research agenda (retention: TTL + archive + hard cap).
+        # Safe to call every cycle: prune_agenda() has an internal frequency
+        # guard (default 24h) and no-ops silently if the interval has not elapsed.
+        try:
+            agenda = load_agenda()
+            prune_res = prune_agenda(agenda)
+            if not prune_res.get("skipped"):
+                save_agenda(agenda)
+                logger.info(
+                    "Phase C: research agenda pruned — dropped_covered=%d, archived_uncovered=%d, "
+                    "capped_covered=%d, capped_archived=%d (%d→%d)",
+                    prune_res["dropped_covered_ttl"], prune_res["archived_uncovered_ttl"],
+                    prune_res["capped_dropped_covered"], prune_res["capped_archived_uncovered"],
+                    prune_res["before"], prune_res["after"],
+                )
+            results["research_agenda_pruned"] = not prune_res.get("skipped")
+        except Exception as e:
+            logger.warning("Phase C: research agenda prune failed: %s", e)
+            results["research_agenda_pruned"] = False
         
         # Update state
         state["last_analytics_run"] = datetime.now().isoformat()
@@ -382,7 +727,165 @@ class PhaseCAnalytics:
         # Keep only last 7 days of history
         state["metrics_history"] = state["metrics_history"][-168:]  # 7 days * 24 hours
         self._save_state(state)
-        
+
+        # ── Update strategy state ──────────────────────────────────────────
+        top_topic_names = [
+            topic_name
+            for topic_name, count in metrics.get("top_topics", [])[:3]
+        ]
+        avg_engagement = metrics.get("avg_engagement", 0)
+        post_count = metrics.get("posts_published_24h", 0)
+
+        if post_count > 0 and avg_engagement == 0:
+            avoid_topics = list(top_topic_names)
+        else:
+            avoid_topics = []
+
+        strategy = StrategyState()
+        strategy.save({
+            "top_topics": top_topic_names,
+            "avoid_topics": avoid_topics,
+            "best_tone": "neutral",
+            "last_updated": datetime.now(timezone.utc).isoformat(),
+        })
+        logger.info(
+            "Phase C: strategy state updated — top_topics=%s, avoid_topics=%s",
+            top_topic_names, avoid_topics,
+        )
+
+        await self._run_social_harvester()
+        await self._update_research_agenda_from_feedback()
+
+        # ── Energy Intel: frontier technology alerts via Telegram ──────────
+        self._maybe_run_energy_intel()
+
+        # ── Reply strategy feedback loop ──────────────────────────────
+        try:
+            from services.reply_feedback import compute_strategy_hint
+            hint = compute_strategy_hint(days=7)
+            if hint.get("sample_size", 0) >= 5:
+                logger.info(
+                    "Phase C: reply strategy hint updated (sample=%d, best=%s)",
+                    hint["sample_size"], hint.get("best_types"),
+                )
+        except Exception as e:
+            logger.warning("Phase C: reply feedback computation failed: %s", e)
+
+        # ── Topic evolution — identify mature claims and create series ──
+        try:
+            from services.topic_evolution import compute_evolution
+            from core.claims_tracker import ClaimsTracker
+            _ct = ClaimsTracker()
+            evo = compute_evolution(_ct)
+            if evo.get("new_series"):
+                logger.info(
+                    "Phase C: topic evolution — %d new series, %d active",
+                    evo["new_series"], evo["active_series"],
+                )
+        except Exception as e:
+            logger.warning("Phase C: topic evolution failed: %s", e)
+
+        # ── Content distribution — select best posts for LinkedIn/Twitter ──
+        try:
+            from services.content_distributor import run_distribution
+            dist_result = run_distribution()
+            if dist_result.get("selected"):
+                logger.info(
+                    "Phase C: content distribution — %d posts selected, %d enqueued",
+                    dist_result["selected"], dist_result["enqueued"],
+                )
+        except Exception as e:
+            logger.warning("Phase C: content distribution failed: %s", e)
+
+        # ── Daily briefing via Telegram ──────────────────────────────
+        try:
+            from services.telegram_control import should_send_briefing, generate_daily_briefing, mark_briefing_sent
+            if should_send_briefing(hour=7) and self.telegram and self.telegram.enabled:
+                briefing = generate_daily_briefing()
+                self.telegram.send_message(briefing, parse_mode="HTML")
+                mark_briefing_sent()
+                logger.info("Phase C: daily briefing sent via Telegram")
+        except Exception as e:
+            logger.warning("Phase C: daily briefing failed: %s", e)
+
         logger.info(f"Phase C complete: {len(insights)} insights, {results['optimizations_applied']} optimizations")
+
+        # ── Auto-Evolution: generate a self-improvement proposal ──
+        await self._maybe_generate_proposal(results, metrics)
+
+        # ── R&D Lab: synthesize project ideas from claims ──
+        await self._maybe_synthesize_ideas()
+
         return results
+
+    async def _maybe_synthesize_ideas(self) -> None:
+        """Every 10 cycles, read claims and synthesize project ideas."""
+        try:
+            cycle = self.deps.cycle_count
+            if cycle % 10 != 0:
+                logger.debug("Phase C: R&D synthesis skipped (cycle=%d, next at multiple of 10)", cycle)
+                return
+
+            claims_path = Path("data/claims_tracker.json")
+            if not claims_path.exists():
+                logger.debug("Phase C: no claims_tracker.json yet, skipping R&D synthesis")
+                return
+
+            data = json.loads(claims_path.read_text(encoding="utf-8"))
+            claims = data.get("claims", [])
+            if not claims:
+                return
+
+            recent = claims[-20:]
+            claim_texts = []
+            for c in recent:
+                text = c.get("text") or c.get("claim_text") or ""
+                cluster = c.get("cluster", "general")
+                count = c.get("reinforcement_count", 0)
+                if text:
+                    claim_texts.append(f"[{cluster}] (x{count}) {text[:200]}")
+
+            if len(claim_texts) < 3:
+                return
+
+            model_cascade = self.deps.model_cascade
+            if not model_cascade:
+                return
+
+            prompt = (
+                "Eres un investigador de I+D. Analiza estas afirmaciones técnicas "
+                "extraídas de una red social de agentes AI. Identifica patrones, "
+                "problemas no resueltos o tecnologías emergentes. "
+                "Redacta 2 ideas concretas para nuevos proyectos, herramientas o "
+                "aplicaciones basadas en estos datos.\n\n"
+                "Formato: 'Proyecto: [Nombre]. Problema a resolver: [X]. "
+                "Solución propuesta: [Y].'\n\n"
+                "Claims:\n" + "\n".join(claim_texts)
+            )
+
+            try:
+                response = await model_cascade.generate(
+                    prompt=prompt,
+                    system_prompt="Eres un investigador de I+D sintetizando conocimiento técnico en propuestas accionables.",
+                    max_tokens=400,
+                    temperature=0.7,
+                    tier="premium",
+                    caller="phase_c_rd_lab",
+                )
+                response = (response or "").strip()
+                if response and len(response) > 20:
+                    ideas_path = Path("data/project_ideas.jsonl")
+                    ideas_path.parent.mkdir(parents=True, exist_ok=True)
+                    entry = {
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "cycle": cycle,
+                        "ideas": response,
+                    }
+                    with open(str(ideas_path), "a", encoding="utf-8") as f:
+                        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                    logger.info("Phase C: R&D synthesis complete — %d chars of ideas", len(response))
+            except Exception as e:
+                logger.debug("Phase C: R&D synthesis LLM unavailable: %s", e)
+        except Exception as e:
+            logger.warning("Phase C: R&D synthesis error: %s", e)
 

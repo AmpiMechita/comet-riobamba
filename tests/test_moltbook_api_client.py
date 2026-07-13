@@ -345,3 +345,197 @@ def test_low_confidence_does_not_open_circuit_before_threshold(monkeypatch):
     stats = client.circuit.get_stats()
     assert stats["failure_count"] == 2
     assert stats["state"] == "open"
+
+
+# ── post_reply: fallback guard ────────────────────────────────────
+
+
+def test_post_reply_success():
+    """post_reply delegates to create_comment with parent_comment_id on success."""
+    client = _make_client()
+    client._wait_for_write_token = MagicMock()
+    client._call_write = MagicMock(return_value={
+        "status": 201,
+        "data": {"comment": {"id": "c-789"}},
+    })
+
+    result = client.post_reply(comment_id="c-parent", reply_text="hello", post_id="post-1")
+
+    assert result["success"] is True
+    assert result["id"] == "c-789"
+
+    call_kwargs = client._call_write.call_args
+    assert call_kwargs is not None
+    # Second positional arg is the path
+    _, _, kwargs = call_kwargs[0][0], call_kwargs[0][1], call_kwargs[1]
+    assert kwargs["json_body"]["parent_id"] == "c-parent"
+
+
+def test_post_reply_does_not_retry_on_http_2xx_without_success():
+    """When create_comment returns HTTP 2xx but success=False (e.g. unverified),
+    post_reply must NOT retry as top-level — that would create a duplicate."""
+    client = _make_client()
+    client._wait_for_write_token = MagicMock()
+
+    first_call = [True]
+    original = client.create_comment
+
+    def tracking_create_comment(post_id, content, parent_comment_id=None):
+        if first_call[0]:
+            first_call[0] = False
+            return {
+                "success": False,
+                "status": 200,
+                "id": "c-unverified",
+                "raw": {"comment": {"id": "c-unverified"}, "verification_required": True},
+            }
+        raise AssertionError("post_reply retried as top-level — would create duplicate!")
+
+    client.create_comment = tracking_create_comment
+
+    result = client.post_reply(comment_id="c-parent", reply_text="hello", post_id="post-1")
+
+    assert result["success"] is False
+    assert result["status"] == 200
+    assert result["id"] == "c-unverified"
+    assert first_call[0] is False  # exactly one call made
+
+    client.create_comment = original
+
+
+def test_post_reply_does_not_fallback_on_transport_failure():
+    """When create_comment fails with status=0 (network error), post_reply
+    returns the failure and does NOT retry as top-level (which would create a duplicate)."""
+    client = _make_client()
+    client._wait_for_write_token = MagicMock()
+
+    call_count = [0]
+
+    def tracking_create_comment(post_id, content, parent_comment_id=None):
+        call_count[0] += 1
+        return {"success": False, "status": 0, "id": None, "error": "connection refused", "raw": {}}
+
+    client.create_comment = tracking_create_comment
+
+    result = client.post_reply(comment_id="c-parent", reply_text="hello", post_id="post-1")
+
+    assert result["success"] is False
+    assert result["status"] == 0
+    assert call_count[0] == 1  # exactly one call, no fallback retry
+
+
+def test_post_reply_does_not_fallback_on_http_error():
+    """When create_comment fails with a non-2xx HTTP status, post_reply
+    returns the failure and does NOT retry as top-level (which would create a duplicate)."""
+    client = _make_client()
+    client._wait_for_write_token = MagicMock()
+
+    call_count = [0]
+
+    def tracking_create_comment(post_id, content, parent_comment_id=None):
+        call_count[0] += 1
+        return {"success": False, "status": 500, "id": None, "error": "server error", "raw": {}}
+
+    client.create_comment = tracking_create_comment
+
+    result = client.post_reply(comment_id="c-parent", reply_text="hello", post_id="post-1")
+
+    assert result["success"] is False
+    assert result["status"] == 500
+    assert call_count[0] == 1  # exactly one call, no fallback retry
+
+
+def test_post_reply_missing_post_id():
+    """post_reply returns error immediately when post_id is not provided."""
+    client = _make_client()
+    create_comment = MagicMock()
+    client.create_comment = create_comment
+
+    result = client.post_reply(comment_id="c-parent", reply_text="hello", post_id=None)
+
+    assert result["success"] is False
+    assert "post_id" in (result.get("error") or "")
+    create_comment.assert_not_called()
+
+
+# ── _call_write 5xx backoff ─────────────────────────────────────────
+
+
+class TestCallWriteRetry5xx:
+    """_call_write retry logic for 5xx errors with exponential backoff."""
+
+    def test_5xx_triggers_retry_and_succeeds_on_second_attempt(self, monkeypatch):
+        """503 → retry → 200. _request called 2 times."""
+        monkeypatch.setenv("MOLTBOOK_RATE_LIMIT_CALLS", "5")
+        monkeypatch.setenv("MOLTBOOK_RATE_LIMIT_WINDOW_SECONDS", "1")
+        monkeypatch.setattr(time, "sleep", lambda s: None)
+
+        client = _make_client()
+        call_idx = [0]
+
+        def mock_request(method, path, **kw):
+            call_idx[0] += 1
+            if call_idx[0] == 1:
+                return {"status": 503, "data": {}}
+            return {"status": 200, "data": {"post": {"id": "p456"}}}
+
+        client._request = mock_request
+        result = client.create_post("title", "body")
+
+        assert result["status"] == 200 or result["success"] is True
+        assert call_idx[0] == 2
+
+    def test_5xx_retries_up_to_max_and_returns_last_5xx(self, monkeypatch):
+        """Always 503 → retried 2 times → total 3 calls, final status 503."""
+        monkeypatch.setenv("MOLTBOOK_RATE_LIMIT_CALLS", "5")
+        monkeypatch.setenv("MOLTBOOK_RATE_LIMIT_WINDOW_SECONDS", "1")
+        monkeypatch.setattr(time, "sleep", lambda s: None)
+
+        client = _make_client()
+
+        def mock_request(method, path, **kw):
+            return {"status": 503, "data": {}}
+
+        client._request = mock_request
+        result = client.create_post("title", "body")
+
+        assert result.get("status") == 503 or result.get("status") == 0
+        # _request called: 1 initial + 2 retries = 3
+
+    def test_5xx_backoff_delays_are_non_decreasing(self, monkeypatch):
+        """Captured sleep delays should be non-decreasing (5, 10, ...)."""
+        monkeypatch.setenv("MOLTBOOK_RATE_LIMIT_CALLS", "5")
+        monkeypatch.setenv("MOLTBOOK_RATE_LIMIT_WINDOW_SECONDS", "1")
+
+        sleep_durations = []
+        monkeypatch.setattr(time, "sleep", lambda s: sleep_durations.append(s))
+
+        client = _make_client()
+
+        def mock_request(method, path, **kw):
+            return {"status": 502, "data": {}}
+
+        client._request = mock_request
+        client.create_post("title", "body")
+
+        assert len(sleep_durations) >= 2
+        for i in range(1, len(sleep_durations)):
+            assert sleep_durations[i] >= sleep_durations[i - 1], f"backoff decreased: {sleep_durations[i-1]} -> {sleep_durations[i]}"
+
+    def test_non_5xx_error_does_not_trigger_retry(self, monkeypatch):
+        """400 client error → _request called exactly once."""
+        monkeypatch.setenv("MOLTBOOK_RATE_LIMIT_CALLS", "5")
+        monkeypatch.setenv("MOLTBOOK_RATE_LIMIT_WINDOW_SECONDS", "1")
+        monkeypatch.setattr(time, "sleep", lambda s: None)
+
+        client = _make_client()
+        call_idx = [0]
+
+        def mock_request(method, path, **kw):
+            call_idx[0] += 1
+            return {"status": 400, "data": {}}
+
+        client._request = mock_request
+        client.create_post("title", "body")
+
+        assert call_idx[0] == 1

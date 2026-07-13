@@ -1,0 +1,111 @@
+# config/phase_b_strategy.yaml
+# Pivote Estratégico v5.0 — COMET-RIOBAMBA
+# Fuente de verdad para reglas de interacción, targets y rotación temática
+
+interaction_rules:
+  min_comments_per_day: 8
+  max_comments_per_day: 15
+  min_comments_per_post_published: 4
+
+target_agents:
+  high_priority:
+    - agent: vina
+      score_multiplier: 1.5
+    - agent: neo_konsi_s2bw
+      score_multiplier: 1.5
+  community_building:
+    strategy: "Priorizar posts de agentes con karma < 10000"
+    karma_threshold: 10000
+    karma_bonus: 10
+
+content_rules:
+  max_comment_length: 500
+  min_comment_length: 50
+  must_include_evidence: true
+  banned_openers:
+    - "Great post!"
+    - "I agree completely."
+    - "Thanks for sharing."
+    - "Great point"
+    - "I agree"
+    - "Well said"
+
+# Vocabulario de términos técnicos duros para el Gate de Densidad Semántica
+# (phases/phase_b/orchestrator.py::_decide_reply). Editable sin tocar código.
+tech_terms_vocabulary:
+  - latency
+  - token
+  - schema
+  - agent
+  - memory
+  - api
+  - cache
+  - retry
+  - error
+  - state
+  - context
+  - p99
+  - dag
+  - idempotency
+  - throughput
+  - bottleneck
+  - crdt
+  - mvcc
+  - consensus
+  - quorum
+  - serialization
+  - mutex
+  - deadlock
+  - raft
+  - paxos
+  - wal
+  - append-only
+  - merkle
+  - byzantine
+  - cap
+  - bac
+  - isolation
+  - linearizability
+  - causal
+  - monotonic
+  - garbage
+  - compaction
+  - lease
+  - fence
+  - sharding
+
+
+submolt_strategy:
+  allowed_submolts:
+    - m/general
+    - m/infrastructure
+    - m/openclaw-explorers
+    - m/technology
+    - m/agentstack
+    - m/ai
+  distribution_targets:
+    m_general: 40
+    m_infrastructure: 25
+    m_openclaw_explorers: 20
+    m_technology: 15
+
+topic_rotation:
+  max_posts_same_topic_per_week: 2
+  min_topics_before_repeat: 2
+  topics:
+    - "Resilencia y circuit breakers en LLM agents"
+    - "Gestión de memoria y contexto persistente"
+    - "Automatización en cascada con modelos locales"
+    - "Resolución de CAPTCHAs y anti-bot en scraping ético"
+    - "Observabilidad y tracing en sistemas de agentes"
+    - "Deuda técnica en pipelines de automatización"
+    - "Integración de PowerShell en flujos de IA"
+    - "Post-mortems de fallos reales en producción"
+    - "provider failover and model cascade reliability"
+    - "context window exhaustion in long-running agents"
+    - "silent failure modes in autonomous AI agent loops"
+    - "state checkpoint and rollback strategies"
+    - "Race conditions en tool calling paralelo"
+    - "Validación de schemas en pipelines de agentes"
+    - "Estrategias de backoff en cascadas multi-modelo"
+    - "Detección de alucinaciones en tool outputs"
