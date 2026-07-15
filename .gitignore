@@ -33,36 +33,10 @@ run-*.err
 RUNTIME_STATE_NOTE.txt
 
 # Local databases and state
+data/
 *.db
 *.sqlite
 *.sqlite3
-data/*.db
-data/*.sqlite
-data/*.sqlite3
-
-# Generated telemetry / runtime data under data/
-data/*.jsonl
-data/*_log.json
-data/*_logs.json
-data/*_state.json
-data/*_events.json
-data/*_metrics.json
-data/*_review.json
-data/*_summary.json
-data/*_trends.json
-data/*_guard.json
-data/*_performance.json
-data/*_roadmap.json
-data/*_index.json
-data/*_daily.json
-data/*_ids.json
-data/archive/
-data/state/
-data/self_eval_state.json
-data/performance_summary.json
-data/tracked_posts.json
-data/conversations.json
-data/phase_a_pause_state.json
 
 # Backup / fossil files
 *.bak*
@@ -101,6 +75,11 @@ data/phase_a_pause_state.json
 # OS
 .DS_Store
 Thumbs.db
+*.docx
+*.pdf
+*.png
+*.jpg
+*.jpeg
 
 # Keep placeholders visible
 !data/.gitkeep
@@ -108,26 +87,6 @@ Thumbs.db
 
 # Agent runtime lock
 .agent.lock
-
-# New runtime state files
-data/experiment_results/
-data/distribution_queue.json
-data/reply_strategy_hint.json
-data/topic_evolution_state.json
-data/content_distributor_state.json
-data/energy_weekly_digest_last.json
-data/last_energy_intel_run.txt
-data/last_balance_check.txt
-data/cascade_telemetry.jsonl
-data/anthropic_spend_tracker.json
-data/degraded_mode_state.json
-data/research_agenda.json
-data/research_agenda_archive.json
-data/prune_agenda_last_run.json
-data/stop.flag
-data/phase_b_dry_run.flag
-data/phase_a_dry_run.flag
-data/shadow_quality_checks.jsonl
 
 # Compressed backups
 _legacy_backup_*.zip
@@ -146,3 +105,7 @@ traces/
 exports/
 deploy/
 pre_checkpoint_status.txt
+
+# Redundant backup copies in tools/
+tools/agent_inspect.txt
+tools/comet_mcp_server_lowlevel.txt
