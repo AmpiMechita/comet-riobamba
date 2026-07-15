@@ -26,6 +26,9 @@ class TelegramClient:
         else:
             logger.info("ℹ️ Telegram client disabled")
 
+        # ── /clean confirmation state ──
+        self._pending_clean: dict | None = None
+
     def _send(self, method: str, payload: dict) -> bool:
         if not self.enabled: return False
         try:
@@ -158,6 +161,8 @@ class TelegramClient:
             await self._handle_force(agent)
         elif text == "/clean":
             await self._handle_clean(agent)
+        elif text == "/clean_confirm":
+            await self._handle_clean_confirm(agent)
         elif text == "/stop":
             await self._handle_stop(agent)
         elif text == "/posts":
@@ -226,12 +231,62 @@ class TelegramClient:
     async def _handle_clean(self, agent):
         try:
             conn = sqlite3.connect('data/comet_state.db')
-            deleted = conn.cursor().execute("DELETE FROM outbox WHERE status = 'pending'").rowcount
+            pending = conn.cursor().execute(
+                "SELECT COUNT(*) FROM outbox WHERE status = 'pending'"
+            ).fetchone()[0]
+            conn.close()
+        except Exception as e:
+            self.send_message(f"❌ Error leyendo outbox: <code>{e}</code>")
+            return
+
+        if pending == 0:
+            self.send_message("📭 No hay items pendientes en el outbox.")
+            return
+
+        self._pending_clean = {"count": pending, "since": time.monotonic()}
+        self.send_message(
+            f"⚠️ <b>Confirmacion requerida</b>\n"
+            f"Se eliminaran <code>{pending}</code> posts/comentarios pendientes "
+            f"del outbox.\n\n"
+            f"Esta accion es <b>IRREVERSIBLE</b>.\n\n"
+            f"Envia /clean_confirm en los proximos <b>60 segundos</b> para proceder."
+        )
+
+    async def _handle_clean_confirm(self, agent):
+        pending = self._pending_clean
+        if not pending:
+            self.send_message("❌ No hay una solicitud de /clean pendiente. Envia /clean primero.")
+            return
+
+        elapsed = time.monotonic() - pending["since"]
+        self._pending_clean = None
+
+        if elapsed > 60:
+            self.send_message(
+                f"⏰ La ventana de confirmacion expiro ({elapsed:.0f}s > 60s). "
+                "Envia /clean de nuevo para reintentar."
+            )
+            return
+
+        try:
+            count = pending["count"]
+            logger.warning(
+                "TELEGRAM /clean_confirm: borrando %d items pending del outbox. "
+                "Accion iniciada desde Telegram chat_id=%s.",
+                count, self.chat_id,
+            )
+            conn = sqlite3.connect('data/comet_state.db')
+            deleted = conn.cursor().execute(
+                "DELETE FROM outbox WHERE status = 'pending'"
+            ).rowcount
             conn.commit()
             conn.close()
-            self.send_message(f"🧹 <b>Outbox limpiado</b>\nSe eliminaron <code>{deleted}</code> posts.")
+            self.send_message(
+                f"🧹 <b>Outbox limpiado</b>\n"
+                f"Se eliminaron <code>{deleted}</code> items pendientes."
+            )
         except Exception as e:
-            self.send_message(f"❌ Error: <code>{e}</code>")
+            self.send_message(f"❌ Error al limpiar outbox: <code>{e}</code>")
 
 
     async def _handle_posts(self, agent):

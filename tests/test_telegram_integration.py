@@ -297,3 +297,128 @@ def test_energy_intel_error_doesnt_crash_phase_c():
     ):
         # Should not raise — just logs warning
         phase_c._maybe_run_energy_intel()
+
+
+# ── Test /clean confirmation flow ────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_clean_counts_pending_does_not_delete():
+    """_handle_clean must count pending items and request confirmation,
+    but must NOT execute any DELETE."""
+    from services.telegram_client import TelegramClient
+
+    client = TelegramClient(bot_token="fake-token", chat_id="12345", enabled=True)
+    client.send_message = MagicMock()
+
+    mock_cursor = MagicMock()
+    mock_cursor.execute.return_value.fetchone.return_value = [5]
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+
+    with patch("services.telegram_client.sqlite3.connect", return_value=mock_conn):
+        await client._handle_clean(agent=MagicMock())
+
+    # Must count pending items
+    mock_cursor.execute.assert_any_call(
+        "SELECT COUNT(*) FROM outbox WHERE status = 'pending'"
+    )
+    # Must NOT execute any DELETE in the count phase
+    for call in mock_cursor.execute.call_args_list:
+        args = call[0][0] if call[0] else ""
+        assert "DELETE" not in str(args), f"DELETE found in: {args}"
+    # Confirmation message sent
+    sent_text = client.send_message.call_args[0][0]
+    assert "5" in sent_text
+    assert "IRREVERSIBLE" in sent_text
+    assert "/clean_confirm" in sent_text
+    # Pending state stored
+    assert client._pending_clean is not None
+    assert client._pending_clean["count"] == 5
+
+
+@pytest.mark.asyncio
+async def test_clean_zero_pending_shows_empty():
+    """When outbox has zero pending items, show empty message."""
+    from services.telegram_client import TelegramClient
+
+    client = TelegramClient(bot_token="fake-token", chat_id="12345", enabled=True)
+    client.send_message = MagicMock()
+
+    mock_cursor = MagicMock()
+    mock_cursor.execute.return_value.fetchone.return_value = [0]
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+
+    with patch("services.telegram_client.sqlite3.connect", return_value=mock_conn):
+        await client._handle_clean(agent=MagicMock())
+
+    sent_text = client.send_message.call_args[0][0]
+    assert "pendientes" in sent_text
+
+
+@pytest.mark.asyncio
+async def test_clean_confirm_without_clean_rejected():
+    """_handle_clean_confirm without prior _handle_clean must be rejected."""
+    from services.telegram_client import TelegramClient
+
+    client = TelegramClient(bot_token="fake-token", chat_id="12345", enabled=True)
+    client.send_message = MagicMock()
+    client._pending_clean = None
+
+    await client._handle_clean_confirm(agent=MagicMock())
+
+    sent_text = client.send_message.call_args[0][0]
+    assert "pendiente" in sent_text
+
+
+@pytest.mark.asyncio
+async def test_clean_confirm_within_window_executes_delete():
+    """_handle_clean_confirm within 60s window must execute DELETE."""
+    from services.telegram_client import TelegramClient
+    import time
+
+    client = TelegramClient(bot_token="fake-token", chat_id="12345", enabled=True)
+    client.send_message = MagicMock()
+    client._pending_clean = {"count": 3, "since": time.monotonic()}
+
+    mock_cursor = MagicMock()
+    mock_cursor.execute.return_value.rowcount = 3
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+
+    with patch("services.telegram_client.sqlite3.connect", return_value=mock_conn):
+        await client._handle_clean_confirm(agent=MagicMock())
+
+    # DELETE must have been executed
+    delete_calls = [
+        c for c in mock_cursor.execute.call_args_list
+        if "DELETE" in str(c[0][0] if c[0] else "")
+    ]
+    assert len(delete_calls) >= 1
+    sent_text = client.send_message.call_args[0][0]
+    assert "3" in sent_text
+    assert "limpia" in sent_text.lower() or "eliminaron" in sent_text.lower()
+    # State cleared
+    assert client._pending_clean is None
+
+
+@pytest.mark.asyncio
+async def test_clean_confirm_expired_rejected():
+    """_handle_clean_confirm after 60s window must be rejected."""
+    from services.telegram_client import TelegramClient
+    import time
+
+    client = TelegramClient(bot_token="fake-token", chat_id="12345", enabled=True)
+    client.send_message = MagicMock()
+    client._pending_clean = {"count": 3, "since": time.monotonic() - 61}
+
+    mock_cursor = MagicMock()
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+
+    with patch("services.telegram_client.sqlite3.connect", return_value=mock_conn):
+        await client._handle_clean_confirm(agent=MagicMock())
+
+    sent_text = client.send_message.call_args[0][0]
+    assert "expiro" in sent_text.lower() or "60" in sent_text
