@@ -3004,76 +3004,14 @@ class PhaseB:
     # ── Strategic upvotes ─────────────────────────────────────────
 
     def _maybe_upvote(self, post_id: str, value_level: str) -> None:
-        with Span("engagement_upvote", post_id=str(post_id)):
-            if not self._upvotes_enabled:
-                return
-            if not post_id:
-                return
-            if post_id in self._upvoted_post_ids:
-                logger.debug("Phase B: skip upvote (reason=already_upvoted, post_id=%s)", post_id)
-                return
-            if value_level.upper() == "TRIVIAL":
-                logger.debug("Phase B: skip upvote (reason=trivial, post_id=%s)", post_id)
-                return
-            if self._upvotes_this_cycle >= self._max_upvotes_per_cycle:
-                logger.debug("Phase B: skip upvote (reason=cycle_limit, post_id=%s)", post_id)
-                return
-
-            try:
-                _dry_flag = getattr(self, "_dry_run_flag", None) or Path("data/phase_b_dry_run.flag")
-                if _dry_flag.exists():
-                    logger.warning("🧪 DRY-RUN: upvote simulado para post_id=%s", post_id)
-                    ok = True  # simulate success
-                else:
-                    ok = self.api.upvote_post(post_id)
-                if ok:
-                    self._upvoted_post_ids.add(post_id)
-                    self._upvotes_this_cycle += 1
-                    self._dedup.mark_upvoted(post_id)
-                    logger.info("Phase B: upvoted post (post_id=%s, value=%s)", post_id, value_level.upper())
-                    update_today_metrics(upvotes_today=1)
-                    send_event("phase_b_upvote", {"post_id": str(post_id), "cycle_count": self._upvotes_this_cycle})
-                else:
-                    logger.warning("Phase B: upvote failed for post %s", post_id)
-            except Exception as e:
-                logger.warning("Phase B: upvote error for post %s: %s", post_id, e)
+        from .engagement import _maybe_upvote
+        _maybe_upvote(self, post_id, value_level)
 
     # ── Strategic following ───────────────────────────────────────
 
     def _maybe_follow_author(self, author: str) -> None:
-        with Span("engagement_follow", author=str(author)):
-            if not self._following_enabled:
-                return
-            if not author or not author.strip():
-                return
-            name = author.strip().lower()
-            if self._is_own_author(name):
-                return
-            if name in self._followed_agent_names:
-                logger.debug("Phase B: skip follow (reason=already_following, agent=%s)", name)
-                return
-            if self._follows_this_cycle >= self._max_follows_per_cycle:
-                logger.debug("Phase B: skip follow (reason=cycle_limit, agent=%s)", name)
-                return
-
-            try:
-                _dry_flag = getattr(self, "_dry_run_flag", None) or Path("data/phase_b_dry_run.flag")
-                if _dry_flag.exists():
-                    logger.warning("🧪 DRY-RUN: follow simulado para agent=%s", name)
-                    ok = True  # simulate success
-                else:
-                    ok = self.api.follow_agent(name)
-                if ok:
-                    self._followed_agent_names.add(name)
-                    self._follows_this_cycle += 1
-                    self._dedup.mark_followed(name)
-                    logger.info("Phase B: followed agent (agent=%s, reason=high_value_debate)", name)
-                    update_today_metrics(follows_today=1)
-                    send_event("phase_b_follow", {"author": str(author), "cycle_count": self._follows_this_cycle})
-                else:
-                    logger.debug("Phase B: follow failed for agent %s", name)
-            except Exception as e:
-                logger.warning("Phase B: follow error for agent %s: %s", name, e)
+        from .engagement import _maybe_follow_author
+        _maybe_follow_author(self, author)
 
     # ── Semantic search feed complement ────────────────────────────
 
