@@ -2166,7 +2166,8 @@ class PhaseB:
 
                 try:
                     if reply:
-                        log_dual_score(reply, phase="b")
+                        reply_count = len(post.get("comments", []))
+                        log_dual_score(reply, phase="b", reply_count=reply_count)
                         logger.info(">>> [WIRE CHECK] Escribiendo dual_scores.jsonl (feed reply)")
                 except Exception:
                     pass
@@ -2195,7 +2196,7 @@ class PhaseB:
                         retry_text = await self.llm.generate(
                             prompt=retry_prompt,
                             system_prompt="You are a senior systems engineer. Be specific and concrete.",
-                            max_tokens=256,
+                            max_tokens=1024,
                             temperature=0.7,
                             tier="premium",
                             caller="phase_b_quality_retry",
@@ -2980,7 +2981,7 @@ class PhaseB:
 
                 try:
                     if reply:
-                        log_dual_score(reply, phase="b")
+                        log_dual_score(reply, phase="b", reply_count=0)
                         logger.info(">>> [WIRE CHECK] Escribiendo dual_scores.jsonl (own reply)")
                 except Exception:
                     pass

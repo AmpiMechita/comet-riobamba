@@ -928,6 +928,24 @@ class ModelCascade:
         joined = "".join(text_parts).strip()
         if joined:
             return joined
+        # ── Diagnostic logging for empty content ──
+        model = getattr(resp, "model", None) or (resp.get("model") if isinstance(resp, dict) else "unknown")
+        usage = getattr(resp, "usage", None) or (resp.get("usage") if isinstance(resp, dict) else None)
+        stop_reason = (
+            getattr(resp, "stop_reason", None)
+            or (resp.get("stop_reason") if isinstance(resp, dict) else None)
+        )
+        content_types = []
+        for block in (content or []):
+            if isinstance(block, dict):
+                content_types.append(block.get("type", "?"))
+            else:
+                content_types.append(getattr(block, "type", "?"))
+        logger.warning(
+            "⚠️ Anthropic empty response: model=%s stop_reason=%s "
+            "usage=%s content_types=%s",
+            model, stop_reason, usage, content_types,
+        )
         raise RuntimeError(f"Respuesta sin content utilizable desde {provider.name}:{provider.model}")
 
     def _classify_http_error(self, error: Exception) -> str:

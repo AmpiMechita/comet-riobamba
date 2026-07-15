@@ -35,27 +35,66 @@ def _count_signals(text: str, *patterns: str) -> int:
 
 
 def classify_content(text: str) -> ResearchValueType:
-    if _count_signals(text, "i propose", "framework", "pattern", "architecture", "design") >= 2:
+    # Framework: strong single signal (explicit proposal marker)
+    if _count_signals(text, "i propose", "a framework for") >= 1:
         return ResearchValueType.FRAMEWORK_PROPOSAL
 
-    if _count_signals(text, "measured", "observed", "in our tests", "in production", "data shows") >= 2:
+    # Numeric/metric detection: numbers, percentages, or measurement terms.
+    # Check before empirical so that quantitative claims are caught.
+    if _has_metric_signals(text):
+        return ResearchValueType.METRIC_PROPOSAL
+
+    # Empirical: observation, measurement, production experience
+    if _count_signals(
+        text,
+        "measured", "observed", "in our tests", "in production", "data shows",
+        "latency", "throughput", "we deployed", "we benchmarked",
+    ) >= 1:
         return ResearchValueType.EMPIRICAL_FINDING
 
-    has_critique = _count_signals(text, "the problem is", "fails because") >= 1
-    has_alternative = _count_signals(text, "instead", "alternative", "better approach") >= 1
+    # Framework: 2+ architecture/design keywords (catch incidental mentions)
+    if _count_signals(
+        text,
+        "framework", "pattern", "architecture", "design",
+        "invariant", "consensus", "dag", "merkle", "entropy", "schema",
+    ) >= 2:
+        return ResearchValueType.FRAMEWORK_PROPOSAL
+
+    has_critique = _count_signals(
+        text, "the problem is", "fails because", "breaks when", "does not handle",
+    ) >= 1
+    has_alternative = _count_signals(
+        text, "instead", "alternative", "better approach", "fix:", "solution is",
+    ) >= 1
     if has_critique and has_alternative:
         return ResearchValueType.CRITIQUE_WITH_ALTERNATIVE
 
-    if _count_signals(text, "in 199", "in 200", "similar to how", "parallel to", "learned from") >= 2:
+    if _count_signals(
+        text, "in 199", "in 200", "similar to how", "parallel to", "learned from",
+    ) >= 2:
         return ResearchValueType.HISTORICAL_PARALLEL
 
-    if _count_signals(text, "useful signal", "useful metric", "track the", "measure the", "percentile") >= 2:
-        return ResearchValueType.METRIC_PROPOSAL
-
-    if len(text) < 200 and _count_signals(text, "good point", "exactly", "you're right", "solid engineering") >= 2:
+    if len(text) < 200 and _count_signals(
+        text, "good point", "exactly", "you're right", "solid engineering",
+    ) >= 2:
         return ResearchValueType.AGREEMENT
 
     return ResearchValueType.CLARIFICATION
+
+
+def _has_metric_signals(text: str) -> bool:
+    if re.search(r'\d+\.?\d*\s*%', text):
+        return True
+    if re.search(r'\b\d+(\.\d+)?\s*(ms|seconds|minutes|hours|rps|tps|qps|requests per)\b', text, re.IGNORECASE):
+        return True
+    if _count_signals(
+        text,
+        "percentile", "p99", "p95", "p50", "median", "average",
+        "reduction", "increase", "improved by", "dropped by",
+        "useful signal", "useful metric", "track the", "measure the",
+    ) >= 1:
+        return True
+    return False
 
 
 def compute_dual_score(
