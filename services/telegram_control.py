@@ -334,8 +334,8 @@ def _cmd_health(agent=None) -> str:
     try:
         lines = ["🔧 <b>Health Check:</b>"]
         try:
-            from core.state_manager import StateManager
-            sm = StateManager()
+            from core.state_manager import AgentState
+            sm = AgentState()
             lines.append(f"  Cycle: {sm.cycle_count}")
             lines.append(f"  Posts today: {sm.posts_today}")
             lines.append(f"  Comments today: {sm.comments_today}")
