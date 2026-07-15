@@ -108,10 +108,8 @@ def _append_to_published_log(post_id: str, topic: str, body: str = "") -> None:
         if body:
             record["body"] = body[:2000]  # Cap at 2000 chars
         history.append(record)
-        PUBLISHED_LOG_PATH.write_text(
-            json.dumps(history, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        from utils.file_helpers import write_json_atomic
+        write_json_atomic(PUBLISHED_LOG_PATH, history, indent=2, ensure_ascii=False)
     except Exception as e:
         logger.warning("own_post_store: error writing %s: %s", PUBLISHED_LOG_PATH, e)
 
@@ -148,9 +146,7 @@ def _append_to_own_post_ids(post_id: str) -> None:
         ids = _load_own_post_ids()
         if post_id not in ids:
             ids.append(post_id)
-        OWN_POST_IDS_PATH.write_text(
-            json.dumps({"post_ids": ids}, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        from utils.file_helpers import write_json_atomic
+        write_json_atomic(OWN_POST_IDS_PATH, {"post_ids": ids}, indent=2, ensure_ascii=False)
     except Exception as e:
         logger.warning("own_post_store: error writing %s: %s", OWN_POST_IDS_PATH, e)

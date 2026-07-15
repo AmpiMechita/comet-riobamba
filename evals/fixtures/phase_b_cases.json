@@ -1,0 +1,40 @@
+[
+  {"id": "feed_hv_1", "type": "feed", "expected": "reply", "value_level": "HIGH_VALUE", "post_body": "What are the trade-offs between orchestration patterns for multi-agent systems? We are seeing coordination failures with our current approach.", "comments": []},
+  {"id": "feed_hv_2", "type": "feed", "expected": "reply", "value_level": "HIGH_VALUE", "post_body": "How can we design a guardrail for agent tool calls to prevent side effects in production?", "comments": [{"content": "Good question"}], "draft": "Set a p99 latency threshold and a circuit breaker that trips after 3 consecutive timeouts as a guardrail."},
+  {"id": "feed_hv_3", "type": "feed", "expected": "reply", "value_level": "HIGH_VALUE", "post_body": "What metrics do you track for agent observability? We need to monitor our pipeline health.", "comments": [{"content": "We track latency"}, {"content": "Error rates matter too"}, {"content": "What about tracing?"}]},
+  {"id": "feed_hv_4", "type": "feed", "expected": "reply", "value_level": "HIGH_VALUE", "post_body": "I have been running experiments with different agent architectures and measuring latency. The results show that pipeline orchestration matters more than model choice.", "comments": []},
+  {"id": "feed_hv_5", "type": "feed", "expected": "reply", "value_level": "HIGH_VALUE", "post_body": "Failure mode analysis: what happens when your agent's context window fills up mid-task? How do you handle degradation gracefully?", "comments": [{"content": "We truncate"}, {"content": "We use sliding window"}]},
+
+  {"id": "feed_std_1", "type": "feed", "expected": "reply_if_non_trivial", "value_level": "STANDARD", "post_body": "How do I use an API endpoint? The documentation is confusing.", "comments": [], "draft": "Use the API key in the Authorization header and call the endpoint with your parameters."},
+  {"id": "feed_std_2", "type": "feed", "expected": "skip", "value_level": "STANDARD", "post_body": "How do I use an API endpoint? The documentation is confusing.", "comments": [], "draft": "You can call the API by sending a GET request with the right parameters. Make sure to include your API key."},
+  {"id": "feed_std_3", "type": "feed", "expected": "reply_if_non_trivial", "value_level": "STANDARD", "post_body": "I keep seeing an error with my agent setup and have been debugging it for hours.", "comments": [], "draft": "Add retry logic with exponential backoff and a circuit breaker pattern to handle transient failures gracefully."},
+  {"id": "feed_std_4", "type": "feed", "expected": "skip", "value_level": "STANDARD", "post_body": "I keep seeing an error with my agent setup and have been debugging it for hours.", "comments": [], "draft": "You should check your API key and make sure the endpoint is correct."},
+  {"id": "feed_std_5", "type": "feed", "expected": "reply_if_non_trivial", "value_level": "STANDARD", "post_body": "Is there a way to make this work without changing everything?", "comments": [], "draft": "A gradual migration with feature flags and canary deployments would minimize risk while ensuring backward compatibility."},
+
+  {"id": "feed_trv_1", "type": "feed", "expected": "skip", "value_level": "TRIVIAL", "post_body": "Hi", "comments": []},
+  {"id": "feed_trv_2", "type": "feed", "expected": "skip", "value_level": "TRIVIAL", "post_body": "hello", "comments": []},
+  {"id": "feed_trv_3", "type": "feed", "expected": "skip", "value_level": "TRIVIAL", "post_body": "gana dinero rapido aqui", "comments": []},
+  {"id": "feed_trv_4", "type": "feed", "expected": "skip", "value_level": "TRIVIAL", "post_body": "check out my website for more info", "comments": []},
+  {"id": "feed_trv_5", "type": "feed", "expected": "skip", "value_level": "TRIVIAL", "post_body": "👍", "comments": []},
+
+  {"id": "own_low_rel_1", "type": "own_post", "expected": "skip", "content": "Thanks", "post_text": "My post about agent architecture", "comment_id": "c1"},
+  {"id": "own_reply_1", "type": "own_post", "expected": "reply", "content": "How do you handle rate limiting in your pipeline?", "post_text": "My post about agent architecture showing various failure modes", "comment_id": "c2"},
+  {"id": "own_debate_1", "type": "debate", "expected": "reply", "comment_text": "But what about the observability overhead? That adds latency too.", "author": "user1", "post_id": "p1", "comment_id": "c3"},
+  {"id": "own_debate_ack_1", "type": "debate", "expected": "skip", "comment_text": "Thanks, that makes sense", "author": "user1", "post_id": "p1", "comment_id": "c4"},
+
+  {"id": "upvote_001", "type": "upvote", "expected": "upvote", "post_body": "What are the trade-offs between orchestration patterns for multi-agent systems? We are seeing coordination failures with our current approach.", "comments": [], "value_level": "HIGH_VALUE", "already_upvoted_ids": [], "cycle_upvote_count": 0, "max_upvotes": 3},
+  {"id": "upvote_002", "type": "upvote", "expected": "skip_upvote", "post_body": "Hi", "comments": [], "value_level": "TRIVIAL", "already_upvoted_ids": [], "cycle_upvote_count": 0, "max_upvotes": 3},
+  {"id": "upvote_003", "type": "upvote", "expected": "skip_upvote", "post_body": "How do you handle rate limiting in your pipeline?", "comments": [], "value_level": "STANDARD", "already_upvoted_ids": ["post_001"], "cycle_upvote_count": 0, "max_upvotes": 3, "post_id": "post_001"},
+  {"id": "upvote_004", "type": "upvote", "expected": "skip_upvote", "post_body": "What metrics do you track for agent observability?", "comments": [], "value_level": "HIGH_VALUE", "already_upvoted_ids": [], "cycle_upvote_count": 3, "max_upvotes": 3},
+
+  {"id": "follow_001", "type": "follow", "expected": "follow", "author": "user_debate", "comment_text": "But what about the observability overhead? That adds latency too.", "comment_value": "debate_continuation", "already_following": [], "cycle_follow_count": 0, "max_follows": 2, "self_author": "self"},
+  {"id": "follow_002", "type": "follow", "expected": "skip_follow", "author": "user_already", "comment_text": "But what about the observability overhead?", "comment_value": "debate_continuation", "already_following": ["user_already"], "cycle_follow_count": 0, "max_follows": 2, "self_author": "self"},
+  {"id": "follow_003", "type": "follow", "expected": "skip_follow", "author": "self", "comment_text": "I think the agent should consider this approach.", "comment_value": "debate_continuation", "already_following": [], "cycle_follow_count": 0, "max_follows": 2, "self_author": "self"},
+  {"id": "follow_004", "type": "follow", "expected": "skip_follow", "author": "user_new", "comment_text": "But what about the observability overhead?", "comment_value": "debate_continuation", "already_following": [], "cycle_follow_count": 2, "max_follows": 2, "self_author": "self"},
+
+  {"id": "semantic_001", "type": "semantic", "expected": "semantic_search_supplements", "has_pending_topics": true, "feed_available": true},
+  {"id": "semantic_002", "type": "semantic", "expected": "feed_only_no_crash", "has_pending_topics": true, "feed_available": true, "api_fails": true},
+
+  {"id": "home_001", "type": "home", "expected": "prioritize", "notification_count": 3, "pending_post_ids": ["p1", "p2"], "home_available": true},
+  {"id": "home_002", "type": "home", "expected": "cycle_continues", "notification_count": 0, "pending_post_ids": [], "home_available": false, "home_error": "HTTP 500"}
+]

@@ -482,7 +482,6 @@ class COMETRiobambaAgent:
             }
         if isinstance(raw_result, dict):
             return raw_result
-        logger.warning("Phase A: retorno inesperado tipo %s", type(raw_result))
         return {"posts_published": 0, "drafts_generated": 0, "posts": [], "success": False}
 
     async def _run_phase_b(self) -> Dict[str, Any]:

@@ -1,0 +1,10 @@
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("smoketest")
+
+@mcp.tool()
+def ping() -> dict:
+    return {"ok": True, "message": "pong"}
+
+if __name__ == "__main__":
+    mcp.run(transport="stdio")

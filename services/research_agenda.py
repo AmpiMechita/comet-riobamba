@@ -166,10 +166,8 @@ def load_agenda() -> ResearchAgenda:
 def save_agenda(agenda: ResearchAgenda) -> None:
     try:
         AGENDA_PATH.parent.mkdir(parents=True, exist_ok=True)
-        AGENDA_PATH.write_text(
-            json.dumps(agenda.to_dict(), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        from utils.file_helpers import write_json_atomic
+        write_json_atomic(AGENDA_PATH, agenda.to_dict(), ensure_ascii=False, indent=2)
     except Exception as e:
         logger.warning("Could not save research agenda to %s: %s", AGENDA_PATH, e)
 

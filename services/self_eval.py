@@ -23,7 +23,8 @@ def load_state() -> Dict:
 
 def save_state(state: Dict) -> None:
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    STATE_PATH.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8-sig")
+    from utils.file_helpers import write_json_atomic
+    write_json_atomic(STATE_PATH, state, ensure_ascii=False, indent=2)
 
 
 def get_today_metrics() -> Dict:

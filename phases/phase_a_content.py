@@ -187,10 +187,8 @@ def _is_topic_recently_used(topic: str) -> bool:
     if not _TOPIC_HISTORY_FILE.exists():
         logger.info("Topic History exists: False — creating new file at %s", _TOPIC_HISTORY_FILE)
         _TOPIC_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _TOPIC_HISTORY_FILE.write_text(
-            json.dumps({"recent_topics": []}, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        from utils.file_helpers import write_json_atomic
+        write_json_atomic(_TOPIC_HISTORY_FILE, {"recent_topics": []}, indent=2, ensure_ascii=False)
         return False
 
     try:
@@ -211,10 +209,8 @@ def _is_topic_recently_used(topic: str) -> bool:
             normalized.append(entry)
     if migrated:
         history["recent_topics"] = normalized
-        _TOPIC_HISTORY_FILE.write_text(
-            json.dumps(history, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        from utils.file_helpers import write_json_atomic
+        write_json_atomic(_TOPIC_HISTORY_FILE, history, indent=2, ensure_ascii=False)
 
     # Rule 2: Check if topic is in the last N posts
     min_before_repeat = _load_topic_rotation_config().get("min_topics_before_repeat", 2)
@@ -275,7 +271,8 @@ def _record_topic_used(topic: str) -> None:
     topics.append({"topic": topic, "date": datetime.now(timezone.utc).isoformat()})
     history["recent_topics"] = topics[-50:]
     _TOPIC_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _TOPIC_HISTORY_FILE.write_text(json.dumps(history, indent=2, ensure_ascii=False), encoding="utf-8")
+    from utils.file_helpers import write_json_atomic
+    write_json_atomic(_TOPIC_HISTORY_FILE, history, indent=2, ensure_ascii=False)
 
 
 # Plantillas de cierre para modo research: preguntas especificas y de baja friccion
@@ -713,7 +710,7 @@ class PhaseAContentGeneration:
         current_hour = datetime.now().hour
         if 0 <= current_hour < 6:
             logger.info("Phase A: Modo nocturno (00:00-06:00). Saltando generación de contenido original.")
-            return "skipped_quiet_hours"
+            return {"posts_published": 0, "drafts_generated": 0, "posts": [], "success": False, "skipped": "quiet_hours"}
 
         posts: List[Dict[str, Any]] = []
         max_per_day = behavior_cfg.get("max_posts_per_day", POLICY.max_posts_per_day)

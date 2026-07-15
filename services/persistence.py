@@ -56,6 +56,7 @@ def init_db() -> None:
                 posts_today INTEGER NOT NULL,
                 comments_today INTEGER NOT NULL DEFAULT 0,
                 last_post_date TEXT,
+                last_post_timestamp TEXT,
                 last_value_review TEXT,
                 consecutive_failures INTEGER NOT NULL DEFAULT 0,
                 last_cycle_at TEXT,
@@ -65,15 +66,16 @@ def init_db() -> None:
         )
         conn.execute(
             """
-            INSERT OR IGNORE INTO agent_state (id, cycle, posts_today, comments_today, last_post_date, last_value_review, consecutive_failures, last_cycle_at, version)
-            VALUES (1, 0, 0, 0, NULL, NULL, 0, NULL, '4.3.0')
+            INSERT OR IGNORE INTO agent_state (id, cycle, posts_today, comments_today, last_post_date, last_post_timestamp, last_value_review, consecutive_failures, last_cycle_at, version)
+            VALUES (1, 0, 0, 0, NULL, NULL, NULL, 0, NULL, '4.3.0')
             """
         )
 
         # Migrations for existing databases that lack newer columns
         for col, col_type in [("last_post_date", "TEXT"), ("comments_today", "INTEGER NOT NULL DEFAULT 0"),
                               ("last_value_review", "TEXT"), ("consecutive_failures", "INTEGER NOT NULL DEFAULT 0"),
-                              ("retry_attempt", "INTEGER NOT NULL DEFAULT 0"), ("next_retry_at", "TEXT")]:
+                              ("retry_attempt", "INTEGER NOT NULL DEFAULT 0"), ("next_retry_at", "TEXT"),
+                              ("last_post_timestamp", "TEXT")]:
             try:
                 conn.execute(f"ALTER TABLE agent_state ADD COLUMN {col} {col_type}")
             except sqlite3.OperationalError:
@@ -166,7 +168,7 @@ def load_agent_state() -> Dict[str, Any]:
     init_db()
     with get_conn() as conn:
         row = conn.execute(
-            "SELECT cycle, posts_today, comments_today, last_post_date, last_value_review, consecutive_failures, last_cycle_at, version FROM agent_state WHERE id = 1"
+            "SELECT cycle, posts_today, comments_today, last_post_date, last_post_timestamp, last_value_review, consecutive_failures, last_cycle_at, version FROM agent_state WHERE id = 1"
         ).fetchone()
     if row is None:
         return {
@@ -174,6 +176,7 @@ def load_agent_state() -> Dict[str, Any]:
             "posts_today": 0,
             "comments_today": 0,
             "last_post_date": None,
+            "last_post_timestamp": None,
             "last_value_review": None,
             "consecutive_failures": 0,
             "last_cycle_at": None,
@@ -184,10 +187,11 @@ def load_agent_state() -> Dict[str, Any]:
         "posts_today": row[1],
         "comments_today": row[2] if row[2] is not None else 0,
         "last_post_date": row[3],
-        "last_value_review": row[4],
-        "consecutive_failures": row[5] if row[5] is not None else 0,
-        "last_cycle_at": row[6],
-        "version": row[7],
+        "last_post_timestamp": row[4],
+        "last_value_review": row[5],
+        "consecutive_failures": row[6] if row[6] is not None else 0,
+        "last_cycle_at": row[7],
+        "version": row[8],
     }
 
 
@@ -201,7 +205,8 @@ def save_agent_state(state: Dict[str, Any]) -> None:
             """
             UPDATE agent_state
             SET cycle = ?, posts_today = ?, comments_today = ?, last_post_date = ?,
-                last_value_review = ?, consecutive_failures = ?, last_cycle_at = ?, version = ?
+                last_post_timestamp = ?, last_value_review = ?, consecutive_failures = ?,
+                last_cycle_at = ?, version = ?
             WHERE id = 1
             """,
             (
@@ -209,6 +214,7 @@ def save_agent_state(state: Dict[str, Any]) -> None:
                 int(state.get("posts_today", 0)),
                 int(state.get("comments_today", 0)),
                 state.get("last_post_date"),
+                state.get("last_post_timestamp"),
                 state.get("last_value_review"),
                 int(state.get("consecutive_failures", 0)),
                 state.get("last_cycle_at"),

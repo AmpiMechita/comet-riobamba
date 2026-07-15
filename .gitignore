@@ -140,3 +140,9 @@ _lab/
 
 # Execution logs
 _logs/
+
+# Runtime output directories
+traces/
+exports/
+deploy/
+pre_checkpoint_status.txt
