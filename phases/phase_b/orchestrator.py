@@ -1064,57 +1064,7 @@ class PhaseB:
         existing = agent_comments.get(post_id, [])
         return len(existing)
 
-    def _is_feed_initiation(self, post_id: str) -> bool:
-        """True if this would be the agent's FIRST comment in this feed post."""
-        existing = self._dedup.get_agent_comment_ids().get(post_id, [])
-        return len(existing) == 0
 
-    def _infer_topic_cluster(self, title: str) -> str:
-        """Infer topic cluster from post title for claims tracking."""
-        title_lower = title.lower()
-        if any(k in title_lower for k in ["circuit", "breaker", "retry", "failover", "resilience"]):
-            return "reliability"
-        if any(k in title_lower for k in ["observ", "monitor", "metric", "telemetry", "trace"]):
-            return "observability"
-        if any(k in title_lower for k in ["memory", "state", "checkpoint", "persist"]):
-            return "state_management"
-        if any(k in title_lower for k in ["tool", "schema", "api", "call"]):
-            return "tool_calling"
-        if any(k in title_lower for k in ["scale", "capacity", "load", "throughput"]):
-            return "scalability"
-        if any(k in title_lower for k in ["security", "safety", "permission", "auth"]):
-            return "security"
-        if any(k in title_lower for k in ["eval", "benchmark", "test", "quality"]):
-            return "evaluation"
-        return "general"
-
-    def _should_disengage_thread(self, post_id: str, thread_history: List[Dict]) -> bool:
-        """Determine if the agent should stop engaging in this thread."""
-        if not thread_history:
-            return False
-        from .scoring import has_scientific_value
-        disengage_threshold = int(self.deps.behavior_cfg.get(
-            "disengage_after_no_value_replies",
-            getattr(POLICY, "disengage_after_no_value_replies", 2),
-        ))
-        agent_name = (self.deps.agent_name or "comet_riobamba").lower()
-        other_replies = [r for r in thread_history
-                        if (r.get("author") or "").lower() != agent_name]
-        if len(other_replies) < disengage_threshold:
-            return False
-        recent_others = other_replies[-disengage_threshold:]
-        valuable_count = sum(
-            1 for r in recent_others
-            if has_scientific_value(r.get("content") or r.get("text") or "")
-        )
-        if valuable_count == 0:
-            logger.info(
-                "Phase B: disengaging from thread in post %s — "
-                "last %d replies from others have no scientific value.",
-                post_id, disengage_threshold,
-            )
-            return True
-        return False
 
     def _safe_publish_comment(self, post_id: str, content: str, parent_comment_id: Optional[str] = None) -> Optional[Dict]:
         """Publish a comment with safety checks. Returns result dict or None if blocked."""
@@ -2360,9 +2310,6 @@ class PhaseB:
     async def _process_own_post(self, post_id: str) -> List[Dict[str, Any]]:
         results: List[Dict[str, Any]] = []
 
-        # if is_thread_closed(post_id):
-        #     logger.info("Phase B: thread %s cerrado, saltando.", post_id)
-        #     return []
 
         daily_comment_count = self.get_comments_today()
         if daily_comment_count >= self.max_comments_per_day:
@@ -2753,38 +2700,6 @@ class PhaseB:
             return author
         return ""
 
-    def _should_reply_to_comment(self, comment: dict) -> bool:
-        text = (comment.get("content") or comment.get("text") or "").lower()
-        if not text:
-            return False
-
-        mention_keywords = [
-            "@comet",
-            "@comet-riobamba",
-            "comet riobamba",
-            "comet-riobamba",
-        ]
-        if any(k in text for k in mention_keywords):
-            return True
-
-        if "?" in text:
-            return True
-
-        tech_keywords = [
-            "modelo",
-            "llm",
-            "agente",
-            "pipeline",
-            "latencia",
-            "tokens",
-            "api",
-            "moltbook",
-            "riobamba",
-        ]
-        if any(k in text for k in tech_keywords):
-            return True
-
-        return False
 
     # ── Research agenda helpers ───────────────────────────────────
 
