@@ -1,6 +1,6 @@
 """Tests for Phase B deduplication, limit enforcement, priority, and multi-comment."""
 
-from unittest.mock import MagicMock, AsyncMock, call
+from unittest.mock import MagicMock, AsyncMock, call, patch
 from pathlib import Path
 import pytest
 
@@ -489,3 +489,32 @@ class TestMemoryIntegration:
         summary = call_args[0][2]
         assert "We observed that the detailed explanation" in summary, \
             f"Reply text missing from summary: {summary}"
+
+
+class TestAccumulatedReplyCount:
+    """Cross-cycle reply count must reflect accumulated total, not per-cycle zero."""
+
+    @pytest.mark.asyncio
+    async def test_accumulated_replies_block_before_llm_call(self, _redirect_paths):
+        """When a post already has max_comments_per_post replies from previous
+        cycles, _process_own_post must skip it BEFORE generating a reply."""
+        pb = _make_pb(max_comments_per_post=2)
+        with patch.object(pb, "_get_agent_reply_count_in_post", return_value=2):
+            pb.api.fetch_post_comments.return_value = [
+                {"id": "c1", "author": {"name": "a1"}, "content": "Q?", "text": "Q?"},
+            ]
+            result = await pb._process_own_post("post-1")
+        assert result == [], f"Expected empty (post at limit), got {len(result)}"
+        assert pb.llm.generate.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_accumulated_one_reply_allows_one_more(self, _redirect_paths):
+        """Post with 1 prior reply and max_comments_per_post=2: allow 1 more."""
+        pb = _make_pb(max_comments_per_post=2, max_replies_per_cycle=2)
+        with patch.object(pb, "_get_agent_reply_count_in_post", return_value=1):
+            pb.api.fetch_post_comments.return_value = [
+                {"id": "c1", "author": {"name": "a1"}, "content": "Q?", "text": "Q?"},
+            ]
+            pb.api.create_comment.return_value = {"success": True, "id": "new-reply", "status": 201}
+            result = await pb._process_own_post("post-1")
+        assert len(result) == 1, f"Expected 1 reply, got {len(result)}"

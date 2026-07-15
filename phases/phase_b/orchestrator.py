@@ -2354,7 +2354,7 @@ class PhaseB:
         if last_other_text:
             update_open_questions(post_id, last_other_text)
 
-        replied_count = 0
+        replied_count = self._get_agent_reply_count_in_post(post_id)
 
         # Rank comments by reply priority before iterating
         try:
