@@ -36,6 +36,7 @@ Arquitectura (todo en este archivo, < 500 líneas):
 import argparse, hashlib, json, re, sqlite3, time
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 import requests
@@ -43,7 +44,7 @@ from bs4 import BeautifulSoup
 
 # ──────────────────────────── CONFIG ─────────────────────────────
 
-DB_PATH       = "energy_intel.db"
+DB_PATH       = str(Path(__file__).resolve().parents[2] / "data" / "energy_intel.db")
 ARXIV_API     = "https://export.arxiv.org/api/query"
 USPTO_PV_API  = "https://api.patentsview.org/patents/query"
 CLIMATE_FEEDS = [
