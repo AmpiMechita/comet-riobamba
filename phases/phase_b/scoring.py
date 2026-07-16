@@ -1,8 +1,14 @@
 # -*- coding: utf-8 -*-
-"""Phase B scoring — relevance decisions and feed thresholds."""
+"""Phase B scoring - relevance decisions, feed thresholds, and reply quality helpers.
+
+Expanded from the original scoring.py with methods extracted from
+orchestrator.py as part of the incremental refactor (Phase 3).
+"""
 
 import logging
+import re
 from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Set
 
 from config.agent_policy import POLICY
 from .constants import (
@@ -69,25 +75,228 @@ LOW_VALUE_SIGNALS = frozenset([
 
 
 def has_scientific_value(text: str) -> bool:
-    """Determine if a comment has enough scientific/technical value to warrant a reply.
-
-    Returns True only if the comment contains concrete technical proposals,
-    evidence, solutions, or novel technology references.
-    """
     if not text or len(text.strip()) < 40:
         return False
-
     text_lower = text.lower()
-
-    # Immediate rejection: low-value signals dominate
     low_value_count = sum(1 for s in LOW_VALUE_SIGNALS if s in text_lower)
     if low_value_count >= 2:
         return False
-
-    # Require at least 2 science signals for short comments (<200 chars)
-    # or at least 1 for longer comments (>200 chars)
     science_count = sum(1 for s in SCIENCE_SIGNALS if s in text_lower)
     if len(text.strip()) < 200:
         return science_count >= 2
     else:
         return science_count >= 1
+
+
+# ── Comment-level relevance scoring (extracted from orchestrator) ──
+
+def _compute_relevance_score(
+    comment: Dict[str, Any],
+    *,
+    tech_keywords: frozenset = frozenset(),
+) -> int:
+    text = (comment.get("content") or comment.get("text") or "").strip()
+    text_lower = text.lower()
+    score = 0
+
+    if "?" in text_lower:
+        score += POLICY.relevance_boost_question
+
+    mentions = {"@comet", "comet-riobamba", "comet_riobamba", "comet riobamba", "riobamba"}
+    if any(m in text_lower for m in mentions):
+        score += POLICY.relevance_boost_mention
+
+    tech_count = sum(1 for kw in (tech_keywords or frozenset()) if kw in text_lower)
+    if tech_count >= 2:
+        score += POLICY.relevance_boost_tech_keyword
+
+    if len(text) < 10:
+        score -= POLICY.relevance_penalty_short
+    elif len(text) < 25:
+        score -= POLICY.relevance_penalty_short // 2
+
+    if any(k in text_lower for k in ("gracias", "thanks", "jaja", "lol", "\U0001f44d", "\u2764\ufe0f")):
+        score -= 15
+
+    if len(text) > 150:
+        score += 5
+
+    return max(0, min(score, 100))
+
+
+def _decide_reply(
+    pb,
+    comment: Dict[str, Any],
+    limit_ok: bool = True,
+    is_own_post_reply: bool = False,
+    *,
+    tech_keywords: frozenset = frozenset(),
+):
+    if not limit_ok:
+        return RelevanceDecision(False, 0, "reply_skipped_limit_reached")
+
+    text = (comment.get("content") or comment.get("text") or "").strip()
+    text_lower = text.lower()
+    if not text_lower:
+        return RelevanceDecision(False, 0, "reply_skipped_low_relevance")
+
+    is_question = "?" in text_lower
+    is_mention = any(m in text_lower for m in {
+        "@comet", "comet-riobamba", "comet_riobamba", "comet riobamba", "riobamba"
+    })
+
+    high_density = pb._passes_density_gate(text_lower)
+    if not (is_question or is_mention or is_own_post_reply):
+        if not high_density:
+            author = pb._get_author_name(comment)
+            logger.info("Phase B: Ignorando comentario de %s por baja densidad semantica (sin metricas/estructuras).", author)
+            return RelevanceDecision(False, 0, "reply_skipped_low_density")
+
+    score = _compute_relevance_score(comment, tech_keywords=tech_keywords)
+
+    bypass_applied = False
+    if is_own_post_reply:
+        score = max(score, 60)
+        bypass_applied = True
+    elif high_density:
+        score = max(score, 30)
+        bypass_applied = True
+
+    if bypass_applied:
+        author = pb._get_author_name(comment)
+        logger.info("Phase B: Bypass de relevancia aplicado a %s por alta densidad tecnica / own-post reply.", author)
+        if score >= 30:
+            return RelevanceDecision(True, score, "reply_sent")
+
+    if score >= POLICY.min_comment_relevance_score + 20:
+        return RelevanceDecision(True, score, "reply_sent")
+
+    if score >= POLICY.min_comment_relevance_score:
+        mentions = {"@comet", "comet-riobamba", "comet_riobamba", "comet riobamba", "riobamba"}
+        if any(m in text_lower for m in mentions) or "?" in text_lower:
+            return RelevanceDecision(True, score, "reply_sent")
+        if any(k in text_lower for k in ("error", "fallo", "problema", "como", "solucion")):
+            return RelevanceDecision(True, score, "reply_sent")
+
+    muy_corto = len(text_lower) < 10
+    solo_saludo = text_lower.strip() in {"hola", "hello", "hey", "hi", "buenas", "\U0001f44d"}
+    spam_like = any(k in text_lower for k in ("gana dinero", "sigue a", "visit", "check out"))
+
+    if muy_corto or solo_saludo or spam_like:
+        return RelevanceDecision(False, score, "reply_skipped_low_relevance")
+
+    if score >= POLICY.min_comment_relevance_score:
+        return RelevanceDecision(True, score, "reply_sent")
+    return RelevanceDecision(False, score, "reply_skipped_low_relevance")
+
+
+def _decide_reply_from_post(
+    post_body: str,
+    comments: Optional[List[Dict]] = None,
+    *,
+    tech_keywords: frozenset = frozenset(),
+):
+    if not post_body or len(post_body.strip()) < 20:
+        return RelevanceDecision(False, 0, "reply_skipped_low_relevance")
+
+    logger.info("Phase B: _decide_reply_from_post body_len=%s body_preview=%s", len(post_body), post_body[:80])
+    text_lower = post_body.lower()
+    score = 0
+
+    if "?" in text_lower:
+        score += POLICY.relevance_boost_question
+
+    tech_count = sum(1 for kw in (tech_keywords or frozenset()) if kw in text_lower)
+    score += min(tech_count * 10, 40)
+
+    if len(post_body) > 100:
+        score += 10
+    if any(k in text_lower for k in ("error", "fallo", "problema", "como solucionar", "tutorial", "guia")):
+        score += 20
+    if any(k in text_lower for k in ("gana dinero", "sorteo", "promocion", "compra", "venta")):
+        score -= 30
+
+    if tech_count >= 2 and comments:
+        all_comment_text = " ".join(
+            (c.get("content") or c.get("text") or "").lower()
+            for c in comments if isinstance(c, dict)
+        )
+        frontier_keywords = ["metric", "guardrail", "failure mode", "threshold",
+                            "fallback", "observability", "rate limit"]
+        frontier_mentioned = sum(1 for kw in frontier_keywords if kw in all_comment_text)
+        if frontier_mentioned == 0:
+            score += 20
+        elif frontier_mentioned <= 2:
+            score += 10
+
+    should = score >= 2
+    reason = "reply_sent" if should else "reply_skipped_low_relevance"
+    return RelevanceDecision(should, score, reason)
+
+
+def _has_explicit_addressing(text: str) -> bool:
+    text_lower = (text or "").lower()
+    return any(k in text_lower for k in (
+        "@comet", "@comet-riobamba", "comet riobamba", "comet-riobamba",
+        "riobamba",
+    ))
+
+
+def _extract_source_terms(text: str) -> Set[str]:
+    words = {
+        w.lower()
+        for w in re.findall(r"[a-zA-Z\u00e1\u00e9\u00ed\u00f3\u00fa\u00f1\u00fc]{5,}", text or "")
+    }
+    return {
+        w for w in words
+        if w not in {
+            "therefore", "because", "should", "could", "would", "about",
+            "their", "there", "these", "those", "which", "while", "where",
+            "reply", "comment", "post", "guardrail", "failure", "metric",
+        }
+    }
+
+
+def _reply_mentions_source_terms(reply_text: str, source_text: str) -> bool:
+    reply_lower = (reply_text or "").lower()
+    source_terms = _extract_source_terms(source_text)
+    if not source_terms:
+        return True
+    return any(term in reply_lower for term in list(source_terms)[:10])
+
+
+def _reply_has_ungrounded_numeric_specificity(reply_text: str, source_text: str) -> bool:
+    text = (reply_text or "").lower()
+    source = (source_text or "").lower()
+    numeric_pattern = re.compile(
+        r"\b\d+(?:\.\d+)?\s*(?:ms|msec|s|sec|secs|seconds?|mins?|minutes?|%|percent|"
+        r"times?|count|counts|replies?|posts?|days?|hours?)\b"
+    )
+    if not numeric_pattern.search(text):
+        return False
+    grounding_tokens = (
+        "telemetry", "metric", "metrics", "observed", "benchmark", "benchmarks",
+        "p95", "p99", "measurement", "measured", "count", "counts", "sample", "samples",
+    )
+    grounding_token_patterns = [
+        re.compile(rf"\b{re.escape(tok)}\b") for tok in grounding_tokens
+    ]
+    return not any(
+        gt.search(source) for gt in grounding_token_patterns
+    ) and not any(
+        gt.search(text) for gt in grounding_token_patterns
+    )
+
+
+def _reply_has_guardrail_template(reply_text: str) -> bool:
+    text = (reply_text or "").lower()
+    guardrail_patterns = [
+        r"a\s+practical\s+guardrail",
+        r"a\s+concrete\s+guardrail",
+        r"guardrail\s+is\s+to\s+keep",
+        r"guardrail\s+to\s+prevent",
+        r"guardrail\s+for\s+this",
+        r"a\s+simple\s+check\s+is",
+        r"one\s+simple\s+rule\s+is",
+    ]
+    return any(re.search(p, text) for p in guardrail_patterns)

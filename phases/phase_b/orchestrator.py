@@ -688,33 +688,8 @@ class PhaseB:
 
     @staticmethod
     def _compute_relevance_score(comment: Dict[str, Any]) -> int:
-        text = (comment.get("content") or comment.get("text") or "").strip()
-        text_lower = text.lower()
-        score = 0
-
-        if "?" in text_lower:
-            score += POLICY.relevance_boost_question
-
-        mentions = {"@comet", "comet-riobamba", "comet_riobamba", "comet riobamba", "riobamba"}
-        if any(m in text_lower for m in mentions):
-            score += POLICY.relevance_boost_mention
-
-        tech_count = sum(1 for kw in PhaseB._TECH_KEYWORDS if kw in text_lower)
-        if tech_count >= 2:
-            score += POLICY.relevance_boost_tech_keyword
-
-        if len(text) < 10:
-            score -= POLICY.relevance_penalty_short
-        elif len(text) < 25:
-            score -= POLICY.relevance_penalty_short // 2
-
-        if any(k in text_lower for k in ("gracias", "thanks", "jaja", "lol", "👍", "❤️")):
-            score -= 15
-
-        if len(text) > 150:
-            score += 5
-
-        return max(0, min(score, 100))
+        from .scoring import _compute_relevance_score
+        return _compute_relevance_score(comment, tech_keywords=PhaseB._TECH_KEYWORDS)
 
     @staticmethod
     def _passes_density_gate(text_lower: str) -> bool:
@@ -737,197 +712,38 @@ class PhaseB:
         limit_ok: bool = True,
         is_own_post_reply: bool = False,
     ) -> RelevanceDecision:
-        if not limit_ok:
-            return RelevanceDecision(False, 0, "reply_skipped_limit_reached")
-
-        text = (comment.get("content") or comment.get("text") or "").strip()
-        text_lower = text.lower()
-        if not text_lower:
-            return RelevanceDecision(False, 0, "reply_skipped_low_relevance")
-
-        is_question = "?" in text_lower
-        is_mention = any(m in text_lower for m in {
-            "@comet", "comet-riobamba", "comet_riobamba", "comet riobamba", "riobamba"
-        })
-
-        # ── Semantic density gate: reject verbose bot spam that has no technical
-        #    substance. Requires BOTH (2+ hard tech terms) AND (1+ quantitative
-        #    metric or data structure). Direct questions, mentions, and direct
-        #    replies to our own posts bypass the gate as legitimate engagement. ──
-        high_density = PhaseB._passes_density_gate(text_lower)
-        if not (is_question or is_mention or is_own_post_reply):
-            if not high_density:
-                author = PhaseB._get_author_name(comment)
-                logger.info(f"Phase B: Ignorando comentario de {author} por baja densidad semántica (sin métricas/estructuras).")
-                return RelevanceDecision(False, 0, "reply_skipped_low_density")
-
-        score = PhaseB._compute_relevance_score(comment)
-
-        # ── Relevance bypass for high technical substance / own-post replies ──
-        # High-density technical comments (CRDT, MVCC, quorum, etc.) often score
-        # near zero because they don't match the roadmap's semantic keywords.
-        # For them the effective min score drops to 30; direct replies to our own
-        # posts start at a base of 60 so they almost always clear the bar and
-        # reach the LLM to generate debate.
-        bypass_applied = False
-        if is_own_post_reply:
-            score = max(score, 60)
-            bypass_applied = True
-        elif high_density:
-            score = max(score, 30)
-            bypass_applied = True
-
-        if bypass_applied:
-            author = PhaseB._get_author_name(comment)
-            logger.info(f"Phase B: Bypass de relevancia aplicado a {author} por alta densidad técnica / own-post reply.")
-            if score >= 30:
-                return RelevanceDecision(True, score, "reply_sent")
-
-        if score >= POLICY.min_comment_relevance_score + 20:
-            return RelevanceDecision(True, score, "reply_sent")
-
-        if score >= POLICY.min_comment_relevance_score:
-            mentions = {"@comet", "comet-riobamba", "comet_riobamba", "comet riobamba", "riobamba"}
-            if any(m in text_lower for m in mentions) or "?" in text_lower:
-                return RelevanceDecision(True, score, "reply_sent")
-
-            if any(k in text_lower for k in ("error", "fallo", "problema", "cómo", "solución")):
-                return RelevanceDecision(True, score, "reply_sent")
-
-        # Check if this looks like an already-answered pattern
-        muy_corto = len(text_lower) < 10
-        solo_saludo = text_lower.strip() in {"hola", "hello", "hey", "hi", "buenas", "👍"}
-        spam_like = any(k in text_lower for k in ("gana dinero", "sigue a", "visit", "check out"))
-
-        if muy_corto or solo_saludo or spam_like:
-            return RelevanceDecision(False, score, "reply_skipped_low_relevance")
-
-        if score >= POLICY.min_comment_relevance_score:
-            return RelevanceDecision(True, score, "reply_sent")
-        return RelevanceDecision(False, score, "reply_skipped_low_relevance")
+        from .scoring import _decide_reply
+        return _decide_reply(PhaseB, comment, limit_ok, is_own_post_reply, tech_keywords=PhaseB._TECH_KEYWORDS)
 
     @staticmethod
     def _decide_reply_from_post(post_body: str, comments: Optional[List[Dict]] = None) -> RelevanceDecision:
-        if not post_body or len(post_body.strip()) < 20:
-            return RelevanceDecision(False, 0, "reply_skipped_low_relevance")
-
-        logger.info("Phase B: _decide_reply_from_post body_len=%s body_preview=%s", len(post_body), post_body[:80])
-        text_lower = post_body.lower()
-        score = 0
-
-        if "?" in text_lower:
-            score += POLICY.relevance_boost_question
-
-        tech_count = sum(1 for kw in PhaseB._TECH_KEYWORDS if kw in text_lower)
-        score += min(tech_count * 10, 40)
-
-        if len(post_body) > 100:
-            score += 10
-        if any(k in text_lower for k in ("error", "fallo", "problema", "cómo solucionar", "tutorial", "guía")):
-            score += 20
-        if any(k in text_lower for k in ("gana dinero", "sorteo", "promoción", "compra", "venta")):
-            score -= 30
-
-        # ── Frontier potential boost ─────────────────────────────
-        # A post has high frontier potential if:
-        #   - It is about a topic close to agent focus (tech keywords present)
-        #   - It has substantive discussion (comments exist)
-        #   - It lacks coverage of metrics/guardrails/failure modes
-        if tech_count >= 2 and comments:
-            all_comment_text = " ".join(
-                (c.get("content") or c.get("text") or "").lower()
-                for c in comments if isinstance(c, dict)
-            )
-            frontier_keywords = ["metric", "guardrail", "failure mode", "threshold",
-                                "fallback", "observability", "rate limit"]
-            frontier_mentioned = sum(1 for kw in frontier_keywords if kw in all_comment_text)
-            if frontier_mentioned == 0:
-                score += 20  # high frontier: no one has covered these angles yet
-                reason_prefix = "frontier_opportunity"
-            elif frontier_mentioned <= 2:
-                score += 10  # moderate frontier: partially covered
-                reason_prefix = "frontier_partial"
-            else:
-                reason_prefix = ""  # well-covered, no boost
-
-        should = score >= 2
-        reason = "reply_sent" if should else "reply_skipped_low_relevance"
-        return RelevanceDecision(should, score, reason)
+        from .scoring import _decide_reply_from_post
+        return _decide_reply_from_post(post_body, comments, tech_keywords=PhaseB._TECH_KEYWORDS)
 
     @staticmethod
     def _has_explicit_addressing(text: str) -> bool:
-        text_lower = (text or "").lower()
-        return any(k in text_lower for k in (
-            "@comet", "@comet-riobamba", "comet riobamba", "comet-riobamba",
-            "riobamba",
-        ))
+        from .scoring import _has_explicit_addressing
+        return _has_explicit_addressing(text)
 
     @staticmethod
     def _extract_source_terms(text: str) -> Set[str]:
-        words = {
-            w.lower()
-            for w in re.findall(r"[a-zA-Záéíóúñü]{5,}", text or "")
-        }
-        return {
-            w for w in words
-            if w not in {
-                "therefore", "because", "should", "could", "would", "about",
-                "their", "there", "these", "those", "which", "while", "where",
-                "reply", "comment", "post", "guardrail", "failure", "metric",
-            }
-        }
+        from .scoring import _extract_source_terms
+        return _extract_source_terms(text)
 
     @staticmethod
     def _reply_mentions_source_terms(reply_text: str, source_text: str) -> bool:
-        reply_lower = (reply_text or "").lower()
-        source_terms = PhaseB._extract_source_terms(source_text)
-        if not source_terms:
-            return True
-        return any(term in reply_lower for term in list(source_terms)[:10])
+        from .scoring import _reply_mentions_source_terms
+        return _reply_mentions_source_terms(reply_text, source_text)
 
     @staticmethod
     def _reply_has_ungrounded_numeric_specificity(reply_text: str, source_text: str) -> bool:
-        text = (reply_text or "").lower()
-        source = (source_text or "").lower()
-        numeric_pattern = re.compile(
-            r"\b\d+(?:\.\d+)?\s*(?:ms|msec|s|sec|secs|seconds?|mins?|minutes?|%|percent|"
-            r"times?|count|counts|replies?|posts?|days?|hours?)\b"
-        )
-        if not numeric_pattern.search(text):
-            return False
-        grounding_tokens = (
-            "telemetry", "metric", "metrics", "observed", "benchmark", "benchmarks",
-            "p95", "p99", "measurement", "measured", "count", "counts", "sample", "samples",
-        )
-        # Use word-boundary matching to avoid sub-word matches (e.g. "ms" in "systems")
-        grounding_token_patterns = [
-            re.compile(rf"\b{re.escape(tok)}\b") for tok in grounding_tokens
-        ]
-        if any(pat.search(source) for pat in grounding_token_patterns):
-            return False
-        long_grounding = ("ms", "%", "seconds", "minutes", "hours", "replies", "posts")
-        if any(re.search(rf"\b{re.escape(tok)}\b", source) for tok in long_grounding):
-            return False
-        if re.search(r"\b\d+(?:\.\d+)?\b", source):
-            return False
-        return True
+        from .scoring import _reply_has_ungrounded_numeric_specificity
+        return _reply_has_ungrounded_numeric_specificity(reply_text, source_text)
 
     @staticmethod
     def _reply_has_guardrail_template(reply_text: str) -> bool:
-        text = (reply_text or "").lower()
-        return any(
-            phrase in text
-            for phrase in (
-                "a practical guardrail is",
-                "a common failure mode is",
-                "in practice, you'll see",
-                "in practice, you'll see",
-                "the trade-off is",
-                "practical guardrail",
-                "common failure mode",
-                "in practice",
-            )
-        )
+        from .scoring import _reply_has_guardrail_template
+        return _reply_has_guardrail_template(reply_text)
 
     def _reply_theme_fingerprint(self, reply_text: str, source_text: str = "") -> str:
         text = f"{reply_text or ''} {source_text or ''}".lower()
