@@ -1472,6 +1472,7 @@ class PhaseB:
                         post_id,
                         comment_id,
                     )
+                    self.incr_comments_today()
                     results.append({
                         "post_id": post_id,
                         "comment_id": comment_id,
@@ -2369,6 +2370,7 @@ class PhaseB:
                     "Phase B: reply to comment %s on post %s already existed (dedup), not counting.",
                     comment_id, post_id,
                 )
+                self.incr_comments_today()
                 span.set("success", True)
                 return {
                     "post_id": post_id,

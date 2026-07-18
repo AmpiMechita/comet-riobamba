@@ -821,3 +821,89 @@ def test_phase_a_normal_calls_create_post_when_no_flag(tmp_path):
         body="This is a test post body.",
         metadata={"topic": "test-topic"},
     )
+
+
+# ── already_existed must increment comments_today ────────────────
+
+@pytest.mark.asyncio
+async def test_feed_reply_already_existed_increments_comments_today(tmp_path):
+    """Feed reply with already_existed=True must still incr_comments_today."""
+    from phases.deps import PhaseBDeps
+    from phases.phase_b import PhaseB, RelevanceDecision
+
+    incr_calls = []
+    deps = PhaseBDeps(
+        model_cascade=MagicMock(),
+        moltbook_client=MagicMock(),
+        behavior_cfg={"max_comments_per_post": 5, "max_comments_per_day": 10, "max_comment_replies_per_cycle": 3},
+        agent_name="test-agent",
+        get_comments_today=lambda: 0,
+        increment_comments_today=lambda: incr_calls.append(1),
+    )
+    pb = PhaseB(deps=deps)
+    pb.llm = MagicMock()
+    pb.llm.generate = AsyncMock(return_value="A reply with enough content to pass all checks and gates that require minimum length thresholds for publication in the feed.")
+    pb.api.create_comment = MagicMock(return_value={
+        "success": True, "id": "c1", "status": 201, "raw": {"already_existed": True},
+    })
+    pb.get_comments_today = lambda: 0
+    pb.incr_comments_today = lambda: incr_calls.append(1)
+
+    posts = [{"id": "post-101", "title": "T", "content": "C " * 80, "comments": []}]
+
+    with (
+        patch.object(pb, "_fetch_candidate_posts", return_value=posts),
+        patch.object(pb, "_decide_reply_from_post", return_value=RelevanceDecision(True, 30, "reply_sent")),
+        patch.object(pb, "_generate_reply_for_post", AsyncMock(return_value="A reply with enough content to pass all checks and gates that require minimum length thresholds for publication in the feed.")),
+        patch.object(pb, "_check_and_prevent_duplicate", AsyncMock(return_value="A reply with enough content to pass all checks and gates that require minimum length thresholds for publication in the feed.")),
+    ):
+        import phases.phase_b as _pb_mod
+        with (
+            patch.object(_pb_mod, "_save_agent_comment_ids"),
+            patch.object(_pb_mod, "_save_replied_comment_ids"),
+            patch.object(_pb_mod, "_save_commented_post_ids"),
+        ):
+            await pb._execute_feed_replies()
+
+    assert len(incr_calls) >= 1, f"Expected incr_comments_today to be called, got {len(incr_calls)}"
+
+
+@pytest.mark.asyncio
+async def test_own_post_reply_already_existed_increments_comments_today():
+    """Own-post reply with already_existed=True must still incr_comments_today."""
+    from phases.deps import PhaseBDeps
+    from phases.phase_b import PhaseB
+
+    incr_calls = []
+    deps = PhaseBDeps(
+        model_cascade=MagicMock(),
+        moltbook_client=MagicMock(),
+        behavior_cfg={"max_comments_per_post": 5, "max_comments_per_day": 10, "max_comment_replies_per_cycle": 3},
+        agent_name="test-agent",
+        get_comments_today=lambda: 0,
+        increment_comments_today=lambda: incr_calls.append(1),
+    )
+    pb = PhaseB(deps=deps)
+    pb.llm = MagicMock()
+    pb.llm.generate = AsyncMock(return_value="A reply with enough content to pass all checks and gates for publication.")
+    pb.incr_comments_today = lambda: incr_calls.append(1)
+    pb.api.fetch_post_comments = MagicMock(return_value=[
+        {"id": "c1", "author": {"name": "a1"}, "content": "Question?", "text": "Question?"},
+    ])
+    pb.api.create_comment = MagicMock(return_value={
+        "success": True, "id": "c2", "status": 201, "already_existed": True,
+    })
+
+    import phases.phase_b as _pb_mod
+    with (
+        patch.object(_pb_mod, "_save_agent_comment_ids"),
+        patch.object(_pb_mod, "_save_replied_comment_ids"),
+        patch.object(_pb_mod, "_save_commented_post_ids"),
+        patch.object(_pb_mod, "enqueue_outbox"),
+        patch.object(_pb_mod, "update_today_metrics"),
+    ):
+        result = await pb._process_own_post("post-102")
+
+    # already_existed path returns a result but must still increment
+    assert len(result) >= 1
+    assert incr_calls, f"Expected incr_comments_today to be called, got {len(incr_calls)} calls"
