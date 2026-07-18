@@ -34,7 +34,12 @@ from services.deepseek_balance import (
     check_deepseek_balance, was_balance_sent_today,
     mark_balance_sent, format_balance_message,
 )
-from services.persistence import fetch_pending_outbox, mark_outbox, update_outbox_backoff
+from services.persistence import (
+    fetch_pending_outbox,
+    mark_outbox,
+    update_outbox_backoff,
+    enqueue_outbox,
+)
 from services.global_circuit import (
     should_skip_cycle,
     get_current_interval,
@@ -246,86 +251,50 @@ class COMETRiobambaAgent:
         self.state.last_value_review = value
 
     def _retry_outbox(self) -> int:
+        """Retry pending posts from the SQLite outbox table."""
         published = 0
-        outbox_file = Path("data/outbox.db")
 
-        if not outbox_file.exists():
-            logger.info("Outbox: no existe archivo de pendientes.")
+        pending = fetch_pending_outbox(limit=10)
+        post_items = [item for item in pending if item.get("kind") == "post"]
+        if not post_items:
             return 0
 
-        try:
-            with open(outbox_file, "r", encoding="utf-8", errors="replace") as f:
-                pending = json.load(f)
+        logger.info("Outbox: reintentando %s posts pendientes antes de Fase A...", len(post_items))
 
-            if not isinstance(pending, list) or not pending:
-                return 0
+        max_posts = behavior_cfg.get("max_posts_per_day", POLICY.max_posts_per_day)
+        min_backoff = POLICY.outbox_min_backoff_seconds
+        max_backoff = POLICY.outbox_max_backoff_seconds
 
-            logger.info("Outbox: reintentando %s posts pendientes antes de Fase A...", len(pending))
+        for item in post_items:
+            if self.state.posts_today >= max_posts:
+                logger.info("Outbox: límite diario alcanzado, difiriendo posts restantes")
+                break
 
-            from datetime import datetime, timedelta, timezone
-            now = datetime.now(timezone.utc)
-            max_posts = behavior_cfg.get("max_posts_per_day", POLICY.max_posts_per_day)
-            min_backoff = POLICY.outbox_min_backoff_seconds
-            max_backoff = POLICY.outbox_max_backoff_seconds
-
-            remaining: List[Dict[str, Any]] = []
-            for i, post in enumerate(pending):
-                if not isinstance(post, dict):
-                    logger.warning("Outbox: item inválido (no es dict), saltando")
-                    continue
-
-                # Skip items not yet due for retry
-                next_at = post.get("next_retry_at")
-                if next_at:
-                    try:
-                        if datetime.fromisoformat(next_at) > now:
-                            remaining.append(post)
-                            continue
-                    except (ValueError, TypeError):
-                        pass
-
-                if self.state.posts_today >= max_posts:
-                    logger.info("Outbox: límite diario alcanzado, difiriendo %s posts restantes", len(pending) - i)
-                    remaining.extend(pending[i:])
-                    break
-
-                try:
-                    result = self.moltbook_api_client.create_post(
-                        title=post.get("title"),
-                        body=post.get("body"),
-                        metadata=post.get("metadata", {}),
-                    )
-                    if result.get("success") or result.get("status") == 201:
-                        published += 1
-                        self.state.increment_posts_today()
-                        self._safe_record_action("create_post", success=True)
-                        logger.info("Outbox: post publicado exitosamente (ID: %s)", result.get("id"))
-                    else:
-                        retry_attempt = post.get("retry_attempt", 0) + 1
-                        delay = min(max_backoff, min_backoff * (2 ** retry_attempt))
-                        post["retry_attempt"] = retry_attempt
-                        post["next_retry_at"] = (now + timedelta(seconds=delay)).isoformat()
-                        remaining.append(post)
-                        logger.warning("Outbox: fallo post, retry_attempt=%s, próximo intento en %ss", retry_attempt, delay)
-                except Exception as e:
-                    retry_attempt = post.get("retry_attempt", 0) + 1
-                    delay = min(max_backoff, min_backoff * (2 ** retry_attempt))
-                    post["retry_attempt"] = retry_attempt
-                    post["next_retry_at"] = (now + timedelta(seconds=delay)).isoformat()
-                    remaining.append(post)
-                    logger.warning("Outbox: error publicando post, retry_attempt=%s, próximo intento en %ss: %s", retry_attempt, delay, e)
-
-            if remaining:
-                _write_json_atomic(outbox_file, remaining, indent=2)
-            else:
-                outbox_file.unlink(missing_ok=True)
-
-        except Exception as e:
-            logger.error("Outbox: error procesando: %s", e)
+            payload = item.get("payload", {})
+            try:
+                result = self.moltbook_api_client.create_post(
+                    title=payload.get("title"),
+                    body=payload.get("body"),
+                    metadata=payload.get("metadata", {}),
+                )
+                if result.get("success") or result.get("status") == 201:
+                    published += 1
+                    self.state.increment_posts_today()
+                    self._safe_record_action("create_post", success=True)
+                    mark_outbox(item["id"], "published")
+                    logger.info("Outbox: post publicado exitosamente (ID: %s)", result.get("id"))
+                else:
+                    retry_attempt = item.get("retry_attempt", 0) + 1
+                    update_outbox_backoff(item["id"], str(result)[:200], retry_attempt, min_backoff, max_backoff)
+                    logger.warning("Outbox: fallo post, retry_attempt=%s", retry_attempt)
+            except Exception as e:
+                retry_attempt = item.get("retry_attempt", 0) + 1
+                update_outbox_backoff(item["id"], str(e)[:200], retry_attempt, min_backoff, max_backoff)
+                logger.warning("Outbox: error publicando post, retry_attempt=%s: %s", retry_attempt, e)
 
         return published
 
-    # TODO 5.0-LP1: Refactor post outbox (_retry_outbox) to use SQLite outbox table instead of data/outbox.db JSON file
+    # TODO 5.0-LP1: Post outbox migrated to SQLite (was JSON data/outbox.db)
 
     def _check_home_dashboard(self) -> None:
         """Fetch /home dashboard at cycle start, log summary, detect new activity and announcements."""
