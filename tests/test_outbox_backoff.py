@@ -123,4 +123,83 @@ def test_update_outbox_backoff_increments_retry_attempt(_patch_db):
         assert row[1] is not None
 
 
+# ── Error classification: needs_reconciliation vs failed vs pending ──
+
+def test_timeout_marks_needs_reconciliation():
+    """Timeout / network exception → 'needs_reconciliation', NOT 'pending'."""
+    from services.persistence import init_db, enqueue_outbox, get_conn, mark_outbox
+
+    init_db()
+    enqueue_outbox("post", {"title": "T", "body": "B"})
+
+    with get_conn() as conn:
+        item_id = conn.execute(
+            "SELECT id FROM outbox WHERE kind='post' ORDER BY id DESC LIMIT 1"
+        ).fetchone()[0]
+
+    # Simulate what _retry_outbox does on network exception
+    mark_outbox(item_id, "needs_reconciliation", "ConnectionError: timeout")
+
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT status, last_error FROM outbox WHERE id = ?", (item_id,)
+        ).fetchone()
+    assert row[0] == "needs_reconciliation"
+    assert "timeout" in (row[1] or "")
+
+    # Also verify fetch_pending_outbox does NOT return needs_reconciliation items
+    from services.persistence import fetch_pending_outbox
+    pending = fetch_pending_outbox(limit=10)
+    post_ids = [i["id"] for i in pending if i.get("kind") == "post"]
+    assert item_id not in post_ids, "needs_reconciliation item was returned as pending"
+
+
+def test_validation_error_marks_failed():
+    """4xx validation error → 'failed', should NOT be retried."""
+    from unittest.mock import MagicMock
+    from services.persistence import init_db, enqueue_outbox, get_conn, mark_outbox
+
+    init_db()
+    enqueue_outbox("post", {"title": "T", "body": "B"})
+
+    # Simulate an outbox item that got a 422 from the API
+    with get_conn() as conn:
+        item_id = conn.execute(
+            "SELECT id FROM outbox WHERE kind='post' ORDER BY id DESC LIMIT 1"
+        ).fetchone()[0]
+
+    mark_outbox(item_id, "failed", "HTTP 422: validation error")
+
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT status, last_error FROM outbox WHERE id = ?", (item_id,)
+        ).fetchone()
+    assert row[0] == "failed"
+    assert "422" in (row[1] or "")
+
+
+def test_retryable_503_keeps_pending():
+    """503 Service Unavailable should keep 'pending' with backoff."""
+    from unittest.mock import MagicMock
+    from services.persistence import init_db, enqueue_outbox, get_conn, update_outbox_backoff
+
+    init_db()
+    enqueue_outbox("post", {"title": "T", "body": "B"})
+
+    with get_conn() as conn:
+        item_id = conn.execute(
+            "SELECT id FROM outbox WHERE kind='post' ORDER BY id DESC LIMIT 1"
+        ).fetchone()[0]
+
+    update_outbox_backoff(item_id, "HTTP 503", retry_attempt=1)
+
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT status, retry_attempt, next_retry_at FROM outbox WHERE id = ?", (item_id,)
+        ).fetchone()
+    assert row[0] == "pending"
+    assert row[1] == 1
+    assert row[2] is not None  # next_retry_at was set
+
+
 

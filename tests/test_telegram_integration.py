@@ -422,3 +422,119 @@ async def test_clean_confirm_expired_rejected():
 
     sent_text = client.send_message.call_args[0][0]
     assert "expiro" in sent_text.lower() or "60" in sent_text
+
+
+# ── /reconcile and /reconcile_resolve ────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_reconcile_lists_needs_reconciliation_items():
+    """_handle_reconcile must list items with status='needs_reconciliation'."""
+    from services.telegram_client import TelegramClient
+
+    client = TelegramClient(bot_token="fake-token", chat_id="12345", enabled=True)
+    client.send_message = MagicMock()
+
+    mock_rows = [
+        (1, "post", '{"title":"T"}', "2026-01-01", "ConnectionError"),
+        (2, "comment", '{"post_id":"p1"}', "2026-01-02", "Timeout"),
+    ]
+    mock_conn = MagicMock()
+    mock_conn.execute.return_value.fetchall.return_value = mock_rows
+
+    with patch("services.telegram_client.sqlite3.connect", return_value=mock_conn):
+        await client._handle_reconcile(agent=MagicMock())
+
+    sent_text = client.send_message.call_args[0][0]
+    assert "Items pendientes" in sent_text
+    assert "ConnectionError" in sent_text
+    assert "Timeout" in sent_text
+    assert "/reconcile_resolve" in sent_text
+
+
+@pytest.mark.asyncio
+async def test_reconcile_no_items_shows_empty():
+    """_handle_reconcile with no items shows empty message."""
+    from services.telegram_client import TelegramClient
+
+    client = TelegramClient(bot_token="fake-token", chat_id="12345", enabled=True)
+    client.send_message = MagicMock()
+
+    mock_conn = MagicMock()
+    mock_conn.execute.return_value.fetchall.return_value = []
+
+    with patch("services.telegram_client.sqlite3.connect", return_value=mock_conn):
+        await client._handle_reconcile(agent=MagicMock())
+
+    sent_text = client.send_message.call_args[0][0]
+    assert "pendientes" in sent_text
+
+
+@pytest.mark.asyncio
+async def test_reconcile_resolve_published():
+    """_handle_reconcile_resolve with valid id and 'published' outcome."""
+    from services.telegram_client import TelegramClient
+
+    client = TelegramClient(bot_token="fake-token", chat_id="12345", enabled=True)
+    client.send_message = MagicMock()
+
+    mock_conn = MagicMock()
+    # First call returns the row (needs_reconciliation status)
+    mock_conn.execute.return_value.fetchone.return_value = (
+        "needs_reconciliation", "post", '{"title":"T"}'
+    )
+
+    with patch("services.telegram_client.sqlite3.connect", return_value=mock_conn):
+        await client._handle_reconcile_resolve(agent=MagicMock(), item_id_str="5", outcome="published")
+
+    sent_text = client.send_message.call_args[0][0]
+    assert "published" in sent_text
+    assert "5" in sent_text
+
+
+@pytest.mark.asyncio
+async def test_reconcile_resolve_already_resolved():
+    """_handle_reconcile_resolve with item already in 'failed' status."""
+    from services.telegram_client import TelegramClient
+
+    client = TelegramClient(bot_token="fake-token", chat_id="12345", enabled=True)
+    client.send_message = MagicMock()
+
+    mock_conn = MagicMock()
+    mock_conn.execute.return_value.fetchone.return_value = (
+        "failed", "post", '{"title":"T"}'
+    )
+
+    with patch("services.telegram_client.sqlite3.connect", return_value=mock_conn):
+        await client._handle_reconcile_resolve(agent=MagicMock(), item_id_str="5", outcome="published")
+
+    sent_text = client.send_message.call_args[0][0]
+    assert "ya fue resuelto" in sent_text.lower() or "actual" in sent_text.lower()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_resolve_invalid_outcome():
+    """_handle_reconcile_resolve with invalid outcome must be rejected."""
+    from services.telegram_client import TelegramClient
+
+    client = TelegramClient(bot_token="fake-token", chat_id="12345", enabled=True)
+    client.send_message = MagicMock()
+
+    await client._handle_reconcile_resolve(agent=MagicMock(), item_id_str="5", outcome="invalid")
+
+    sent_text = client.send_message.call_args[0][0]
+    assert "published" in sent_text.lower() or "failed" in sent_text.lower() or "outcome" in sent_text.lower()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_resolve_invalid_id():
+    """_handle_reconcile_resolve with non-numeric id must be rejected."""
+    from services.telegram_client import TelegramClient
+
+    client = TelegramClient(bot_token="fake-token", chat_id="12345", enabled=True)
+    client.send_message = MagicMock()
+
+    await client._handle_reconcile_resolve(agent=MagicMock(), item_id_str="abc", outcome="published")
+
+    sent_text = client.send_message.call_args[0][0]
+    assert "ID" in sent_text or "invalido" in sent_text.lower()

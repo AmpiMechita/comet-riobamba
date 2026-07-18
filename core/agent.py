@@ -251,7 +251,14 @@ class COMETRiobambaAgent:
         self.state.last_value_review = value
 
     def _retry_outbox(self) -> int:
-        """Retry pending posts from the SQLite outbox table."""
+        """Retry pending posts from the SQLite outbox table.
+
+        Classifies failures to prevent duplicate posts after ambiguous errors:
+        - 4xx validation errors → 'failed' (do not retry).
+        - Timeout / network exception → 'needs_reconciliation' (must be manually
+          reviewed before retrying — the request may have reached Moltbook).
+        - 5xx / other → 'pending' with backoff (safe to retry).
+        """
         published = 0
 
         pending = fetch_pending_outbox(limit=10)
@@ -277,20 +284,29 @@ class COMETRiobambaAgent:
                     body=payload.get("body"),
                     metadata=payload.get("metadata", {}),
                 )
-                if result.get("success") or result.get("status") == 201:
+                http_status = result.get("status") or 0
+                if result.get("success") or http_status == 201:
                     published += 1
                     self.state.increment_posts_today()
                     self._safe_record_action("create_post", success=True)
                     mark_outbox(item["id"], "published")
                     logger.info("Outbox: post publicado exitosamente (ID: %s)", result.get("id"))
+                elif 400 <= http_status < 500:
+                    # Client error: validation, auth, forbidden — not retryable.
+                    mark_outbox(item["id"], "failed", str(result)[:200])
+                    logger.warning("Outbox: post marcado 'failed' (HTTP %s)", http_status)
                 else:
+                    # 5xx / unknown — safe to retry with backoff.
                     retry_attempt = item.get("retry_attempt", 0) + 1
                     update_outbox_backoff(item["id"], str(result)[:200], retry_attempt, min_backoff, max_backoff)
                     logger.warning("Outbox: fallo post, retry_attempt=%s", retry_attempt)
             except Exception as e:
-                retry_attempt = item.get("retry_attempt", 0) + 1
-                update_outbox_backoff(item["id"], str(e)[:200], retry_attempt, min_backoff, max_backoff)
-                logger.warning("Outbox: error publicando post, retry_attempt=%s: %s", retry_attempt, e)
+                # Network exception / timeout — ambiguous: the request may have
+                # reached Moltbook. Do NOT retry automatically.
+                mark_outbox(item["id"], "needs_reconciliation", str(e)[:200])
+                logger.warning(
+                    "Outbox: post marcado 'needs_reconciliation' tras excepción de red: %s", e
+                )
 
         return published
 

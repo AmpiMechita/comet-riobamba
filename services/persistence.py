@@ -104,7 +104,7 @@ def init_db() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 kind TEXT NOT NULL,          -- 'post' | 'comment' | etc.
                 payload_json TEXT NOT NULL,
-                status TEXT NOT NULL,        -- 'pending' | 'published' | 'failed'
+                status TEXT NOT NULL,        -- 'pending' | 'published' | 'failed' | 'needs_reconciliation'
                 last_error TEXT,
                 retry_attempt INTEGER NOT NULL DEFAULT 0,
                 next_retry_at TEXT,
@@ -326,7 +326,7 @@ def fetch_pending_outbox(limit: int = 10) -> List[Dict[str, Any]]:
 def mark_outbox(outbox_id: int, status: str, last_error: Optional[str] = None) -> None:
     """
     Actualiza el estado de un item en outbox.
-    status: 'pending' | 'published' | 'failed'
+    status: 'pending' | 'published' | 'failed' | 'needs_reconciliation'
     """
     init_db()
     with get_conn() as conn:

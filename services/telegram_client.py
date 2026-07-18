@@ -163,6 +163,14 @@ class TelegramClient:
             await self._handle_clean(agent)
         elif text == "/clean_confirm":
             await self._handle_clean_confirm(agent)
+        elif text == "/reconcile":
+            await self._handle_reconcile(agent)
+        elif text.startswith("/reconcile_resolve "):
+            parts = text.split(" ", 2)
+            if len(parts) >= 3:
+                await self._handle_reconcile_resolve(agent, parts[1], parts[2])
+            else:
+                self.send_message("❌ Uso: /reconcile_resolve &lt;id&gt; published|failed")
         elif text == "/stop":
             await self._handle_stop(agent)
         elif text == "/posts":
@@ -288,6 +296,98 @@ class TelegramClient:
         except Exception as e:
             self.send_message(f"❌ Error al limpiar outbox: <code>{e}</code>")
 
+
+    async def _handle_reconcile(self, agent):
+        """List outbox items in 'needs_reconciliation' status."""
+        try:
+            conn = sqlite3.connect('data/comet_state.db')
+            rows = conn.execute(
+                "SELECT id, kind, payload_json, created_at, last_error "
+                "FROM outbox WHERE status = 'needs_reconciliation' "
+                "ORDER BY id ASC LIMIT 20"
+            ).fetchall()
+            conn.close()
+        except Exception as e:
+            self.send_message(f"❌ Error leyendo outbox: <code>{e}</code>")
+            return
+
+        if not rows:
+            self.send_message("📭 No hay items pendientes de reconciliacion.")
+            return
+
+        lines = ["⚠️ <b>Items pendientes de reconciliacion</b>\n"]
+        for row in rows:
+            rid, kind, payload_json, created_at, last_error = row
+            payload_snippet = (payload_json or "")[:80]
+            err_snippet = (last_error or "")[:60]
+            lines.append(
+                f"<b>ID:</b> <code>{rid}</code> | <b>{kind}</b>\n"
+                f"<b>Payload:</b> {payload_snippet}\n"
+                f"<b>Creado:</b> {created_at or '?'}\n"
+                f"<b>Error:</b> {err_snippet}\n"
+            )
+        lines.append(
+            "\nPara resolver: /reconcile_resolve &lt;id&gt; published|failed\n"
+            "Verifica en Moltbook si el post se publico antes de decidir."
+        )
+        self.send_message("\n".join(lines))
+
+
+    async def _handle_reconcile_resolve(self, agent, item_id_str: str, outcome: str):
+        """Resolve a needs_reconciliation item as published or failed."""
+        if outcome not in ("published", "failed"):
+            self.send_message("❌ Outcome debe ser 'published' o 'failed'.")
+            return
+
+        item_id = None
+        try:
+            item_id = int(item_id_str)
+        except ValueError:
+            self.send_message(f"❌ ID invalido: <code>{item_id_str}</code>")
+            return
+
+        try:
+            conn = sqlite3.connect('data/comet_state.db')
+            row = conn.execute(
+                "SELECT status, kind, payload_json FROM outbox WHERE id = ?", (item_id,)
+            ).fetchone()
+            if not row:
+                conn.close()
+                self.send_message(f"❌ No se encontro el item <code>{item_id}</code>.")
+                return
+            current_status, kind, payload_json = row
+            if current_status != "needs_reconciliation":
+                conn.close()
+                self.send_message(
+                    f"❌ El item <code>{item_id}</code> ya fue resuelto "
+                    f"(status actual: <code>{current_status}</code>)."
+                )
+                return
+            conn.close()
+        except Exception as e:
+            self.send_message(f"❌ Error leyendo outbox: <code>{e}</code>")
+            return
+
+        try:
+            conn = sqlite3.connect('data/comet_state.db')
+            conn.execute(
+                "UPDATE outbox SET status = ?, updated_at = datetime('now') WHERE id = ?",
+                (outcome, item_id),
+            )
+            conn.commit()
+            conn.close()
+
+            logger.warning(
+                "TELEGRAM /reconcile_resolve: item %d (%s) marcado como '%s' por operador. "
+                "Accion desde Telegram chat_id=%s.",
+                item_id, kind, outcome, self.chat_id,
+            )
+            self.send_message(
+                f"✅ Item <code>{item_id}</code> ({kind}) marcado como "
+                f"<b>{outcome}</b>."
+            )
+        except Exception as e:
+            self.send_message(f"❌ Error actualizando outbox: <code>{e}</code>")
 
     async def _handle_posts(self, agent):
         """Muestra los últimos posts publicados."""
