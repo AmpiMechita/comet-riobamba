@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-COMET-RIOBAMBA v4.3.0 - Módulo de persistencia
+COMET-RIOBAMBA v5.0 — Módulo de persistencia
 
 Responsabilidades:
 - Estado del agente (ciclos, posts_today, versión)
@@ -67,7 +67,7 @@ def init_db() -> None:
         conn.execute(
             """
             INSERT OR IGNORE INTO agent_state (id, cycle, posts_today, comments_today, last_post_date, last_post_timestamp, last_value_review, consecutive_failures, last_cycle_at, version)
-            VALUES (1, 0, 0, 0, NULL, NULL, NULL, 0, NULL, '4.3.0')
+            VALUES (1, 0, 0, 0, NULL, NULL, NULL, 0, NULL, '5.0')
             """
         )
 
@@ -180,7 +180,7 @@ def load_agent_state() -> Dict[str, Any]:
             "last_value_review": None,
             "consecutive_failures": 0,
             "last_cycle_at": None,
-            "version": "4.3.0",
+            "version": "5.0",
         }
     return {
         "cycle": row[0],
@@ -218,7 +218,7 @@ def save_agent_state(state: Dict[str, Any]) -> None:
                 state.get("last_value_review"),
                 int(state.get("consecutive_failures", 0)),
                 state.get("last_cycle_at"),
-                state.get("version", "4.3.0"),
+                state.get("version", "5.0"),
             ),
         )
 
