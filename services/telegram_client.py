@@ -1,10 +1,20 @@
 # -*- coding: utf-8 -*-
-"""Cliente bidireccional para Telegram: envia alertas y recibe comandos de control."""
+"""
+Telegram Bot API transport layer.
+
+Responsabilidades:
+  - Recepción de updates vía polling (getUpdates)
+  - Envío de mensajes (sendMessage)
+  - Routing de comandos built-in (/status, /force, /clean, /stop, etc.)
+  - Delegación de comandos extendidos a services.telegram_control (incl. /health)
+
+NO maneja lógica de comandos administrativos — esos se resuelven en
+services.telegram_control.handle_command(). Este módulo es solo transporte.
+"""
 import asyncio
 import json
 import logging
 import os
-import sqlite3
 import time
 import requests
 from pathlib import Path
@@ -137,7 +147,15 @@ class TelegramClient:
             await asyncio.sleep(3)
 
     async def _process_update(self, agent, update: dict):
-        """Process a single Telegram update, routing to the correct handler."""
+        """
+        Procesa un update entrante de Telegram.
+
+        Built-in commands (/status, /clean, /stop, etc.) se manejan aquí.
+        Extended commands (incl. /health) se delegan a
+        services.telegram_control.handle_command().
+        Voice messages se delegan a _handle_voice().
+        Free text se delega a _handle_assistant().
+        """
         message = update.get("message", {})
         text = message.get("text", "").strip()
         chat_id = str(message.get("chat", {}).get("id"))
@@ -212,9 +230,9 @@ class TelegramClient:
         max_posts = behavior_cfg.get("max_posts_per_day", POLICY.max_posts_per_day)
         outbox_count = 0
         try:
-            conn = sqlite3.connect('data/comet_state.db')
-            outbox_count = conn.cursor().execute("SELECT count(*) FROM outbox WHERE status = 'pending'").fetchone()[0]
-            conn.close()
+            from services.persistence import get_conn
+            with get_conn() as conn:
+                outbox_count = conn.execute("SELECT count(*) FROM outbox WHERE status = 'pending'").fetchone()[0]
         except: pass
 
         text = (
@@ -238,11 +256,11 @@ class TelegramClient:
 
     async def _handle_clean(self, agent):
         try:
-            conn = sqlite3.connect('data/comet_state.db')
-            pending = conn.cursor().execute(
-                "SELECT COUNT(*) FROM outbox WHERE status = 'pending'"
-            ).fetchone()[0]
-            conn.close()
+            from services.persistence import get_conn
+            with get_conn() as conn:
+                pending = conn.execute(
+                    "SELECT COUNT(*) FROM outbox WHERE status = 'pending'"
+                ).fetchone()[0]
         except Exception as e:
             self.send_message(f"❌ Error leyendo outbox: <code>{e}</code>")
             return
@@ -283,12 +301,11 @@ class TelegramClient:
                 "Accion iniciada desde Telegram chat_id=%s.",
                 count, self.chat_id,
             )
-            conn = sqlite3.connect('data/comet_state.db')
-            deleted = conn.cursor().execute(
-                "DELETE FROM outbox WHERE status = 'pending'"
-            ).rowcount
-            conn.commit()
-            conn.close()
+            from services.persistence import get_conn
+            with get_conn() as conn:
+                deleted = conn.execute(
+                    "DELETE FROM outbox WHERE status = 'pending'"
+                ).rowcount
             self.send_message(
                 f"🧹 <b>Outbox limpiado</b>\n"
                 f"Se eliminaron <code>{deleted}</code> items pendientes."
@@ -300,13 +317,13 @@ class TelegramClient:
     async def _handle_reconcile(self, agent):
         """List outbox items in 'needs_reconciliation' status."""
         try:
-            conn = sqlite3.connect('data/comet_state.db')
-            rows = conn.execute(
-                "SELECT id, kind, payload_json, created_at, last_error "
-                "FROM outbox WHERE status = 'needs_reconciliation' "
-                "ORDER BY id ASC LIMIT 20"
-            ).fetchall()
-            conn.close()
+            from services.persistence import get_conn
+            with get_conn() as conn:
+                rows = conn.execute(
+                    "SELECT id, kind, payload_json, created_at, last_error "
+                    "FROM outbox WHERE status = 'needs_reconciliation' "
+                    "ORDER BY id ASC LIMIT 20"
+                ).fetchall()
         except Exception as e:
             self.send_message(f"❌ Error leyendo outbox: <code>{e}</code>")
             return
@@ -347,36 +364,32 @@ class TelegramClient:
             return
 
         try:
-            conn = sqlite3.connect('data/comet_state.db')
-            row = conn.execute(
-                "SELECT status, kind, payload_json FROM outbox WHERE id = ?", (item_id,)
-            ).fetchone()
-            if not row:
-                conn.close()
-                self.send_message(f"❌ No se encontro el item <code>{item_id}</code>.")
-                return
-            current_status, kind, payload_json = row
-            if current_status != "needs_reconciliation":
-                conn.close()
-                self.send_message(
-                    f"❌ El item <code>{item_id}</code> ya fue resuelto "
-                    f"(status actual: <code>{current_status}</code>)."
-                )
-                return
-            conn.close()
+            from services.persistence import get_conn
+            with get_conn() as conn:
+                row = conn.execute(
+                    "SELECT status, kind, payload_json FROM outbox WHERE id = ?", (item_id,)
+                ).fetchone()
+                if not row:
+                    self.send_message(f"❌ No se encontro el item <code>{item_id}</code>.")
+                    return
+                current_status, kind, payload_json = row
+                if current_status != "needs_reconciliation":
+                    self.send_message(
+                        f"❌ El item <code>{item_id}</code> ya fue resuelto "
+                        f"(status actual: <code>{current_status}</code>)."
+                    )
+                    return
         except Exception as e:
             self.send_message(f"❌ Error leyendo outbox: <code>{e}</code>")
             return
 
         try:
-            conn = sqlite3.connect('data/comet_state.db')
-            conn.execute(
-                "UPDATE outbox SET status = ?, updated_at = datetime('now') WHERE id = ?",
-                (outcome, item_id),
-            )
-            conn.commit()
-            conn.close()
-
+            from services.persistence import get_conn
+            with get_conn() as conn:
+                conn.execute(
+                    "UPDATE outbox SET status = ?, updated_at = datetime('now') WHERE id = ?",
+                    (outcome, item_id),
+                )
             logger.warning(
                 "TELEGRAM /reconcile_resolve: item %d (%s) marcado como '%s' por operador. "
                 "Accion desde Telegram chat_id=%s.",
