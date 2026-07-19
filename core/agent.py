@@ -255,6 +255,7 @@ class COMETRiobambaAgent:
 
         Classifies failures to prevent duplicate posts after ambiguous errors:
         - 4xx validation errors → 'failed' (do not retry).
+        - 429 rate-limit → 'pending' with Retry-After delay from server.
         - Timeout / network exception → 'needs_reconciliation' (must be manually
           reviewed before retrying — the request may have reached Moltbook).
         - 5xx / other → 'pending' with backoff (safe to retry).
@@ -291,6 +292,21 @@ class COMETRiobambaAgent:
                     self._safe_record_action("create_post", success=True)
                     mark_outbox(item["id"], "published")
                     logger.info("Outbox: post publicado exitosamente (ID: %s)", result.get("id"))
+                elif http_status == 429:
+                    # Rate-limit: use the Retry-After value the server returned
+                    # instead of generic exponential backoff.
+                    retry_after = result.get("retry_after_seconds")
+                    retry_attempt = item.get("retry_attempt", 0) + 1
+                    capped = min(retry_after or 60, max_backoff)
+                    update_outbox_backoff(
+                        item["id"], str(result)[:200], retry_attempt,
+                        min_backoff, max_backoff,
+                        explicit_delay_seconds=capped,
+                    )
+                    logger.warning(
+                        "Outbox: 429 rate-limit (Retry-After=%ss, capped=%ss), retry_attempt=%s",
+                        retry_after, capped, retry_attempt,
+                    )
                 elif 400 <= http_status < 500:
                     # Client error: validation, auth, forbidden — not retryable.
                     mark_outbox(item["id"], "failed", str(result)[:200])

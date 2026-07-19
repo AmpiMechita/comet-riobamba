@@ -341,12 +341,21 @@ def mark_outbox(outbox_id: int, status: str, last_error: Optional[str] = None) -
 
 
 def update_outbox_backoff(outbox_id: int, last_error: str, retry_attempt: int,
-                          min_backoff: int = 60, max_backoff: int = 3600) -> None:
+                          min_backoff: int = 60, max_backoff: int = 3600,
+                          explicit_delay_seconds: Optional[int] = None) -> None:
     """
     Incrementa retry_attempt, establece next_retry_at con backoff exponencial,
     y mantiene status='pending'.
+
+    Si explicit_delay_seconds se proporciona (ej. desde un header Retry-After
+    del servidor), se usa ese valor exacto en lugar del backoff calculado,
+    respetando el techo max_backoff para prevenir bloqueos indefinidos.
     """
-    next_at = _compute_next_retry_at(retry_attempt, min_backoff, max_backoff)
+    if explicit_delay_seconds is not None:
+        capped = min(explicit_delay_seconds, max_backoff)
+        next_at = _compute_next_retry_at(retry_attempt, capped, capped)
+    else:
+        next_at = _compute_next_retry_at(retry_attempt, min_backoff, max_backoff)
     init_db()
     with get_conn() as conn:
         conn.execute(

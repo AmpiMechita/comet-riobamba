@@ -202,4 +202,95 @@ def test_retryable_503_keeps_pending():
     assert row[2] is not None  # next_retry_at was set
 
 
+# ── explicit_delay_seconds for 429 Retry-After ────────────────────
+
+def test_explicit_delay_uses_server_retry_after():
+    """When explicit_delay_seconds is provided, next_retry_at must reflect
+    approximately that delay, not generic exponential backoff."""
+    from services.persistence import init_db, enqueue_outbox, get_conn, update_outbox_backoff
+    from datetime import datetime, timedelta, timezone
+
+    init_db()
+    enqueue_outbox("post", {"title": "T", "body": "B"})
+
+    with get_conn() as conn:
+        item_id = conn.execute(
+            "SELECT id FROM outbox WHERE kind='post' ORDER BY id DESC LIMIT 1"
+        ).fetchone()[0]
+
+    # Simulate 429 with Retry-After: 107 seconds
+    update_outbox_backoff(item_id, "HTTP 429", retry_attempt=1, explicit_delay_seconds=107)
+
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT status, retry_attempt, next_retry_at FROM outbox WHERE id = ?", (item_id,)
+        ).fetchone()
+    assert row[0] == "pending"
+    assert row[1] == 1
+
+    # The delay should be approximately 107s (not the exponential 60s)
+    next_at = datetime.strptime(row[2], "%Y-%m-%d %H:%M:%S")
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    delay = (next_at - now).total_seconds()
+    # With explicit_delay=107 and min=max=107, the formula gives 107*2^0=107
+    assert 100 <= delay <= 115, f"Expected ~107s delay, got {delay:.0f}s"
+
+
+def test_explicit_delay_capped_at_max_backoff():
+    """explicit_delay_seconds must be capped at max_backoff."""
+    from services.persistence import init_db, enqueue_outbox, get_conn, update_outbox_backoff
+    from datetime import datetime, timedelta, timezone
+
+    init_db()
+    enqueue_outbox("post", {"title": "T", "body": "B"})
+
+    with get_conn() as conn:
+        item_id = conn.execute(
+            "SELECT id FROM outbox WHERE kind='post' ORDER BY id DESC LIMIT 1"
+        ).fetchone()[0]
+
+    # Simulate 429 with absurdly large Retry-After: 99999 seconds
+    update_outbox_backoff(item_id, "HTTP 429", retry_attempt=1,
+                          max_backoff=3600, explicit_delay_seconds=99999)
+
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT status, retry_attempt, next_retry_at FROM outbox WHERE id = ?", (item_id,)
+        ).fetchone()
+    assert row[0] == "pending"
+
+    next_at = datetime.strptime(row[2], "%Y-%m-%d %H:%M:%S")
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    delay = (next_at - now).total_seconds()
+    assert delay <= 3605, f"Expected delay capped at 3600, got {delay:.0f}s"
+
+
+def test_explicit_delay_does_not_affect_generic_5xx():
+    """Without explicit_delay_seconds, behavior is unchanged (exponential backoff)."""
+    from services.persistence import init_db, enqueue_outbox, get_conn, update_outbox_backoff
+    from datetime import datetime, timedelta, timezone
+
+    init_db()
+    enqueue_outbox("post", {"title": "T", "body": "B"})
+
+    with get_conn() as conn:
+        item_id = conn.execute(
+            "SELECT id FROM outbox WHERE kind='post' ORDER BY id DESC LIMIT 1"
+        ).fetchone()[0]
+
+    # Generic 5xx without explicit delay
+    update_outbox_backoff(item_id, "HTTP 503", retry_attempt=0)
+
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT status, retry_attempt, next_retry_at FROM outbox WHERE id = ?", (item_id,)
+        ).fetchone()
+    assert row[0] == "pending"
+    next_at = datetime.strptime(row[2], "%Y-%m-%d %H:%M:%S")
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    delay = (next_at - now).total_seconds()
+    # Retry 0 with min 60 = 60 * 2^0 = 60
+    assert 55 <= delay <= 65, f"Expected ~60s default backoff, got {delay:.0f}s"
+
+
 
