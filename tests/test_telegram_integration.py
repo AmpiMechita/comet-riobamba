@@ -311,20 +311,19 @@ async def test_clean_counts_pending_does_not_delete():
     client = TelegramClient(bot_token="fake-token", chat_id="12345", enabled=True)
     client.send_message = MagicMock()
 
-    mock_cursor = MagicMock()
-    mock_cursor.execute.return_value.fetchone.return_value = [5]
     mock_conn = MagicMock()
-    mock_conn.cursor.return_value = mock_cursor
+    mock_conn.execute.return_value.fetchone.return_value = [5]
 
-    with patch("services.telegram_client.sqlite3.connect", return_value=mock_conn):
+    with patch("services.persistence.get_conn") as mock_get:
+        mock_get.return_value.__enter__.return_value = mock_conn
         await client._handle_clean(agent=MagicMock())
 
     # Must count pending items
-    mock_cursor.execute.assert_any_call(
+    mock_conn.execute.assert_any_call(
         "SELECT COUNT(*) FROM outbox WHERE status = 'pending'"
     )
     # Must NOT execute any DELETE in the count phase
-    for call in mock_cursor.execute.call_args_list:
+    for call in mock_conn.execute.call_args_list:
         args = call[0][0] if call[0] else ""
         assert "DELETE" not in str(args), f"DELETE found in: {args}"
     # Confirmation message sent
@@ -350,7 +349,8 @@ async def test_clean_zero_pending_shows_empty():
     mock_conn = MagicMock()
     mock_conn.cursor.return_value = mock_cursor
 
-    with patch("services.telegram_client.sqlite3.connect", return_value=mock_conn):
+    with patch("services.persistence.get_conn") as mock_get:
+        mock_get.return_value.__enter__.return_value = mock_conn
         await client._handle_clean(agent=MagicMock())
 
     sent_text = client.send_message.call_args[0][0]
@@ -382,17 +382,16 @@ async def test_clean_confirm_within_window_executes_delete():
     client.send_message = MagicMock()
     client._pending_clean = {"count": 3, "since": time.monotonic()}
 
-    mock_cursor = MagicMock()
-    mock_cursor.execute.return_value.rowcount = 3
     mock_conn = MagicMock()
-    mock_conn.cursor.return_value = mock_cursor
+    mock_conn.execute.return_value.rowcount = 3
 
-    with patch("services.telegram_client.sqlite3.connect", return_value=mock_conn):
+    with patch("services.persistence.get_conn") as mock_get:
+        mock_get.return_value.__enter__.return_value = mock_conn
         await client._handle_clean_confirm(agent=MagicMock())
 
     # DELETE must have been executed
     delete_calls = [
-        c for c in mock_cursor.execute.call_args_list
+        c for c in mock_conn.execute.call_args_list
         if "DELETE" in str(c[0][0] if c[0] else "")
     ]
     assert len(delete_calls) >= 1
@@ -417,7 +416,8 @@ async def test_clean_confirm_expired_rejected():
     mock_conn = MagicMock()
     mock_conn.cursor.return_value = mock_cursor
 
-    with patch("services.telegram_client.sqlite3.connect", return_value=mock_conn):
+    with patch("services.persistence.get_conn") as mock_get:
+        mock_get.return_value.__enter__.return_value = mock_conn
         await client._handle_clean_confirm(agent=MagicMock())
 
     sent_text = client.send_message.call_args[0][0]
@@ -442,7 +442,8 @@ async def test_reconcile_lists_needs_reconciliation_items():
     mock_conn = MagicMock()
     mock_conn.execute.return_value.fetchall.return_value = mock_rows
 
-    with patch("services.telegram_client.sqlite3.connect", return_value=mock_conn):
+    with patch("services.persistence.get_conn") as mock_get:
+        mock_get.return_value.__enter__.return_value = mock_conn
         await client._handle_reconcile(agent=MagicMock())
 
     sent_text = client.send_message.call_args[0][0]
@@ -463,7 +464,8 @@ async def test_reconcile_no_items_shows_empty():
     mock_conn = MagicMock()
     mock_conn.execute.return_value.fetchall.return_value = []
 
-    with patch("services.telegram_client.sqlite3.connect", return_value=mock_conn):
+    with patch("services.persistence.get_conn") as mock_get:
+        mock_get.return_value.__enter__.return_value = mock_conn
         await client._handle_reconcile(agent=MagicMock())
 
     sent_text = client.send_message.call_args[0][0]
@@ -484,7 +486,8 @@ async def test_reconcile_resolve_published():
         "needs_reconciliation", "post", '{"title":"T"}'
     )
 
-    with patch("services.telegram_client.sqlite3.connect", return_value=mock_conn):
+    with patch("services.persistence.get_conn") as mock_get:
+        mock_get.return_value.__enter__.return_value = mock_conn
         await client._handle_reconcile_resolve(agent=MagicMock(), item_id_str="5", outcome="published")
 
     sent_text = client.send_message.call_args[0][0]
@@ -505,7 +508,8 @@ async def test_reconcile_resolve_already_resolved():
         "failed", "post", '{"title":"T"}'
     )
 
-    with patch("services.telegram_client.sqlite3.connect", return_value=mock_conn):
+    with patch("services.persistence.get_conn") as mock_get:
+        mock_get.return_value.__enter__.return_value = mock_conn
         await client._handle_reconcile_resolve(agent=MagicMock(), item_id_str="5", outcome="published")
 
     sent_text = client.send_message.call_args[0][0]
