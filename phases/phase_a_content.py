@@ -446,8 +446,8 @@ def choose_topic(mode: str = "research") -> tuple[str, str]:
         )
         uncovered = []
         for t in all_uncovered:
-            if t.get("source") == "phase_b_feed" and not allow_feed:
-                logger.debug("Phase A: skipping topic '%s' (source=phase_b_feed)", t.get("topic", ""))
+            if str(t.get("source", "")).startswith("phase_b_feed") and not allow_feed:
+                logger.debug("Phase A: skipping topic '%s' (source=%s)", t.get("topic", ""), t.get("source", ""))
                 continue
             uncovered.append(t)
             if len(uncovered) >= 3:
@@ -639,8 +639,8 @@ def _topic_with_matrix_fallback(
         )
         uncovered = []
         for t in all_uncovered:
-            if t.get("source") == "phase_b_feed" and not allow_feed:
-                logger.debug("Phase A: skipping topic '%s' (source=phase_b_feed)", t.get("topic", ""))
+            if str(t.get("source", "")).startswith("phase_b_feed") and not allow_feed:
+                logger.debug("Phase A: skipping topic '%s' (source=%s)", t.get("topic", ""), t.get("source", ""))
                 continue
             uncovered.append(t)
             if len(uncovered) >= 3:

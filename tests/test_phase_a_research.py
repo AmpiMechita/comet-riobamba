@@ -164,3 +164,33 @@ class TestResearchMode:
         topic, source = _topic_with_matrix_fallback(mode="research", matrix=None)
         assert topic == "has date matrix"
         assert source == "agenda"
+
+    # ── Filtro phase_b_feed con UUID (bug real en produccion) ────
+
+    @patch("phases.phase_a_content.load_agenda")
+    def test_choose_topic_filters_phase_b_feed_with_uuid_suffix(self, mock_load):
+        """source='phase_b_feed:<uuid>' debe filtrarse igual que 'phase_b_feed' pelado."""
+        mock_agenda = MagicMock()
+        mock_agenda.get_uncovered_topics.return_value = [
+            {"topic": "feed uuid", "source": "phase_b_feed:84303887-3f7c-4e51-863b-79b3344bf790",
+             "created_at": "2026-07-20"},
+            {"topic": "agenda topic", "source": "agenda", "created_at": "2026-07-01"},
+        ]
+        mock_load.return_value = mock_agenda
+        topic, source = choose_topic(mode="research")
+        assert topic == "agenda topic"
+        assert source == "agenda"
+
+    @patch("phases.phase_a_content.load_agenda")
+    def test_topic_with_matrix_fallback_filters_phase_b_feed_with_uuid(self, mock_load):
+        """_topic_with_matrix_fallback tambien filtra source='phase_b_feed:<uuid>'."""
+        mock_agenda = MagicMock()
+        mock_agenda.get_uncovered_topics.return_value = [
+            {"topic": "feed uuid", "source": "phase_b_feed:84303887-3f7c-4e51-863b-79b3344bf790",
+             "created_at": "2026-07-20"},
+            {"topic": "agenda topic", "source": "agenda", "created_at": "2026-07-01"},
+        ]
+        mock_load.return_value = mock_agenda
+        topic, source = _topic_with_matrix_fallback(mode="research", matrix=None)
+        assert topic == "agenda topic"
+        assert source == "agenda"
