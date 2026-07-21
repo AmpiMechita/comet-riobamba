@@ -6,7 +6,7 @@ import sqlite3
 import hashlib
 import re
 import logging
-from typing import List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional
 from datetime import datetime, timedelta
 from pathlib import Path
 
