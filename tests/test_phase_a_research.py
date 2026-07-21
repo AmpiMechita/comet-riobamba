@@ -6,7 +6,8 @@ from unittest.mock import patch, MagicMock
 
 from phases.phase_a_content import (
     build_prompts, choose_topic, EDITORIAL_CONFIG,
-    RESEARCH_CLOSING_TEMPLATES, compute_topic_weights,
+    RESEARCH_CLOSING_TEMPLATES, _topic_with_matrix_fallback,
+    compute_topic_weights,
 )
 
 
@@ -107,3 +108,59 @@ class TestResearchMode:
         topic, source = choose_topic(mode="research")
         assert topic == "legit topic"
         assert source == "human_seeded"
+
+    # ── Orden por recencia (choose_topic) ─────────────────────────
+
+    @patch("phases.phase_a_content.load_agenda")
+    def test_choose_topic_prioritizes_most_recent_created_at(self, mock_load):
+        """choose_topic elige el topic con created_at mas reciente, no el primero de la lista."""
+        mock_agenda = MagicMock()
+        mock_agenda.get_uncovered_topics.return_value = [
+            {"topic": "old topic", "source": "agenda", "created_at": "2026-07-01"},
+            {"topic": "new topic", "source": "agenda", "created_at": "2026-07-20"},
+        ]
+        mock_load.return_value = mock_agenda
+        topic, source = choose_topic(mode="research")
+        assert topic == "new topic"
+        assert source == "agenda"
+
+    @patch("phases.phase_a_content.load_agenda")
+    def test_choose_topic_missing_created_at_treated_as_oldest(self, mock_load):
+        """Sin created_at (None/empty) el topic no debe ganarle a uno con fecha."""
+        mock_agenda = MagicMock()
+        mock_agenda.get_uncovered_topics.return_value = [
+            {"topic": "no date", "source": "agenda"},
+            {"topic": "has date", "source": "agenda", "created_at": "2026-07-15"},
+        ]
+        mock_load.return_value = mock_agenda
+        topic, source = choose_topic(mode="research")
+        assert topic == "has date"
+        assert source == "agenda"
+
+    # ── Orden por recencia (_topic_with_matrix_fallback) ──────────
+
+    @patch("phases.phase_a_content.load_agenda")
+    def test_topic_with_matrix_fallback_prioritizes_most_recent(self, mock_load):
+        """_topic_with_matrix_fallback tambien ordena por created_at descendente."""
+        mock_agenda = MagicMock()
+        mock_agenda.get_uncovered_topics.return_value = [
+            {"topic": "old matrix", "source": "agenda", "created_at": "2026-07-01"},
+            {"topic": "new matrix", "source": "agenda", "created_at": "2026-07-20"},
+        ]
+        mock_load.return_value = mock_agenda
+        topic, source = _topic_with_matrix_fallback(mode="research", matrix=None)
+        assert topic == "new matrix"
+        assert source == "agenda"
+
+    @patch("phases.phase_a_content.load_agenda")
+    def test_topic_with_matrix_fallback_missing_created_at_oldest(self, mock_load):
+        """_topic_with_matrix_fallback trata created_at ausente como el mas antiguo."""
+        mock_agenda = MagicMock()
+        mock_agenda.get_uncovered_topics.return_value = [
+            {"topic": "no date matrix", "source": "agenda"},
+            {"topic": "has date matrix", "source": "agenda", "created_at": "2026-07-15"},
+        ]
+        mock_load.return_value = mock_agenda
+        topic, source = _topic_with_matrix_fallback(mode="research", matrix=None)
+        assert topic == "has date matrix"
+        assert source == "agenda"

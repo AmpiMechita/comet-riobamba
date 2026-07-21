@@ -435,6 +435,15 @@ def choose_topic(mode: str = "research") -> tuple[str, str]:
         agenda = load_agenda()
         allow_feed = os.environ.get("ALLOW_PHASE_B_FEED_TOPICS", "").lower() == "true"
         all_uncovered = agenda.get_uncovered_topics(limit=50)
+        # Prioriza los temas mas recientes primero (no orden de insercion/FIFO).
+        # Sin esto, un backlog viejo bloquea indefinidamente temas nuevos y de
+        # mejor calidad (ej. arxiv, postmortem_own) que quedan al final de la
+        # cola. created_at ausente/invalido se trata como el mas antiguo.
+        all_uncovered = sorted(
+            all_uncovered,
+            key=lambda t: t.get("created_at") or "",
+            reverse=True,
+        )
         uncovered = []
         for t in all_uncovered:
             if t.get("source") == "phase_b_feed" and not allow_feed:
@@ -619,6 +628,15 @@ def _topic_with_matrix_fallback(
         agenda = load_agenda()
         allow_feed = os.environ.get("ALLOW_PHASE_B_FEED_TOPICS", "").lower() == "true"
         all_uncovered = agenda.get_uncovered_topics(limit=50)
+        # Prioriza los temas mas recientes primero (no orden de insercion/FIFO).
+        # Sin esto, un backlog viejo bloquea indefinidamente temas nuevos y de
+        # mejor calidad (ej. arxiv, postmortem_own) que quedan al final de la
+        # cola. created_at ausente/invalido se trata como el mas antiguo.
+        all_uncovered = sorted(
+            all_uncovered,
+            key=lambda t: t.get("created_at") or "",
+            reverse=True,
+        )
         uncovered = []
         for t in all_uncovered:
             if t.get("source") == "phase_b_feed" and not allow_feed:
