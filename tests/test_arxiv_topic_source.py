@@ -6,10 +6,14 @@ parseo sin depender de red -- el sandbox de CI/dev puede no tener salida a
 export.arxiv.org (ver docs/ESTRATEGIA_MOLTBOOK_2026-07-21.md).
 """
 
+import json
+import time
+
 from services.arxiv_topic_source import (
     build_topic_string,
     parse_arxiv_response,
     refresh_agenda_from_arxiv,
+    refresh_agenda_from_arxiv_guarded,
 )
 from services.research_agenda import ResearchAgenda
 
@@ -122,3 +126,46 @@ def test_refresh_agenda_from_arxiv_no_papers_returns_zero(monkeypatch):
     monkeypatch.setattr("services.arxiv_topic_source.fetch_recent_papers", lambda **kwargs: [])
     added = refresh_agenda_from_arxiv()
     assert added == 0
+
+
+def test_guarded_refresh_skips_within_interval(monkeypatch, tmp_path):
+    state_path = tmp_path / "arxiv_refresh_last_run.json"
+    state_path.write_text(json.dumps({"last_refreshed_at": time.time()}), encoding="utf-8")
+    monkeypatch.setattr("services.arxiv_topic_source.REFRESH_STATE_PATH", state_path)
+
+    called = []
+    monkeypatch.setattr(
+        "services.arxiv_topic_source.refresh_agenda_from_arxiv",
+        lambda **kw: called.append(1) or 5,
+    )
+
+    result = refresh_agenda_from_arxiv_guarded(interval_hours=24)
+
+    assert result == {"skipped": True, "added": 0}
+    assert called == []  # no debe llamar a la red si esta dentro del intervalo
+
+
+def test_guarded_refresh_runs_when_no_prior_state(monkeypatch, tmp_path):
+    state_path = tmp_path / "arxiv_refresh_last_run.json"  # no existe
+    monkeypatch.setattr("services.arxiv_topic_source.REFRESH_STATE_PATH", state_path)
+    monkeypatch.setattr(
+        "services.arxiv_topic_source.refresh_agenda_from_arxiv", lambda **kw: 3
+    )
+
+    result = refresh_agenda_from_arxiv_guarded(interval_hours=24)
+
+    assert result == {"skipped": False, "added": 3}
+    assert json.loads(state_path.read_text())["last_refreshed_at"] > 0
+
+
+def test_guarded_refresh_force_ignores_interval(monkeypatch, tmp_path):
+    state_path = tmp_path / "arxiv_refresh_last_run.json"
+    state_path.write_text(json.dumps({"last_refreshed_at": time.time()}), encoding="utf-8")
+    monkeypatch.setattr("services.arxiv_topic_source.REFRESH_STATE_PATH", state_path)
+    monkeypatch.setattr(
+        "services.arxiv_topic_source.refresh_agenda_from_arxiv", lambda **kw: 2
+    )
+
+    result = refresh_agenda_from_arxiv_guarded(respect_interval=False)
+
+    assert result == {"skipped": False, "added": 2}

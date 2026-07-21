@@ -720,7 +720,23 @@ class PhaseCAnalytics:
         except Exception as e:
             logger.warning("Phase C: research agenda prune failed: %s", e)
             results["research_agenda_pruned"] = False
-        
+
+        # Refresh topic candidates from arXiv (self-renewing source for Fase A).
+        # Safe to call every cycle: internal frequency guard (default 24h)
+        # no-ops silently if the interval has not elapsed.
+        try:
+            from services.arxiv_topic_source import refresh_agenda_from_arxiv_guarded
+            arxiv_res = refresh_agenda_from_arxiv_guarded()
+            if not arxiv_res.get("skipped"):
+                logger.info(
+                    "Phase C: arXiv topic refresh — %d temas nuevos agregados a la agenda.",
+                    arxiv_res.get("added", 0),
+                )
+            results["arxiv_topics_added"] = arxiv_res.get("added", 0)
+        except Exception as e:
+            logger.warning("Phase C: arXiv topic refresh failed: %s", e)
+            results["arxiv_topics_added"] = 0
+
         # Update state
         state["last_analytics_run"] = datetime.now().isoformat()
         state["metrics_history"].append({"ts": datetime.now().isoformat(), **metrics})

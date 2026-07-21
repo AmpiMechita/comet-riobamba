@@ -20,8 +20,11 @@ aparte (ver docs/ESTRATEGIA_MOLTBOOK_2026-07-21.md, punto 4.1).
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import re
+from pathlib import Path
 from typing import Dict, List
 from xml.etree import ElementTree as ET
 
@@ -33,6 +36,33 @@ logger = logging.getLogger(__name__)
 
 ARXIV_API_URL = "http://export.arxiv.org/api/query"
 ARXIV_NS = {"atom": "http://www.w3.org/2005/Atom"}
+
+# ── Frequency guard (mismo patron que prune_agenda en research_agenda.py) ──
+# arXiv pide uso razonable de su API publica; refrescar una vez por dia alcanza
+# para mantener la agenda con material fresco sin golpear el servicio de mas.
+REFRESH_STATE_PATH = Path("data/arxiv_refresh_last_run.json")
+REFRESH_INTERVAL_HOURS = float(os.getenv("ARXIV_REFRESH_INTERVAL_HOURS", "24"))
+
+
+def _load_refresh_last_run() -> float:
+    try:
+        with open(REFRESH_STATE_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return float(data.get("last_refreshed_at", 0.0))
+    except (FileNotFoundError, ValueError, TypeError, json.JSONDecodeError):
+        return 0.0
+    except Exception as e:
+        logger.debug("arxiv_topic_source: could not read refresh state: %s", e)
+        return 0.0
+
+
+def _save_refresh_last_run(epoch: float) -> None:
+    try:
+        REFRESH_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(REFRESH_STATE_PATH, "w", encoding="utf-8") as f:
+            json.dump({"last_refreshed_at": epoch}, f, ensure_ascii=False)
+    except Exception as e:
+        logger.warning("arxiv_topic_source: could not persist refresh state: %s", e)
 
 # Categorias + keywords alineadas con el vertical real de COMET (agentes en
 # produccion, no investigacion academica pura).
@@ -129,6 +159,38 @@ def refresh_agenda_from_arxiv(query: str = DEFAULT_QUERY, max_results: int = 8) 
         save_agenda(agenda)
         logger.info("arxiv_topic_source: %d temas nuevos agregados desde arXiv.", added)
     return added
+
+
+def refresh_agenda_from_arxiv_guarded(
+    query: str = DEFAULT_QUERY,
+    max_results: int = 8,
+    respect_interval: bool = True,
+    interval_hours: float = REFRESH_INTERVAL_HOURS,
+) -> Dict[str, object]:
+    """Wrapper con guard de frecuencia para uso en ciclos automaticos (Fase C).
+
+    Seguro de llamar en cada ciclo: si no paso ``interval_hours`` desde la
+    ultima corrida exitosa, no-opea en silencio (mismo patron que
+    prune_agenda). Pasar respect_interval=False para forzar (tests / manual).
+
+    Returns: {"skipped": bool, "added": int}
+    """
+    import time
+
+    if respect_interval:
+        last_run = _load_refresh_last_run()
+        if last_run > 0.0:
+            elapsed_hours = (time.time() - last_run) / 3600.0
+            if elapsed_hours < interval_hours:
+                logger.debug(
+                    "arxiv_topic_source: skipped (%.1fh since last run < %.1fh interval)",
+                    elapsed_hours, interval_hours,
+                )
+                return {"skipped": True, "added": 0}
+
+    added = refresh_agenda_from_arxiv(query=query, max_results=max_results)
+    _save_refresh_last_run(time.time())
+    return {"skipped": False, "added": added}
 
 
 if __name__ == "__main__":
