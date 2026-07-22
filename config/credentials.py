@@ -28,6 +28,7 @@ class Credentials:
     tier_sonnet: Optional[TierConfig] = None
     tier_haiku: Optional[TierConfig] = None
     tier_openrouter: Optional[TierConfig] = None
+    tier_cloudflare: Optional[TierConfig] = None
 
     cerebras_api_key: str = ""
     cerebras_url: str = ""
@@ -79,6 +80,7 @@ class Credentials:
             tier_sonnet=_tier("SONNET", 60),
             tier_haiku=_tier("HAIKU", 30),
             tier_openrouter=_tier("OPENROUTER", 60),
+            tier_cloudflare=_tier("CLOUDFLARE", 60),
             cerebras_api_key=os.getenv("CEREBRAS_API_KEY", ""),
             cerebras_url=os.getenv("CEREBRAS_API_URL", "https://api.cerebras.ai/v1/chat/completions"),
             cerebras_model=os.getenv("CEREBRAS_MODEL", "llama-3.3-70b"),

@@ -147,10 +147,12 @@ class ModelCascade:
         # limitada a Anthropic (primario) → DeepSeek (fallback).
         _gemini_enabled = os.getenv("GEMINI_ENABLED", "false").strip().lower() in ("1", "true", "yes")
         _openrouter_enabled = os.getenv("OPENROUTER_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+        _cloudflare_enabled = os.getenv("CLOUDFLARE_ENABLED", "false").strip().lower() in ("1", "true", "yes")
 
         tier_configs: list[tuple[str, Optional[TierConfig], bool]] = [
             ("tier_sonnet", creds.tier_sonnet, _gemini_enabled),
             ("openrouter", creds.tier_openrouter, _openrouter_enabled),
+            ("cloudflare", creds.tier_cloudflare, _cloudflare_enabled),
         ]
         for provider_name, cfg, flag_enabled in tier_configs:
             if cfg is None:
@@ -171,6 +173,28 @@ class ModelCascade:
                     max_retries=self.default_retries,
                     cooldown_seconds=self.default_cooldown,
                     failure_threshold=self.default_failure_threshold,
+                )
+            )
+
+        # ── Cerebras: fallback de CONTENIDO (flag independiente, entrada separada) ──
+        # Provider adicional para generación de contenido, distinto del de CAPTCHA
+        # de abajo (ese sigue explicit_only=True, sin tocar). Activado 22/7/2026
+        # porque Anthropic y DeepSeek se quedaron sin crédito — Cerebras tiene tier
+        # gratis real. Flag propio (CEREBRAS_CONTENT_ENABLED) para poder apagarlo
+        # sin afectar el pipeline de CAPTCHA.
+        _cerebras_content_enabled = os.getenv("CEREBRAS_CONTENT_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+        if creds.cerebras_api_key and _cerebras_content_enabled:
+            self.providers.append(
+                ProviderConfig(
+                    name="cerebras_content",
+                    url=creds.cerebras_url,
+                    model=creds.cerebras_model,
+                    api_key=creds.cerebras_api_key,
+                    timeout=creds.cerebras_timeout,
+                    max_retries=self.default_retries,
+                    cooldown_seconds=self.default_cooldown,
+                    failure_threshold=self.default_failure_threshold,
+                    explicit_only=False,
                 )
             )
 
