@@ -237,7 +237,9 @@ async def test_phase_a_internal_gate_skips_when_limit_reached():
     _override_behavior_cfg(1)
     state = AgentState()
     state.posts_today = 1  # ya se publicó 1 hoy
-    hoy = datetime.now().date().isoformat()
+    from datetime import datetime
+    fake_now = datetime(2026, 7, 22, 12, 0, 0)
+    hoy = fake_now.date().isoformat()
     state.last_post_date = hoy
 
     from phases.deps import PhaseADeps
@@ -250,7 +252,10 @@ async def test_phase_a_internal_gate_skips_when_limit_reached():
     )
     from phases.phase_a_content import PhaseAContentGeneration
     phase_a = PhaseAContentGeneration(deps=deps)
-    result = await phase_a.execute()
+    with patch("phases.phase_a_content.datetime") as mock_dt:
+        mock_dt.now.return_value = fake_now
+        mock_dt.fromisoformat.side_effect = lambda s: datetime.fromisoformat(s)
+        result = await phase_a.execute()
     assert result.get("skipped") == "daily_limit_reached", f"Esperado skip, obtenido {result}"
 
 
@@ -312,7 +317,9 @@ async def test_phase_a_internal_gate_allows_when_under_limit():
     _override_behavior_cfg(1)
     state = AgentState()
     state.posts_today = 0
-    hoy = datetime.now().date().isoformat()
+    from datetime import datetime
+    fake_now = datetime(2026, 7, 22, 12, 0, 0)
+    hoy = fake_now.date().isoformat()
     state.last_post_date = hoy
 
     # Mock ligero para que execute() no llame a la API real
@@ -342,7 +349,10 @@ async def test_phase_a_internal_gate_allows_when_under_limit():
             )
             from phases.phase_a_content import PhaseAContentGeneration
             phase_a = PhaseAContentGeneration(deps=deps)
-            result = await phase_a.execute()
+            with patch("phases.phase_a_content.datetime") as mock_dt:
+                mock_dt.now.return_value = fake_now
+                mock_dt.fromisoformat.side_effect = lambda s: datetime.fromisoformat(s)
+                result = await phase_a.execute()
         finally:
             pac._TOPIC_HISTORY_FILE = _orig_th
             Path("data/test_topic_history_tmp.json").unlink(missing_ok=True)

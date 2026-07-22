@@ -203,6 +203,7 @@ class TestResearchMode:
 @pytest.mark.asyncio
 async def test_execute_pacing_blocks_before_model_call():
     """Pacing check debe ejecutarse ANTES de llamar al modelo (no gasta LLM si no se puede publicar)."""
+    from datetime import datetime, timedelta
     from phases.deps import PhaseADeps
     from phases.phase_a_content import PhaseAContentGeneration
 
@@ -214,7 +215,10 @@ async def test_execute_pacing_blocks_before_model_call():
         get_posts_today=lambda: 0,
     )
 
+    fake_now = datetime(2026, 7, 22, 12, 0, 0)
+
     with (
+        patch("phases.phase_a_content.datetime") as mock_dt,
         patch("phases.phase_a_content.behavior_cfg", {"max_posts_per_day": 5, "phase_a_mode": "research"}),
         patch("services.persistence.load_agent_state") as mock_state,
         patch("phases.phase_a_content.choose_topic", return_value=("test topic", "agenda")),
@@ -224,7 +228,9 @@ async def test_execute_pacing_blocks_before_model_call():
         patch("phases.phase_a_content.load_editorial_policy", return_value={}),
         patch("phases.phase_a_content.call_model") as mock_call_model,
     ):
-        mock_state.return_value = {"last_post_timestamp": "2026-07-21T18:30:00"}
+        mock_dt.now.return_value = fake_now
+        mock_dt.fromisoformat.side_effect = lambda s: datetime.fromisoformat(s)
+        mock_state.return_value = {"last_post_timestamp": (fake_now - timedelta(minutes=3)).isoformat()}
         phase_a = PhaseAContentGeneration(deps=deps)
         result = await phase_a.execute()
 
