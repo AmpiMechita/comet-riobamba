@@ -133,6 +133,16 @@ class TestExtractClaimModule:
         assert "truncated JSON" in msg
 
 
+    @pytest.mark.asyncio
+    async def test_extract_claim_uses_400_max_tokens(self):
+        """Fix 2: extract_claim pasa max_tokens=400."""
+        llm = AsyncMock()
+        llm.generate.return_value = '{"central_claim": "x", "reply_must_address": "y"}'
+        await extract_claim("post", "comment", llm)
+        call_kwargs = llm.generate.call_args[1]
+        assert call_kwargs["max_tokens"] == 400
+
+
 class TestCheckClaimModule:
     """Tests for the check_claim function in services/claim_checker.py."""
 
@@ -205,6 +215,15 @@ class TestCheckClaimModule:
         result = await check_claim({"central_claim": "x", "reply_must_address": "y"}, "reply draft", llm)
         assert result["on_topic"] is False
         assert result["score"] == 0.3
+
+    @pytest.mark.asyncio
+    async def test_check_claim_uses_400_max_tokens(self):
+        """Fix 2: check_claim pasa max_tokens=400."""
+        llm = AsyncMock()
+        llm.generate.return_value = '{"on_topic": true, "reason": "ok", "score": 0.9}'
+        await check_claim({"central_claim": "x", "reply_must_address": "y"}, "reply draft", llm)
+        call_kwargs = llm.generate.call_args[1]
+        assert call_kwargs["max_tokens"] == 400
 
 
 # ── _strip_code_fences unit tests ──────────────────────────────────

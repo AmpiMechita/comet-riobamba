@@ -2,7 +2,9 @@
 
 import os
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
+
+pytest_plugins = ("pytest_asyncio",)
 
 from phases.phase_a_content import (
     build_prompts, choose_topic, EDITORIAL_CONFIG,
@@ -194,3 +196,37 @@ class TestResearchMode:
         topic, source = _topic_with_matrix_fallback(mode="research", matrix=None)
         assert topic == "agenda topic"
         assert source == "agenda"
+
+
+# ── Fix 1: Pacing check antes del loop de generación ────────────
+
+@pytest.mark.asyncio
+async def test_execute_pacing_blocks_before_model_call():
+    """Pacing check debe ejecutarse ANTES de llamar al modelo (no gasta LLM si no se puede publicar)."""
+    from phases.deps import PhaseADeps
+    from phases.phase_a_content import PhaseAContentGeneration
+
+    deps = PhaseADeps(
+        model_cascade=AsyncMock(),
+        moltbook_client=MagicMock(),
+        behavior_cfg={"max_posts_per_day": 5},
+        posts_today=0,
+        get_posts_today=lambda: 0,
+    )
+
+    with (
+        patch("phases.phase_a_content.behavior_cfg", {"max_posts_per_day": 5, "phase_a_mode": "research"}),
+        patch("services.persistence.load_agent_state") as mock_state,
+        patch("phases.phase_a_content.choose_topic", return_value=("test topic", "agenda")),
+        patch("phases.phase_a_content._is_allowed_topic", return_value=True),
+        patch("phases.phase_a_content._is_topic_recently_used", return_value=False),
+        patch("phases.phase_a_content.build_prompts", return_value=("sys", "user")),
+        patch("phases.phase_a_content.load_editorial_policy", return_value={}),
+        patch("phases.phase_a_content.call_model") as mock_call_model,
+    ):
+        mock_state.return_value = {"last_post_timestamp": "2026-07-21T18:30:00"}
+        phase_a = PhaseAContentGeneration(deps=deps)
+        result = await phase_a.execute()
+
+        mock_call_model.assert_not_called()
+        assert any(p.get("error") == "pacing_blocked" for p in result.get("posts", []))

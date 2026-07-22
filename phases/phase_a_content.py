@@ -906,6 +906,31 @@ class PhaseAContentGeneration:
                 pass
 
             logger.info("Phase A: topic='%s' variant=%s", topic, variant)
+
+            # ── Pacing check: 2h minimum between real posts (antes del loop de generación) ──
+            try:
+                from core.state_manager import PACING_MIN_HOURS
+                from services.persistence import load_agent_state
+                state = load_agent_state()
+                last_ts = state.get("last_post_timestamp")
+                if last_ts:
+                    last = datetime.fromisoformat(last_ts)
+                    elapsed = datetime.now() - last
+                    hours_since_last = elapsed.total_seconds() / 3600
+                    allowed = elapsed >= timedelta(hours=PACING_MIN_HOURS)
+                    logger.info("Phase A: Pacing check — último post hace %.1fh, mínimo=%dh -> %s",
+                                hours_since_last, PACING_MIN_HOURS, "ALLOWED" if allowed else "BLOCKED")
+                    if not allowed:
+                        posts.append({
+                            "title": "", "body": "",
+                            "metadata": {"topic": topic},
+                            "error": "pacing_blocked",
+                            "published": False,
+                        })
+                        continue
+            except Exception as e:
+                logger.debug("Phase A: pacing check skipped: %s", e)
+
             max_attempts = EDITORIAL_CONFIG["phase_a_max_attempts"]
             generated_post: Optional[Dict[str, Any]] = None
             for attempt in range(1, max_attempts + 1):
@@ -968,27 +993,6 @@ class PhaseAContentGeneration:
                 generated_post["error"] = "daily_limit_reached_before_publish"
                 posts.append(generated_post)
                 continue
-
-            # ── v5.1: Pacing check — enforce 2h minimum between posts ──
-            try:
-                from core.state_manager import PACING_MIN_HOURS
-                from services.persistence import load_agent_state
-                state = load_agent_state()
-                last_ts = state.get("last_post_timestamp")
-                if last_ts:
-                    last = datetime.fromisoformat(last_ts)
-                    elapsed = datetime.now() - last
-                    hours_since_last = elapsed.total_seconds() / 3600
-                    allowed = elapsed >= timedelta(hours=PACING_MIN_HOURS)
-                    logger.info("Phase A: Pacing check — último post hace %.1fh, mínimo=%dh -> %s",
-                                hours_since_last, PACING_MIN_HOURS, "ALLOWED" if allowed else "BLOCKED")
-                    if not allowed:
-                        remaining = timedelta(hours=PACING_MIN_HOURS) - elapsed
-                        generated_post["error"] = "pacing_blocked"
-                        posts.append(generated_post)
-                        continue
-            except Exception as e:
-                logger.debug("Phase A: pacing check skipped: %s", e)
 
             try:
                 logger.info("Phase A: publicando post en Moltbook...")

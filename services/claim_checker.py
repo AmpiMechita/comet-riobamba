@@ -79,7 +79,7 @@ async def extract_claim(
             tier=tier,
             prompt=prompt,
             system_prompt=EXTRACT_CLAIM_SYSTEM,
-            max_tokens=150,
+            max_tokens=400,
             temperature=0.1,
         )
         if not raw or not raw.strip():
@@ -130,7 +130,7 @@ async def check_claim(
             tier=tier,
             prompt=prompt,
             system_prompt=CHECK_CLAIM_SYSTEM,
-            max_tokens=150,
+            max_tokens=400,
             temperature=0.1,
         )
         if not raw or not raw.strip():
