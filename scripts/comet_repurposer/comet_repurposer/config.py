@@ -57,8 +57,8 @@ PROVIDER_DEFAULT_MODELS = {
     "MODEL_TIER_SONNET_API_KEY": "gemini-2.5-flash",
     "MODEL_TIER_HAIKU_API_KEY": "gemini-2.5-flash-lite",
     "GROQ_API_KEY": "llama-3.3-70b-versatile",
-    "MODEL_TIER_OPENROUTER_API_KEY": "openai/gpt-oss-120b:free",
-    "CEREBRAS_API_KEY": "llama-3.3-70b",
+    "MODEL_TIER_OPENROUTER_API_KEY": "openai/gpt-oss-20b:free",
+    "CEREBRAS_API_KEY": "llama3.1-70b",
     "OPENAI_API_KEY": "gpt-4o-mini",
 }
 
