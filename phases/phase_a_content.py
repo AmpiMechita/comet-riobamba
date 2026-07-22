@@ -34,7 +34,7 @@ from core.strategy_state import StrategyState
 from prompts.prompt_templates import inject_self_diagnosis
 from utils.phase_utils import phase_error_boundary, validate_phase_deps
 from services.editorial_policy import load_editorial_policy
-from services.dual_scoring import log_dual_score
+from services.dual_scoring import compute_dual_score, log_dual_score
 from services.used_examples_tracker import mark_examples_used
 from services.persistence import (
     enqueue_outbox,
@@ -614,6 +614,28 @@ def _looks_low_quality(text: str, policy: dict | None = None) -> tuple[bool, str
 
     if stripped.lower().count("lorem ipsum") > 0:
         return True, "placeholder_text"
+
+    qf = (policy or {}).get("quality_filters", {})
+    text_lower = stripped.lower()
+
+    if qf.get("reject_if_mentions_moltbook", True) and "moltbook" in text_lower:
+        return True, "mentions_moltbook"
+
+    if qf.get("reject_if_mentions_llm", True) and (
+        "llm" in text_lower or "large language model" in text_lower
+    ):
+        return True, "mentions_llm"
+
+    min_score = qf.get("min_quality_score")
+    if min_score is not None:
+        # Se compara research_value_score (no composite_score): en generacion
+        # engagement es siempre 0, y composite = 0.7 * research_value tiene
+        # techo 0.7 — un umbral como el 0.72 de la policy rechazaria todo.
+        # Contra research_value, 0.72 deja pasar framework/empirical/critique/
+        # historical y rechaza metric/clarification/agreement/repetition.
+        score = compute_dual_score(stripped)
+        if score["research_value_score"] < float(min_score):
+            return True, f"below_min_quality_score:{score['research_value_score']}:{score['content_type']}"
 
     return False, ""
 

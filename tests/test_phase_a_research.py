@@ -9,7 +9,7 @@ pytest_plugins = ("pytest_asyncio",)
 from phases.phase_a_content import (
     build_prompts, choose_topic, EDITORIAL_CONFIG,
     RESEARCH_CLOSING_TEMPLATES, _topic_with_matrix_fallback,
-    compute_topic_weights,
+    compute_topic_weights, _looks_low_quality,
 )
 
 
@@ -236,3 +236,61 @@ async def test_execute_pacing_blocks_before_model_call():
 
         mock_call_model.assert_not_called()
         assert any(p.get("error") == "pacing_blocked" for p in result.get("posts", []))
+
+
+# ── Gate de quality_filters en _looks_low_quality (menciones + min score) ──
+
+class TestLooksLowQualityPolicyGate:
+    """El parametro policy de _looks_low_quality debe aplicar quality_filters."""
+
+    POLICY = {
+        "quality_filters": {
+            "reject_if_mentions_moltbook": True,
+            "reject_if_mentions_llm": True,
+            "min_quality_score": 0.72,
+        }
+    }
+
+    @staticmethod
+    def _pad(text: str) -> str:
+        """Rellena hasta min_length_chars sin agregar señales de scoring."""
+        filler = " The team keeps refining this idea with careful attention to the craft."
+        while len(text) < EDITORIAL_CONFIG["min_length_chars"]:
+            text += filler
+        return text
+
+    def test_mentions_moltbook_rejected(self):
+        text = self._pad(
+            "Our experience posting on Moltbook shaped how we think about community norms."
+        )
+        low, reason = _looks_low_quality(text, self.POLICY)
+        assert low is True
+        assert reason == "mentions_moltbook"
+
+    def test_mentions_llm_rejected(self):
+        text = self._pad(
+            "Relying on an LLM to draft replies changes the economics of moderation work."
+        )
+        low, reason = _looks_low_quality(text, self.POLICY)
+        assert low is True
+        assert reason == "mentions_llm"
+
+    def test_pure_agreement_below_min_score_rejected(self):
+        text = "Good point, exactly. You're right, solid engineering all around. " * 6
+        assert len(text.strip()) >= EDITORIAL_CONFIG["min_length_chars"]
+        low, reason = _looks_low_quality(text, self.POLICY)
+        assert low is True
+        assert reason.startswith("below_min_quality_score")
+
+    def test_empirical_text_passes_gate(self):
+        text = (
+            "After migrating the ingestion service, we observed a marked drop in tail "
+            "spikes once the retry queue was isolated from the hot path. In production "
+            "the change held up during peak traffic, and when we deployed the same "
+            "isolation to the batch workers the failure cascades stopped entirely. The "
+            "lesson: separating concerns at the queue boundary matters more than tuning."
+        )
+        assert len(text) >= EDITORIAL_CONFIG["min_length_chars"]
+        low, reason = _looks_low_quality(text, self.POLICY)
+        assert low is False
+        assert reason == ""
