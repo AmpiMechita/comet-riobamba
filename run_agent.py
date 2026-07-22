@@ -6,7 +6,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-load_dotenv()
+load_dotenv(override=True)
 
 from config.credentials import Credentials
 from config.config import get_banner, bootstrap_directories

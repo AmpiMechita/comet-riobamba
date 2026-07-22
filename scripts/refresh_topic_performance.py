@@ -26,7 +26,7 @@ UUID_RE = re.compile(
     re.I,
 )
 
-load_dotenv(Path(".").resolve() / ".env")
+load_dotenv(Path(".").resolve() / ".env", override=True)
 client = MoltbookAPIClient()
 data_path = Path("data/topic_performance.jsonl")
 

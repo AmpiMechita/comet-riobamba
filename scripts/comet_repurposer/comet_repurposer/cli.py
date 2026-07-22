@@ -639,7 +639,7 @@ def main(argv: list[str] | None = None) -> int:
             from dotenv import load_dotenv
             env_path = cfg.project_root / ".env"
             if env_path.exists():
-                load_dotenv(env_path)
+                load_dotenv(env_path, override=True)
             cfg.linkedin_credentials = {
                 "client_id": os.getenv("LINKEDIN_CLIENT_ID", ""),
                 "client_secret": os.getenv("LINKEDIN_CLIENT_SECRET", ""),

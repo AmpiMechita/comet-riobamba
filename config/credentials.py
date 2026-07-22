@@ -58,7 +58,7 @@ class Credentials:
 
     @classmethod
     def from_env(cls) -> Credentials:
-        load_dotenv()
+        load_dotenv(override=True)
 
         def _tier(name: str, default_timeout: int = 60) -> Optional[TierConfig]:
             url = os.getenv(f"MODEL_TIER_{name}_URL", "").strip()

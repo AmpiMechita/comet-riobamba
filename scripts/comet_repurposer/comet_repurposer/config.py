@@ -121,7 +121,7 @@ class RepurposeConfig:
         project_root = Path(project_root or os.getcwd()).resolve()
         env_path = env_file or (project_root / ".env")
         if env_path.exists():
-            load_dotenv(env_path)
+            load_dotenv(env_path, override=True)
 
         # Build provider cascade from .env
         providers: List[dict] = []
