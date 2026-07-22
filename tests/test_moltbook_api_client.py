@@ -445,6 +445,117 @@ def test_post_reply_does_not_fallback_on_http_error():
     assert call_count[0] == 1  # exactly one call, no fallback retry
 
 
+# ── get_post ──────────────────────────────────────────────────────────
+
+
+def test_get_post_success():
+    """get_post returns the post dict on 200 with valid post object."""
+    client = _make_client()
+    client._request = MagicMock(return_value={
+        "status": 200,
+        "data": {
+            "success": True,
+            "post": {
+                "id": "abc-123",
+                "title": "Test",
+                "score": 42,
+                "upvotes": 42,
+                "comment_count": 7,
+            },
+        },
+    })
+    result = client.get_post("abc-123")
+    assert result is not None
+    assert result["id"] == "abc-123"
+    assert result["score"] == 42
+    assert result["comment_count"] == 7
+
+
+def test_get_post_404_returns_none():
+    """get_post returns None on 404 without raising."""
+    client = _make_client()
+    client._request = MagicMock(return_value={"status": 404, "data": {}})
+    assert client.get_post("abc-123") is None
+
+
+def test_get_post_network_error_returns_none():
+    """get_post returns None when _request raises, without propagating."""
+    client = _make_client()
+    client._request = MagicMock(side_effect=ConnectionError("timeout"))
+    assert client.get_post("abc-123") is None
+
+
+def test_get_post_empty_id_returns_none():
+    """get_post returns None immediately when post_id is empty."""
+    client = _make_client()
+    assert client.get_post("") is None
+    assert client.get_post(None) is None
+
+
+def test_get_post_missing_post_field_returns_none():
+    """get_post logs warning and returns None if response lacks 'post' key."""
+    client = _make_client()
+    client._request = MagicMock(return_value={
+        "status": 200,
+        "data": {"success": True},
+    })
+    assert client.get_post("abc-123") is None
+
+
+def test_get_post_non_dict_post_returns_none():
+    """get_post returns None if post field is not a dict."""
+    client = _make_client()
+    client._request = MagicMock(return_value={
+        "status": 200,
+        "data": {"success": True, "post": "not-a-dict"},
+    })
+    assert client.get_post("abc-123") is None
+
+
+def test_get_post_preserves_all_raw_fields():
+    """get_post returns the full raw dict, not a filtered subset."""
+    client = _make_client()
+    raw_post = {
+        "id": "abc-123",
+        "title": "Test",
+        "content": "body",
+        "upvotes": 42,
+        "downvotes": 3,
+        "score": 39,
+        "comment_count": 7,
+        "hot_score": 1.5,
+        "author": {"id": "u1", "name": "test"},
+        "submolt": {"id": "s1", "name": "general"},
+        "created_at": "2026-06-13T08:34:45Z",
+    }
+    client._request = MagicMock(return_value={
+        "status": 200,
+        "data": {"success": True, "post": raw_post},
+    })
+    result = client.get_post("abc-123")
+    assert result == raw_post
+
+
+def test_get_post_request_url():
+    """get_post calls GET /posts/{post_id}."""
+    client = _make_client()
+    client._request = MagicMock(return_value={
+        "status": 200,
+        "data": {"success": True, "post": {"id": "abc-123"}},
+    })
+    client.get_post("abc-123")
+    client._request.assert_called_once_with("GET", "/posts/abc-123")
+
+
+def test_get_post_no_data_key_returns_none():
+    """get_post handles response without 'data' key gracefully."""
+    client = _make_client()
+    client._request = MagicMock(return_value={"status": 200})
+    assert client.get_post("abc-123") is None
+
+
+# ── post_reply fallback guard ────────────────────────────────────
+
 def test_post_reply_missing_post_id():
     """post_reply returns error immediately when post_id is not provided."""
     client = _make_client()

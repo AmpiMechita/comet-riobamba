@@ -622,6 +622,28 @@ class MoltbookAPIClient(PlatformClient):
 
         return []
 
+    def get_post(self, post_id: str):
+        """GET /posts/{post_id} — return the full post dict with live score/upvotes/comment_count.
+
+        Returns the raw post dict (all API fields preserved) on success,
+        or None on any error (404, network, etc.).  Never raises.
+        """
+        if not post_id:
+            return None
+        try:
+            result = self._request("GET", f"/posts/{post_id}")
+            if 200 <= result["status"] < 300:
+                data = result.get("data") or {}
+                post = data.get("post")
+                if isinstance(post, dict):
+                    return dict(post)
+                logger.warning("get_post(%s): respuesta sin campo 'post'", post_id)
+            else:
+                logger.warning("get_post(%s): HTTP %s", post_id, result["status"])
+        except Exception as e:
+            logger.warning("get_post(%s) falló: %s", post_id, e)
+        return None
+
     def fetchcomments(
         self,
         sincehours: int = 4,
