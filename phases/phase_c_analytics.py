@@ -737,6 +737,24 @@ class PhaseCAnalytics:
             logger.warning("Phase C: arXiv topic refresh failed: %s", e)
             results["arxiv_topics_added"] = 0
 
+        # Refresh live engagement in topic_performance.jsonl (Fase A lo lee via
+        # _load_topic_performance para filtrar temas con engagement cero).
+        # Safe to call every cycle: internal frequency guard (default 24h)
+        # no-ops silently if the interval has not elapsed. Ventana de 14 dias
+        # para que el costo (1 GET por post) no crezca con la vida del agente.
+        try:
+            from services.topic_performance_refresh import refresh_topic_performance_guarded
+            tp_res = refresh_topic_performance_guarded()
+            if not tp_res.get("skipped"):
+                logger.info(
+                    "Phase C: topic performance refresh — checked=%d failed=%d skipped_window=%d",
+                    tp_res.get("checked", 0), tp_res.get("failed", 0), tp_res.get("skipped_window", 0),
+                )
+            results["topic_performance_refreshed"] = not tp_res.get("skipped")
+        except Exception as e:
+            logger.warning("Phase C: topic performance refresh failed: %s", e)
+            results["topic_performance_refreshed"] = False
+
         # Update state
         state["last_analytics_run"] = datetime.now().isoformat()
         state["metrics_history"].append({"ts": datetime.now().isoformat(), **metrics})
