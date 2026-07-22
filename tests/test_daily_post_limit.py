@@ -349,7 +349,12 @@ async def test_phase_a_internal_gate_allows_when_under_limit():
             )
             from phases.phase_a_content import PhaseAContentGeneration
             phase_a = PhaseAContentGeneration(deps=deps)
-            with patch("phases.phase_a_content.datetime") as mock_dt:
+            with (
+                patch("phases.phase_a_content.datetime") as mock_dt,
+                # Aisla el gate semanal del published_posts.json real: sin esto,
+                # el test se volveria flaky en cuanto haya >=3 posts reales en 7 dias.
+                patch("services.own_post_store.count_posts_since", return_value=0),
+            ):
                 mock_dt.now.return_value = fake_now
                 mock_dt.fromisoformat.side_effect = lambda s: datetime.fromisoformat(s)
                 result = await phase_a.execute()
@@ -358,3 +363,73 @@ async def test_phase_a_internal_gate_allows_when_under_limit():
             Path("data/test_topic_history_tmp.json").unlink(missing_ok=True)
 
     assert "skipped" not in result, f"No debería saltar, resultado={result}"
+
+
+# ── Tests: gate semanal (max_posts_per_week de editorial_policy) ──
+
+@pytest.mark.asyncio
+async def test_phase_a_weekly_gate_skips_when_weekly_limit_reached():
+    """execute() se salta con weekly_limit_reached si ya hay 3 posts en 7 días."""
+    _clean_db()
+    from phases.deps import PhaseADeps
+    deps = PhaseADeps(
+        model_cascade=MagicMock(),
+        moltbook_client=MagicMock(),
+        behavior_cfg={"max_posts_per_day": 5},
+        posts_today=0,
+        get_posts_today=lambda: 0,
+    )
+    from phases.phase_a_content import PhaseAContentGeneration
+    fake_now = datetime(2026, 7, 22, 12, 0, 0)
+    phase_a = PhaseAContentGeneration(deps=deps)
+    with (
+        patch("phases.phase_a_content.datetime") as mock_dt,
+        patch("phases.phase_a_content.behavior_cfg", {"max_posts_per_day": 5, "phase_a_mode": "research"}),
+        patch("phases.phase_a_content.load_editorial_policy",
+              return_value={"publication_policy": {"max_posts_per_week": 3}}),
+        patch("services.own_post_store.count_posts_since", return_value=3) as mock_count,
+    ):
+        mock_dt.now.return_value = fake_now
+        mock_dt.fromisoformat.side_effect = lambda s: datetime.fromisoformat(s)
+        result = await phase_a.execute()
+    assert result.get("skipped") == "weekly_limit_reached", f"Esperado skip semanal, obtenido {result}"
+    mock_count.assert_called_once_with(7)
+
+
+@pytest.mark.asyncio
+async def test_phase_a_weekly_gate_allows_when_below_limit():
+    """Con 2/3 posts esta semana, execute() NO se salta por weekly_limit_reached."""
+    _clean_db()
+    from phases.deps import PhaseADeps
+    deps = PhaseADeps(
+        model_cascade=AsyncMock(),
+        moltbook_client=MagicMock(),
+        behavior_cfg={"max_posts_per_day": 5},
+        posts_today=0,
+        get_posts_today=lambda: 0,
+    )
+    from phases.phase_a_content import PhaseAContentGeneration
+    fake_now = datetime(2026, 7, 22, 12, 0, 0)
+    with (
+        patch("phases.phase_a_content.datetime") as mock_dt,
+        patch("phases.phase_a_content.behavior_cfg", {"max_posts_per_day": 5, "phase_a_mode": "research"}),
+        patch("phases.phase_a_content.load_editorial_policy",
+              return_value={"publication_policy": {"max_posts_per_week": 3}}),
+        patch("services.own_post_store.count_posts_since", return_value=2) as mock_count,
+        # Pacing bloquea enseguida (post hace 3 min) para cortar el flujo barato,
+        # igual que test_execute_pacing_blocks_before_model_call.
+        patch("services.persistence.load_agent_state") as mock_state,
+        patch("phases.phase_a_content.choose_topic", return_value=("test topic", "agenda")),
+        patch("phases.phase_a_content._is_allowed_topic", return_value=True),
+        patch("phases.phase_a_content._is_topic_recently_used", return_value=False),
+        patch("phases.phase_a_content.build_prompts", return_value=("sys", "user")),
+        patch("phases.phase_a_content.call_model") as mock_call_model,
+    ):
+        mock_dt.now.return_value = fake_now
+        mock_dt.fromisoformat.side_effect = lambda s: datetime.fromisoformat(s)
+        mock_state.return_value = {"last_post_timestamp": (fake_now - timedelta(minutes=3)).isoformat()}
+        phase_a = PhaseAContentGeneration(deps=deps)
+        result = await phase_a.execute()
+
+    mock_count.assert_called_once_with(7)
+    assert result.get("skipped") != "weekly_limit_reached", f"No debía saltar por límite semanal: {result}"

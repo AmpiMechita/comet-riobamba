@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -72,6 +72,27 @@ def register_post(post_id: str, topic: str = "", body: str = "") -> None:
         return
     _append_to_published_log(post_id, topic, body)
     _append_to_own_post_ids(post_id)
+
+
+def count_posts_since(days: int) -> int:
+    """Cuenta posts publicados con published_at dentro de los ultimos `days` dias.
+    Usa published_posts.json (tiene timestamp real por post via register_post)."""
+    posts = _load_published_log()
+    if not posts:
+        return 0
+    cutoff = datetime.now() - timedelta(days=days)
+    count = 0
+    for p in posts:
+        ts_raw = p.get("published_at")
+        if not ts_raw:
+            continue
+        try:
+            ts = datetime.fromisoformat(ts_raw)
+        except Exception:
+            continue
+        if ts >= cutoff:
+            count += 1
+    return count
 
 
 # ── Internal: published_posts.json ───────────────────────────────

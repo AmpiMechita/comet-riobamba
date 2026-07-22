@@ -766,6 +766,21 @@ class PhaseAContentGeneration:
             logger.info("Phase A: limite diario alcanzado (%s/%s). Saltando.", already_today, max_per_day)
             return {"posts_published": 0, "drafts_generated": 0, "posts": [], "success": False, "skipped": "daily_limit_reached"}
         logger.info("Phase A: limite diario=%s, ya hoy=%s, disponibles=%s", max_per_day, already_today, remaining_today)
+
+        # ── Weekly limit: max_posts_per_week desde editorial_policy.json ──
+        try:
+            _weekly_policy = load_editorial_policy()
+            max_per_week = _weekly_policy.get("publication_policy", {}).get("max_posts_per_week")
+            if max_per_week is not None:
+                from services.own_post_store import count_posts_since
+                posts_this_week = count_posts_since(7)
+                if posts_this_week >= int(max_per_week):
+                    logger.info("Phase A: limite semanal alcanzado (%s/%s). Saltando.", posts_this_week, max_per_week)
+                    return {"posts_published": 0, "drafts_generated": 0, "posts": [], "success": False, "skipped": "weekly_limit_reached"}
+                logger.info("Phase A: limite semanal=%s, esta semana=%s", max_per_week, posts_this_week)
+        except Exception as e:
+            logger.debug("Phase A: weekly limit check skipped: %s", e)
+
         posts_to_generate = min(1, remaining_today)
         phase_a_mode = behavior_cfg.get("phase_a_mode", POLICY.phase_a_mode)
 

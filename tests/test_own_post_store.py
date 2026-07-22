@@ -213,3 +213,64 @@ class TestFallback:
             assert posts[0]["id"] == "42958c4c-7c0d-45f2-9c3b-7f229036bb6a"
         finally:
             store.PUBLISHED_LOG_PATH, store.OWN_POST_IDS_PATH = orig_pub, orig_ids
+
+
+# ── count_posts_since (ventana de publicación semanal) ─────────────
+
+from services.own_post_store import count_posts_since
+
+
+class TestCountPostsSince:
+    UUID_A = "42958c4c-7c0d-45f2-9c3b-7f229036bb6a"
+    UUID_B = "78bc54ad-59c2-4d2d-be5c-d3f4d3811854"
+    UUID_C = "11111111-2222-4333-8444-555555555555"
+
+    @staticmethod
+    def _write_log(pub, records):
+        pub.write_text(json.dumps(records, indent=2), encoding="utf-8")
+
+    def test_empty_store_returns_zero(self):
+        """Sin posts registrados → 0."""
+        pub, ids = _make_store()
+        try:
+            orig_pub, orig_ids = _isolate(pub, ids)
+            assert count_posts_since(7) == 0
+        finally:
+            store.PUBLISHED_LOG_PATH, store.OWN_POST_IDS_PATH = orig_pub, orig_ids
+
+    def test_counts_only_posts_within_window(self):
+        """Posts de hace 1 y 3 días cuentan; el de hace 10 días no (ventana=7)."""
+        from datetime import datetime, timedelta
+        pub, ids = _make_store()
+        try:
+            orig_pub, orig_ids = _isolate(pub, ids)
+            now = datetime.now()
+            self._write_log(pub, [
+                {"post_id": self.UUID_A, "topic": "t1",
+                 "published_at": (now - timedelta(days=1)).isoformat()},
+                {"post_id": self.UUID_B, "topic": "t2",
+                 "published_at": (now - timedelta(days=3)).isoformat()},
+                {"post_id": self.UUID_C, "topic": "t3",
+                 "published_at": (now - timedelta(days=10)).isoformat()},
+            ])
+            assert count_posts_since(7) == 2
+        finally:
+            store.PUBLISHED_LOG_PATH, store.OWN_POST_IDS_PATH = orig_pub, orig_ids
+
+    def test_invalid_or_missing_timestamps_are_ignored(self):
+        """Registros sin published_at o con timestamp inválido no rompen el conteo."""
+        from datetime import datetime, timedelta
+        pub, ids = _make_store()
+        try:
+            orig_pub, orig_ids = _isolate(pub, ids)
+            now = datetime.now()
+            self._write_log(pub, [
+                {"post_id": self.UUID_A, "topic": "ok",
+                 "published_at": (now - timedelta(days=2)).isoformat()},
+                {"post_id": self.UUID_B, "topic": "sin timestamp"},
+                {"post_id": self.UUID_C, "topic": "timestamp basura",
+                 "published_at": "not-a-date"},
+            ])
+            assert count_posts_since(7) == 1
+        finally:
+            store.PUBLISHED_LOG_PATH, store.OWN_POST_IDS_PATH = orig_pub, orig_ids
