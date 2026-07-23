@@ -640,6 +640,73 @@ def _looks_low_quality(text: str, policy: dict | None = None) -> tuple[bool, str
     return False, ""
 
 
+_GENERATION_ATTEMPTS_LOG = BASE_DIR / "data/generation_attempts.jsonl"
+
+
+def _log_generation_attempt(topic: str, topic_source: str, attempt: int, max_attempts: int, outcome: str) -> None:
+    """Registra cada intento de generacion (exito o motivo de rechazo). Antes
+    esta informacion solo vivia en el log de texto y se perdia al terminar
+    el ciclo -- es la base para medir tasas de rechazo por tipo/tema."""
+    try:
+        _GENERATION_ATTEMPTS_LOG.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            "timestamp": datetime.now(UTC).isoformat(),
+            "topic": topic,
+            "topic_source": topic_source,
+            "attempt": attempt,
+            "max_attempts": max_attempts,
+            "outcome": outcome,
+        }
+        with open(_GENERATION_ATTEMPTS_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception as e:
+        logger.debug("Phase A: no se pudo loguear generation attempt: %s", e)
+
+
+_RETRY_CORRECTION_HINTS: Dict[str, str] = {
+    "too_short": "El intento anterior fue muy corto. Desarrolla la idea con mas profundidad hasta llegar al largo minimo requerido.",
+    "too_long": "El intento anterior excedio el largo maximo. Se mas directo y recorta lo accesorio.",
+    "contains_url": "El intento anterior incluia una URL. No incluyas links.",
+    "contains_code": "El intento anterior incluia bloques de codigo o sintaxis de codigo. Describi la idea en prosa, sin codigo.",
+    "contains_error_log": "El intento anterior parecia un log de error o traceback. Escribi una reflexion tecnica, no un log.",
+    "contains_bullet_points": "El intento anterior usaba vinetas o listas. Escribi en prosa continua, sin bullets.",
+    "contains_emoji": "El intento anterior tenia emojis. No uses emojis.",
+    "contains_academic_subtitles": "El intento anterior tenia subtitulos de estilo academico. Escribi un unico bloque de prosa fluida.",
+    "contains_filler_opening": "El intento anterior empezaba con una frase de relleno generica. Arranca directo con la idea concreta.",
+    "single_paragraph": "El intento anterior era un solo parrafo compacto. Separa la idea en al menos dos parrafos.",
+    "similar_recent": "El intento anterior era demasiado parecido a un post reciente. Encara el tema desde un angulo distinto.",
+    "empty_output": "El intento anterior no devolvio contenido. Genera el post completo.",
+    "too_fragmented": "El intento anterior tenia demasiados saltos de linea. Escribi en prosa continua, menos fragmentada.",
+    "placeholder_text": "El intento anterior tenia texto de relleno generico. Generá contenido real y especifico.",
+    "mentions_moltbook": "El intento anterior menciono 'Moltbook' explicitamente. No nombres la plataforma.",
+    "mentions_llm": "El intento anterior menciono 'LLM' o 'large language model' explicitamente. Evita esa jerga meta sobre el modelo.",
+}
+
+
+def _build_retry_correction(reason: str) -> str:
+    """Traduce el motivo de rechazo del intento anterior en una instruccion
+    correctiva para el proximo intento -- evita repetir el mismo prompt a
+    ciegas cuando cada reintento paga una llamada real al modelo."""
+    if not reason:
+        return ""
+    if reason.startswith("below_min_quality_score"):
+        parts = reason.split(":")
+        content_type = parts[2] if len(parts) > 2 else "generico"
+        hint = (
+            f"El intento anterior fue clasificado como '{content_type}' (bajo valor "
+            "de investigacion). Escribi algo con mas peso tecnico: un hallazgo "
+            "empirico concreto, una propuesta de framework, o una critica con "
+            "alternativa -- no una aclaracion generica, un acuerdo, o una "
+            "propuesta de metrica aislada."
+        )
+    elif reason.startswith("validation_failed:"):
+        sub_reason = reason.split(":", 1)[1]
+        hint = _RETRY_CORRECTION_HINTS.get(sub_reason, f"El intento anterior fue rechazado ({sub_reason}). Corregi eso en este intento.")
+    else:
+        hint = _RETRY_CORRECTION_HINTS.get(reason, f"El intento anterior fue rechazado ({reason}). Corregi eso en este intento.")
+    return f"\n\nCORRECCION DEL INTENTO ANTERIOR: {hint}"
+
+
 def _topic_with_matrix_fallback(
     mode: str, matrix: Any
 ) -> tuple[Optional[str], str]:
@@ -970,16 +1037,25 @@ class PhaseAContentGeneration:
 
             max_attempts = EDITORIAL_CONFIG["phase_a_max_attempts"]
             generated_post: Optional[Dict[str, Any]] = None
+            # Correccion acumulada del intento anterior: cada rechazo la
+            # actualiza para que el proximo intento sepa QUE corregir en vez
+            # de repetir el mismo prompt a ciegas (cada retry paga una llamada).
+            retry_correction = ""
             for attempt in range(1, max_attempts + 1):
+                attempt_user_prompt = user_prompt + retry_correction
                 try:
                     logger.info("Phase A: llamada al modelo (intento %s/%s)...", attempt, max_attempts)
-                    raw_text = await call_model(self.deps, system_prompt, user_prompt)
+                    raw_text = await call_model(self.deps, system_prompt, attempt_user_prompt)
                 except Exception as e:
                     logger.warning("Phase A: error en llamada al modelo: %s", e)
+                    _log_generation_attempt(topic, topic_source, attempt, max_attempts, "model_error")
+                    retry_correction = _build_retry_correction("model_error")
                     if attempt >= max_attempts:
                         generated_post = {"title": "", "body": "", "metadata": {"topic": topic}, "error": str(e), "attempts": attempt, "published": False, "error_type": "model_error"}
                     continue
                 if not raw_text or not isinstance(raw_text, str):
+                    _log_generation_attempt(topic, topic_source, attempt, max_attempts, "empty_output")
+                    retry_correction = _build_retry_correction("empty_output")
                     if attempt >= max_attempts:
                         generated_post = {"title": "", "body": "", "metadata": {"topic": topic}, "error": "empty_output", "attempts": attempt, "published": False, "error_type": "empty_output"}
                     continue
@@ -991,20 +1067,27 @@ class PhaseAContentGeneration:
                 is_valid, reason = validate_post_text(post_text)
                 if not is_valid:
                     logger.warning("Phase A: contenido invalido (reason=%s), reintentar...", reason)
+                    _log_generation_attempt(topic, topic_source, attempt, max_attempts, f"validation_failed:{reason}")
+                    retry_correction = _build_retry_correction(f"validation_failed:{reason}")
                     if attempt >= max_attempts:
                         generated_post = {"title": title, "body": post_text, "metadata": {"topic": topic, "validation_reason": reason}, "attempts": attempt, "published": False, "error": f"validation_failed:{reason}"}
                     continue
                 if is_similar_to_recent(post_text):
                     logger.warning("Phase A: contenido muy similar a posts recientes. Se descarta.")
+                    _log_generation_attempt(topic, topic_source, attempt, max_attempts, "similar_recent")
+                    retry_correction = _build_retry_correction("similar_recent")
                     if attempt >= max_attempts:
                         generated_post = {"title": title, "body": post_text, "metadata": {"topic": topic, "validation_reason": "similar_recent"}, "attempts": attempt, "published": False, "error": "similar_recent"}
                     continue
                 low_quality, low_quality_reason = _looks_low_quality(post_text, policy)
                 if low_quality:
                     logger.warning("Phase A: contenido descartado por baja calidad (reason=%s), reintentar...", low_quality_reason)
+                    _log_generation_attempt(topic, topic_source, attempt, max_attempts, low_quality_reason)
+                    retry_correction = _build_retry_correction(low_quality_reason)
                     if attempt >= max_attempts:
                         generated_post = {"title": title, "body": post_text, "metadata": {"topic": topic, "validation_reason": low_quality_reason}, "attempts": attempt, "published": False, "error": f"low_quality:{low_quality_reason}"}
                     continue
+                _log_generation_attempt(topic, topic_source, attempt, max_attempts, "success")
                 generated_post = {"title": title, "body": post_text, "metadata": {"topic": topic, "generated_at": datetime.now(UTC).isoformat() + "Z", "attempts": attempt, "policy_tone": policy.get("style_policy", {}).get("tone", "natural_directo")}, "published": False}
                 break
             

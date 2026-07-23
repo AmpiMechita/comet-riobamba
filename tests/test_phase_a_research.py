@@ -10,6 +10,7 @@ from phases.phase_a_content import (
     build_prompts, choose_topic, EDITORIAL_CONFIG,
     RESEARCH_CLOSING_TEMPLATES, _topic_with_matrix_fallback,
     compute_topic_weights, _looks_low_quality,
+    _build_retry_correction, _log_generation_attempt,
 )
 
 
@@ -294,3 +295,115 @@ class TestLooksLowQualityPolicyGate:
         low, reason = _looks_low_quality(text, self.POLICY)
         assert low is False
         assert reason == ""
+
+
+# ── Retry inteligente: _build_retry_correction + registro de intentos ──
+
+class TestBuildRetryCorrection:
+    """Cada motivo de rechazo se traduce en una correccion no vacia y coherente."""
+
+    def test_below_min_quality_score_names_content_type(self):
+        correction = _build_retry_correction("below_min_quality_score:0.3:clarification")
+        assert correction.startswith("\n\nCORRECCION DEL INTENTO ANTERIOR:")
+        assert "'clarification'" in correction
+        assert "peso tecnico" in correction
+
+    def test_validation_failed_maps_sub_reason(self):
+        correction = _build_retry_correction("validation_failed:contains_error_log")
+        assert correction.startswith("\n\nCORRECCION DEL INTENTO ANTERIOR:")
+        assert "log de error" in correction
+
+    def test_similar_recent_asks_for_new_angle(self):
+        correction = _build_retry_correction("similar_recent")
+        assert correction.startswith("\n\nCORRECCION DEL INTENTO ANTERIOR:")
+        assert "angulo distinto" in correction
+
+    def test_unknown_reason_gets_generic_hint(self):
+        correction = _build_retry_correction("razon_inexistente_xyz")
+        assert correction.startswith("\n\nCORRECCION DEL INTENTO ANTERIOR:")
+        assert "razon_inexistente_xyz" in correction
+
+    def test_empty_reason_returns_empty(self):
+        assert _build_retry_correction("") == ""
+
+
+class TestLogGenerationAttempt:
+    def test_writes_valid_jsonl_record(self, monkeypatch, tmp_path):
+        import json
+        log_path = tmp_path / "generation_attempts.jsonl"
+        monkeypatch.setattr("phases.phase_a_content._GENERATION_ATTEMPTS_LOG", log_path)
+
+        _log_generation_attempt("un tema", "arxiv", 2, 3, "validation_failed:too_short")
+
+        lines = log_path.read_text(encoding="utf-8").strip().splitlines()
+        assert len(lines) == 1
+        record = json.loads(lines[0])
+        assert record["topic"] == "un tema"
+        assert record["topic_source"] == "arxiv"
+        assert record["attempt"] == 2
+        assert record["max_attempts"] == 3
+        assert record["outcome"] == "validation_failed:too_short"
+        assert record["timestamp"]  # ISO no vacio
+
+
+@pytest.mark.asyncio
+async def test_retry_sends_correction_in_second_attempt(monkeypatch, tmp_path):
+    """Intento 1 rechazado (empty_output) → el user_prompt del intento 2 lleva la correccion."""
+    from datetime import datetime
+    from phases.deps import PhaseADeps
+    from phases.phase_a_content import PhaseAContentGeneration
+
+    monkeypatch.setattr(
+        "phases.phase_a_content._GENERATION_ATTEMPTS_LOG",
+        tmp_path / "generation_attempts.jsonl",
+    )
+
+    valid_text = (
+        "Retry loop integration check\n\n"
+        "We spent three weeks tracing why our retry queue kept starving the primary "
+        "workers during peak load, and the answer turned out to be a lock held far "
+        "longer than anyone assumed.\n\n"
+        "Once we moved the bookkeeping out of the critical section, the starvation "
+        "disappeared and throughput recovered. The lesson we keep relearning: measure "
+        "the hot path before blaming the scheduler, because intuition about contention "
+        "is usually wrong."
+    )
+
+    deps = PhaseADeps(
+        model_cascade=AsyncMock(),
+        moltbook_client=MagicMock(),
+        behavior_cfg={"max_posts_per_day": 5},
+        posts_today=0,
+        get_posts_today=lambda: 0,
+    )
+
+    fake_now = datetime(2026, 7, 22, 12, 0, 0)
+    mock_call_model = AsyncMock(side_effect=["", valid_text])
+
+    with (
+        patch("phases.phase_a_content.datetime") as mock_dt,
+        patch("phases.phase_a_content.behavior_cfg",
+              {"max_posts_per_day": 5, "phase_a_mode": "research", "whisper_mode": True}),
+        patch("services.persistence.load_agent_state", return_value={}),
+        patch("services.own_post_store.count_posts_since", return_value=0),
+        patch("phases.phase_a_content.choose_topic", return_value=("test topic", "agenda")),
+        patch("phases.phase_a_content._is_allowed_topic", return_value=True),
+        patch("phases.phase_a_content._is_topic_recently_used", return_value=False),
+        patch("phases.phase_a_content.build_prompts", return_value=("sys", "user prompt base")),
+        patch("phases.phase_a_content.load_editorial_policy", return_value={}),
+        patch("phases.phase_a_content.is_similar_to_recent", return_value=False),
+        patch("phases.phase_a_content.call_model", new=mock_call_model),
+    ):
+        mock_dt.now.return_value = fake_now
+        mock_dt.fromisoformat.side_effect = lambda s: datetime.fromisoformat(s)
+        phase_a = PhaseAContentGeneration(deps=deps)
+        result = await phase_a.execute()
+
+    assert mock_call_model.call_count == 2, f"esperaba 2 intentos, hubo {mock_call_model.call_count}"
+    first_prompt = mock_call_model.call_args_list[0].args[2]
+    second_prompt = mock_call_model.call_args_list[1].args[2]
+    assert first_prompt == "user prompt base"
+    assert "CORRECCION DEL INTENTO ANTERIOR" in second_prompt
+    assert second_prompt.startswith("user prompt base")
+    # y el intento 2 termino en post generado (whisper: no se publica)
+    assert result["drafts_generated"] == 1
