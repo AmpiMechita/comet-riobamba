@@ -18,6 +18,7 @@ logger = logging.getLogger("services.telegram_control")
 
 BRIEFING_STATE_FILE = Path("data/telegram_briefing_state.json")
 AGENT_PROPOSALS_FILE = Path("data/agent_proposals.jsonl")
+GENERATION_ATTEMPTS_FILE = Path("data/generation_attempts.jsonl")
 
 
 def log_proposal(proposal_text: str) -> None:
@@ -169,6 +170,34 @@ def check_quality_issues(rejected_count: int, window_minutes: int = 30) -> Optio
             f"{window_minutes} min. Revisar prompt o modelo."
         )
     return None
+
+
+def check_recent_quality_issues(window_minutes: int = 30) -> Optional[str]:
+    """Lee data/generation_attempts.jsonl, cuenta entradas con outcome != 'success'
+    en los últimos `window_minutes`, y delega a check_quality_issues()."""
+    if not GENERATION_ATTEMPTS_FILE.exists():
+        return None
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=window_minutes)
+    rejected_count = 0
+    try:
+        with open(str(GENERATION_ATTEMPTS_FILE), "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                    ts = datetime.fromisoformat(entry["timestamp"])
+                    if ts < cutoff:
+                        continue
+                    if entry.get("outcome") != "success":
+                        rejected_count += 1
+                except Exception:
+                    continue
+    except Exception as e:
+        logger.warning("check_recent_quality_issues: no se pudo leer el registro de intentos: %s", e)
+        return None
+    return check_quality_issues(rejected_count, window_minutes=window_minutes)
 
 
 def check_karma_change(current: int, previous: int) -> Optional[str]:

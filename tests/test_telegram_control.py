@@ -175,3 +175,69 @@ def test_cmd_pause_resume_roundtrip(tmp_path):
         r2 = _cmd_resume()
         assert not pause_file.exists()
         assert "reanudado" in r2.lower()
+
+
+# ── check_recent_quality_issues ───────────────────────────────────
+
+def _write_attempts(path, entries):
+    lines = []
+    for e in entries:
+        lines.append(e if isinstance(e, str) else json.dumps(e))
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_check_recent_quality_issues_counts_only_recent_failures(tmp_path):
+    """Cuenta fallos recientes, excluyendo entradas viejas, success y líneas corruptas."""
+    from datetime import datetime, timedelta, timezone
+    import services.telegram_control as tc
+
+    now = datetime.now(timezone.utc)
+    recent = (now - timedelta(minutes=5)).isoformat()
+    old = (now - timedelta(minutes=90)).isoformat()
+    attempts_file = tmp_path / "generation_attempts.jsonl"
+    _write_attempts(attempts_file, [
+        {"timestamp": recent, "outcome": "validation_failed:too_short"},
+        {"timestamp": recent, "outcome": "provider_error"},
+        {"timestamp": recent, "outcome": "validation_failed:off_topic"},
+        {"timestamp": recent, "outcome": "success"},
+        {"timestamp": old, "outcome": "provider_error"},
+        "{esto no es json valido",
+    ])
+
+    with patch.object(tc, "GENERATION_ATTEMPTS_FILE", attempts_file), \
+         patch.dict(tc._alert_cooldowns, {}, clear=True):
+        result = tc.check_recent_quality_issues(window_minutes=30)
+
+    assert result is not None
+    assert "3" in result
+
+
+def test_check_recent_quality_issues_missing_file_returns_none(tmp_path):
+    """Sin archivo de intentos retorna None sin error."""
+    import services.telegram_control as tc
+    missing = tmp_path / "no_existe.jsonl"
+    with patch.object(tc, "GENERATION_ATTEMPTS_FILE", missing), \
+         patch.dict(tc._alert_cooldowns, {}, clear=True):
+        assert tc.check_recent_quality_issues(window_minutes=30) is None
+
+
+def test_check_recent_quality_issues_below_threshold_returns_none(tmp_path):
+    """Con menos de 3 rechazos recientes no hay alerta."""
+    from datetime import datetime, timedelta, timezone
+    import services.telegram_control as tc
+
+    now = datetime.now(timezone.utc)
+    recent = (now - timedelta(minutes=5)).isoformat()
+    old = (now - timedelta(minutes=120)).isoformat()
+    attempts_file = tmp_path / "generation_attempts.jsonl"
+    _write_attempts(attempts_file, [
+        {"timestamp": recent, "outcome": "provider_error"},
+        {"timestamp": recent, "outcome": "success"},
+        {"timestamp": old, "outcome": "provider_error"},
+        {"timestamp": old, "outcome": "provider_error"},
+        {"timestamp": old, "outcome": "provider_error"},
+    ])
+
+    with patch.object(tc, "GENERATION_ATTEMPTS_FILE", attempts_file), \
+         patch.dict(tc._alert_cooldowns, {}, clear=True):
+        assert tc.check_recent_quality_issues(window_minutes=30) is None

@@ -345,6 +345,29 @@ class COMETRiobambaAgent:
                     home.get("active_posts", "?"),
                 )
 
+                # ── Karma change alert ──────────────────────────────────
+                try:
+                    alert_state_path = Path("data/telegram_alert_state.json")
+                    alert_state: Dict = {}
+                    if alert_state_path.exists():
+                        alert_state = json.loads(alert_state_path.read_text(encoding="utf-8")) or {}
+                    last_karma = alert_state.get("last_karma")
+                    current_karma = home.get("karma")
+                    if (
+                        last_karma is not None
+                        and current_karma is not None
+                        and self.telegram_client
+                        and self.telegram_client.enabled
+                    ):
+                        from services.telegram_control import check_karma_change
+                        alert = check_karma_change(current_karma, last_karma)
+                        if alert:
+                            self.telegram_client.send_message(alert)
+                    alert_state["last_karma"] = current_karma
+                    _write_json_atomic(alert_state_path, alert_state, ensure_ascii=False)
+                except Exception as e:
+                    logger.debug("Home: karma alert check failed: %s", e)
+
                 # ── New activity on own posts ───────────────────────────
                 activity_posts: List[Dict] = home.get("activity_on_your_posts") or []
                 pending: Set[str] = set()
@@ -359,6 +382,16 @@ class COMETRiobambaAgent:
                         )
                         if pid:
                             pending.add(pid)
+                        if pid and self.telegram_client and self.telegram_client.enabled:
+                            try:
+                                from services.telegram_control import check_engagement_spike
+                                alert = check_engagement_spike(
+                                    pid, post.get("new_notification_count", 0), threshold=5
+                                )
+                                if alert:
+                                    self.telegram_client.send_message(alert)
+                            except Exception as e:
+                                logger.debug("Home: engagement spike alert failed: %s", e)
                 self._pending_home_posts.clear()
                 self._pending_home_posts.update(pending)
                 update_today_metrics(home_reads_today=1)
@@ -379,6 +412,16 @@ class COMETRiobambaAgent:
                             _write_json_atomic(ann_path, {"last_seen_id": ann_id}, ensure_ascii=False)
                         except Exception as e:
                             logger.debug("Home: could not persist announcement id: %s", e)
+
+                # ── Quality issues alert (once per cycle) ───────────────
+                if self.telegram_client and self.telegram_client.enabled:
+                    try:
+                        from services.telegram_control import check_recent_quality_issues
+                        alert = check_recent_quality_issues()
+                        if alert:
+                            self.telegram_client.send_message(alert)
+                    except Exception as e:
+                        logger.debug("Home: quality issues alert failed: %s", e)
 
             except Exception as e:
                 logger.warning("Home dashboard check failed (continuing cycle): %s", e)
