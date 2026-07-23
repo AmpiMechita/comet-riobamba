@@ -51,3 +51,50 @@ def test_bridge_swallows_exceptions(caplog):
 
     mock_save.assert_not_called()
     assert any("bridge to agenda failed" in r.message for r in caplog.records)
+
+
+def test_bridge_notifies_telegram_when_enabled():
+    """Con telegram habilitado y señal de cruce, se notifica el tema propuesto."""
+    agenda = MagicMock()
+    telegram = MagicMock()
+    telegram.enabled = True
+    with patch("services.research_agenda.load_agenda", return_value=agenda), \
+         patch("services.research_agenda.save_agenda"):
+        eit._maybe_bridge_to_agenda(
+            "Autonomous inspection agents for substations",
+            "monitoring pilots in three utilities",
+            "grid", "frontier_claim",
+            telegram_client=telegram,
+        )
+
+    telegram.send_message.assert_called_once()
+    msg = telegram.send_message.call_args.args[0]
+    assert "Nuevo tema propuesto (energy intel)" in msg
+    assert "production reliability of autonomous agents" in msg
+
+
+def test_bridge_with_none_telegram_does_not_break():
+    """telegram_client=None (default) sigue funcionando como antes."""
+    agenda = MagicMock()
+    with patch("services.research_agenda.load_agenda", return_value=agenda), \
+         patch("services.research_agenda.save_agenda"):
+        eit._maybe_bridge_to_agenda(
+            "Autonomous inspection agents for substations", "", "grid", "frontier_claim",
+            telegram_client=None,
+        )
+    agenda.add_topic.assert_called_once()
+
+
+def test_bridge_telegram_send_failure_does_not_propagate():
+    """Un fallo de send_message no rompe el bridge (la agenda ya quedó guardada)."""
+    agenda = MagicMock()
+    telegram = MagicMock()
+    telegram.enabled = True
+    telegram.send_message.side_effect = RuntimeError("telegram caído")
+    with patch("services.research_agenda.load_agenda", return_value=agenda), \
+         patch("services.research_agenda.save_agenda") as mock_save:
+        eit._maybe_bridge_to_agenda(
+            "Autonomous inspection agents for substations", "", "grid", "frontier_claim",
+            telegram_client=telegram,
+        )
+    mock_save.assert_called_once_with(agenda)

@@ -241,3 +241,107 @@ def test_check_recent_quality_issues_below_threshold_returns_none(tmp_path):
     with patch.object(tc, "GENERATION_ATTEMPTS_FILE", attempts_file), \
          patch.dict(tc._alert_cooldowns, {}, clear=True):
         assert tc.check_recent_quality_issues(window_minutes=30) is None
+
+
+# ── check_feed_stalled ────────────────────────────────────────────
+
+def _write_stall_state(path, count):
+    path.write_text(json.dumps({"consecutive_empty_cycles": count}), encoding="utf-8")
+
+
+def test_check_feed_stalled_missing_file_returns_none(tmp_path):
+    import services.telegram_control as tc
+    with patch.object(tc, "_FEED_STALL_STATE_FILE", tmp_path / "no_existe.json"), \
+         patch.dict(tc._alert_cooldowns, {}, clear=True):
+        assert tc.check_feed_stalled() is None
+
+
+def test_check_feed_stalled_below_threshold_returns_none(tmp_path):
+    import services.telegram_control as tc
+    state = tmp_path / "phase_b_feed_stall.json"
+    _write_stall_state(state, 4)
+    with patch.object(tc, "_FEED_STALL_STATE_FILE", state), \
+         patch.dict(tc._alert_cooldowns, {}, clear=True):
+        assert tc.check_feed_stalled(threshold_cycles=5) is None
+
+
+def test_check_feed_stalled_at_threshold_alerts(tmp_path):
+    import services.telegram_control as tc
+    state = tmp_path / "phase_b_feed_stall.json"
+    _write_stall_state(state, 5)
+    with patch.object(tc, "_FEED_STALL_STATE_FILE", state), \
+         patch.dict(tc._alert_cooldowns, {}, clear=True):
+        result = tc.check_feed_stalled(threshold_cycles=5)
+    assert result is not None
+    assert "5 ciclos" in result
+
+
+# ── off_niche separado de la alerta genérica de calidad ───────────
+
+def test_check_recent_quality_issues_excludes_off_niche(tmp_path):
+    """Regresión: off_niche ya no cuenta para la alerta genérica de calidad."""
+    from datetime import datetime, timedelta, timezone
+    import services.telegram_control as tc
+
+    now = datetime.now(timezone.utc)
+    recent = (now - timedelta(minutes=5)).isoformat()
+    attempts_file = tmp_path / "generation_attempts.jsonl"
+    _write_attempts(attempts_file, [
+        {"timestamp": recent, "outcome": "provider_error"},
+        {"timestamp": recent, "outcome": "validation_failed:too_short"},
+        {"timestamp": recent, "outcome": "off_niche"},
+        {"timestamp": recent, "outcome": "off_niche"},
+        {"timestamp": recent, "outcome": "off_niche"},
+    ])
+
+    with patch.object(tc, "GENERATION_ATTEMPTS_FILE", attempts_file), \
+         patch.dict(tc._alert_cooldowns, {}, clear=True):
+        # 2 rechazos genéricos (los 3 off_niche no cuentan) → bajo umbral
+        assert tc.check_recent_quality_issues(window_minutes=30) is None
+
+
+def test_check_recent_off_niche_issues_counts_and_alerts(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    import services.telegram_control as tc
+
+    now = datetime.now(timezone.utc)
+    recent = (now - timedelta(minutes=5)).isoformat()
+    old = (now - timedelta(minutes=90)).isoformat()
+    attempts_file = tmp_path / "generation_attempts.jsonl"
+    _write_attempts(attempts_file, [
+        {"timestamp": recent, "outcome": "off_niche"},
+        {"timestamp": recent, "outcome": "off_niche"},
+        {"timestamp": recent, "outcome": "off_niche"},
+        {"timestamp": recent, "outcome": "provider_error"},
+        {"timestamp": old, "outcome": "off_niche"},
+    ])
+
+    with patch.object(tc, "GENERATION_ATTEMPTS_FILE", attempts_file), \
+         patch.dict(tc._alert_cooldowns, {}, clear=True):
+        result = tc.check_recent_off_niche_issues(window_minutes=30)
+    assert result is not None
+    assert "3 temas" in result
+
+
+def test_check_recent_off_niche_issues_below_threshold_returns_none(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    import services.telegram_control as tc
+
+    now = datetime.now(timezone.utc)
+    recent = (now - timedelta(minutes=5)).isoformat()
+    attempts_file = tmp_path / "generation_attempts.jsonl"
+    _write_attempts(attempts_file, [
+        {"timestamp": recent, "outcome": "off_niche"},
+        {"timestamp": recent, "outcome": "off_niche"},
+    ])
+
+    with patch.object(tc, "GENERATION_ATTEMPTS_FILE", attempts_file), \
+         patch.dict(tc._alert_cooldowns, {}, clear=True):
+        assert tc.check_recent_off_niche_issues(window_minutes=30) is None
+
+
+def test_check_recent_off_niche_issues_missing_file_returns_none(tmp_path):
+    import services.telegram_control as tc
+    with patch.object(tc, "GENERATION_ATTEMPTS_FILE", tmp_path / "no.jsonl"), \
+         patch.dict(tc._alert_cooldowns, {}, clear=True):
+        assert tc.check_recent_off_niche_issues() is None

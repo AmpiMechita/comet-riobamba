@@ -19,6 +19,7 @@ logger = logging.getLogger("services.telegram_control")
 BRIEFING_STATE_FILE = Path("data/telegram_briefing_state.json")
 AGENT_PROPOSALS_FILE = Path("data/agent_proposals.jsonl")
 GENERATION_ATTEMPTS_FILE = Path("data/generation_attempts.jsonl")
+_FEED_STALL_STATE_FILE = Path("data/phase_b_feed_stall.json")
 
 
 def log_proposal(proposal_text: str) -> None:
@@ -190,7 +191,7 @@ def check_recent_quality_issues(window_minutes: int = 30) -> Optional[str]:
                     ts = datetime.fromisoformat(entry["timestamp"])
                     if ts < cutoff:
                         continue
-                    if entry.get("outcome") != "success":
+                    if entry.get("outcome") not in ("success", "off_niche"):
                         rejected_count += 1
                 except Exception:
                     continue
@@ -198,6 +199,52 @@ def check_recent_quality_issues(window_minutes: int = 30) -> Optional[str]:
         logger.warning("check_recent_quality_issues: no se pudo leer el registro de intentos: %s", e)
         return None
     return check_quality_issues(rejected_count, window_minutes=window_minutes)
+
+
+def check_recent_off_niche_issues(window_minutes: int = 30, threshold: int = 3) -> Optional[str]:
+    """Alerta si varios temas fueron rechazados por off_niche recientemente —
+    señal de que la fuente de tópicos (agenda/bridge) está fuera de nicho."""
+    if not GENERATION_ATTEMPTS_FILE.exists():
+        return None
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=window_minutes)
+    count = 0
+    try:
+        with open(str(GENERATION_ATTEMPTS_FILE), "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                    ts = datetime.fromisoformat(entry["timestamp"])
+                    if ts < cutoff:
+                        continue
+                    if entry.get("outcome") == "off_niche":
+                        count += 1
+                except Exception:
+                    continue
+    except Exception as e:
+        logger.warning("check_recent_off_niche_issues: no se pudo leer el registro de intentos: %s", e)
+        return None
+    if count >= threshold and _can_alert("off_niche_issues", cooldown_minutes=60):
+        return (
+            f"🧭 <b>Fuera de nicho:</b> {count} temas rechazados por off_niche en los últimos "
+            f"{window_minutes} min. Revisar fuente de tópicos (agenda/bridge)."
+        )
+    return None
+
+
+def check_feed_stalled(threshold_cycles: int = 5) -> Optional[str]:
+    """Alerta si Fase B lleva varios ciclos seguidos sin candidatos del feed."""
+    try:
+        if not _FEED_STALL_STATE_FILE.exists():
+            return None
+        count = int(json.loads(_FEED_STALL_STATE_FILE.read_text(encoding="utf-8")).get("consecutive_empty_cycles", 0))
+    except Exception:
+        return None
+    if count >= threshold_cycles and _can_alert("feed_stalled", cooldown_minutes=180):
+        return f"📭 <b>Feed estancado:</b> {count} ciclos seguidos sin candidatos nuevos en Fase B. Revisar dedup/pool de fuentes."
+    return None
 
 
 def check_karma_change(current: int, previous: int) -> Optional[str]:

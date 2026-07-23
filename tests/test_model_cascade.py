@@ -894,3 +894,54 @@ async def test_resolved_tier_fallback_does_not_log_fallback_warning(cascade, cap
     assert result == "ok"
     assert not any(_FALLBACK_WARN_MARKER in r.message for r in caplog.records), \
         "tier='fallback' resolves directly and must NOT emit the fallback WARNING"
+
+
+# ── Alerta de circuit breaker OPEN (_alert_circuit_open) ─────────
+
+
+def test_alert_circuit_open_sends_alert_with_provider_name(cascade):
+    """Con telegram habilitado, la alerta nombra al proveedor que quedó OPEN."""
+    _add_provider(cascade, "prov_a")
+    _add_provider(cascade, "prov_b")
+    telegram = MagicMock()
+    telegram.enabled = True
+
+    with patch.object(cascade, "_get_telegram_client", return_value=telegram):
+        cascade._alert_circuit_open("model_cascade.prov_a")
+
+    telegram.send_alert.assert_called_once()
+    title, message = telegram.send_alert.call_args.args[:2]
+    assert title == "Proveedor fuera de rotación"
+    assert "'prov_a'" in message
+    assert "/2 proveedores" in message
+    assert telegram.send_alert.call_args.kwargs["level"] == "WARNING"
+
+
+def test_alert_circuit_open_noop_without_telegram(cascade):
+    """Sin cliente Telegram (o deshabilitado) no lanza ni alerta."""
+    with patch.object(cascade, "_get_telegram_client", return_value=None):
+        cascade._alert_circuit_open("model_cascade.prov_a")
+
+    telegram = MagicMock()
+    telegram.enabled = False
+    with patch.object(cascade, "_get_telegram_client", return_value=telegram):
+        cascade._alert_circuit_open("model_cascade.prov_a")
+    telegram.send_alert.assert_not_called()
+
+
+def test_alert_circuit_open_swallows_telegram_errors(cascade):
+    """Una excepción del telegram client no propaga al breaker."""
+    telegram = MagicMock()
+    telegram.enabled = True
+    telegram.send_alert.side_effect = RuntimeError("telegram caído")
+
+    with patch.object(cascade, "_get_telegram_client", return_value=telegram):
+        cascade._alert_circuit_open("model_cascade.prov_a")  # no debe lanzar
+
+
+def test_init_circuit_breakers_wires_on_open(mock_credentials):
+    """Los breakers reales de la cascada llevan el callback conectado."""
+    with patch("services.model_cascade.Credentials.from_env", return_value=mock_credentials):
+        c = ModelCascade()
+    for cb in c.circuit_breakers.values():
+        assert cb.on_open == c._alert_circuit_open

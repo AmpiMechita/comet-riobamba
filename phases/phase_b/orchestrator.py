@@ -429,6 +429,25 @@ _PERFORMANCE_SUMMARY_PATH = BASE_DIR / "data/performance_summary.json"
 _UPVOTED_POST_IDS_PATH = BASE_DIR / "data/upvoted_post_ids.json"
 _FOLLOWED_AGENTS_PATH = BASE_DIR / "data/followed_agents.json"
 
+_FEED_STALL_STATE_FILE = Path("data/phase_b_feed_stall.json")
+
+
+def _load_feed_stall_count() -> int:
+    try:
+        if _FEED_STALL_STATE_FILE.exists():
+            return int(json.loads(_FEED_STALL_STATE_FILE.read_text(encoding="utf-8")).get("consecutive_empty_cycles", 0))
+    except Exception:
+        pass
+    return 0
+
+
+def _save_feed_stall_count(count: int) -> None:
+    try:
+        _FEED_STALL_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _FEED_STALL_STATE_FILE.write_text(json.dumps({"consecutive_empty_cycles": count}), encoding="utf-8")
+    except Exception as e:
+        logger.debug("Phase B: no se pudo persistir feed_stall state: %s", e)
+
 
 def _load_replied_comment_ids() -> Set[str]:
     if not _REPLIED_IDS_PATH.exists():
@@ -1313,8 +1332,10 @@ class PhaseB:
             if not scored_posts:
                 logger.info("Phase B: ningún post del feed superó el umbral de relevancia estratégica.")
                 span.set("posted", 0)
+                _save_feed_stall_count(_load_feed_stall_count() + 1)
                 return []
 
+            _save_feed_stall_count(0)
             logger.info("Phase B: %s posts seleccionados de %s candidatos por relevancia y roadmap.",
                          len(scored_posts), len(filtered_posts))
             for sc, sp in scored_posts:

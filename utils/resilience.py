@@ -62,12 +62,14 @@ class CircuitBreaker:
         recovery_timeout: float = 60.0,
         success_threshold: int = 1,
         persistence: Optional[CircuitPersistence] = None,
+        on_open: Optional[Callable[[str], None]] = None,
     ):
         self.name = name
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout
         self.success_threshold = success_threshold
         self.persistence = persistence
+        self.on_open = on_open
 
         self._state = CircuitState.CLOSED
         self._failure_count = 0
@@ -116,13 +118,24 @@ class CircuitBreaker:
                 self.name, self._failure_count, self.failure_threshold,
             )
             self._state = CircuitState.OPEN
+            if self.on_open:
+                try:
+                    self.on_open(self.name)
+                except Exception as e:
+                    logger.warning("CircuitBreaker [%s]: on_open callback failed: %s", self.name, e)
         self._last_error = ""
         self._save()
 
     def force_open(self, reason: str = "", duration_seconds: Optional[float] = None) -> None:
         if duration_seconds is not None:
             self.recovery_timeout = duration_seconds
+        was_open = self._state == CircuitState.OPEN
         self._state = CircuitState.OPEN
+        if self.on_open and not was_open:
+            try:
+                self.on_open(self.name)
+            except Exception as e:
+                logger.warning("CircuitBreaker [%s]: on_open callback failed: %s", self.name, e)
         self._failure_count = self.failure_threshold
         self._success_count = 0
         self._last_failure_time = time.monotonic()

@@ -907,3 +907,30 @@ async def test_own_post_reply_already_existed_increments_comments_today():
     # already_existed path returns a result but must still increment
     assert len(result) >= 1
     assert incr_calls, f"Expected incr_comments_today to be called, got {len(incr_calls)} calls"
+
+
+# ── Persistencia del contador de feed estancado ───────────────────
+
+
+def test_feed_stall_count_roundtrip(tmp_path):
+    """_save_feed_stall_count/_load_feed_stall_count hacen roundtrip por disco."""
+    import phases.phase_b.orchestrator as orch
+
+    state_file = tmp_path / "phase_b_feed_stall.json"
+    with patch.object(orch, "_FEED_STALL_STATE_FILE", state_file):
+        assert orch._load_feed_stall_count() == 0  # sin archivo → 0
+        orch._save_feed_stall_count(3)
+        assert state_file.exists()
+        assert orch._load_feed_stall_count() == 3
+        orch._save_feed_stall_count(0)
+        assert orch._load_feed_stall_count() == 0
+
+
+def test_feed_stall_load_tolerates_corrupt_file(tmp_path):
+    """Archivo corrupto → 0 sin excepción."""
+    import phases.phase_b.orchestrator as orch
+
+    state_file = tmp_path / "phase_b_feed_stall.json"
+    state_file.write_text("{no es json", encoding="utf-8")
+    with patch.object(orch, "_FEED_STALL_STATE_FILE", state_file):
+        assert orch._load_feed_stall_count() == 0

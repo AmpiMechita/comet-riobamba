@@ -104,7 +104,7 @@ _AGENT_CROSSOVER_KEYWORDS = frozenset([
 ])
 
 
-def _maybe_bridge_to_agenda(title: str, extra_text: str, category: str, source_label: str) -> None:
+def _maybe_bridge_to_agenda(title: str, extra_text: str, category: str, source_label: str, telegram_client=None) -> None:
     """Si el hallazgo tiene señal de cruce con agentes/automatización, propone
     un tema enmarcado del lado de agentes en data/research_agenda.json.
     Nunca lanza excepción — un fallo aquí no debe romper el scan de energy intel."""
@@ -118,6 +118,14 @@ def _maybe_bridge_to_agenda(title: str, extra_text: str, category: str, source_l
         agenda.add_topic(topic, source="energy_intel_bridge", tags=["energy_intel", category])
         save_agenda(agenda)
         logger.info("energy_intel_telegram: bridged to research_agenda (category=%s): %s", category, title[:60])
+        if telegram_client and getattr(telegram_client, "enabled", False):
+            try:
+                telegram_client.send_message(
+                    f"🔗 <b>Nuevo tema propuesto (energy intel)</b>\n{topic}",
+                    parse_mode="HTML",
+                )
+            except Exception as e:
+                logger.debug("energy_intel_telegram: no se pudo notificar bridge por Telegram: %s", e)
     except Exception as e:
         logger.warning("energy_intel_telegram: bridge to agenda failed: %s", e)
 
@@ -164,6 +172,7 @@ def run_energy_intel_with_alerts(telegram_client=None) -> int:
             _maybe_bridge_to_agenda(
                 claim.get("title", ""), claim.get("claim_text", ""),
                 claim.get("technology") or "energy", "frontier_claim",
+                telegram_client=telegram_client,
             )
             try:
                 telegram_client.send_message(msg, parse_mode="HTML")
@@ -287,7 +296,7 @@ def run_funding_scan(telegram_client) -> int:
         return 0
 
     for entry in all_entries[:5]:  # Max 5 alerts per scan
-        _maybe_bridge_to_agenda(entry["title"], entry.get("summary", ""), "funding", "funding_scan")
+        _maybe_bridge_to_agenda(entry["title"], entry.get("summary", ""), "funding", "funding_scan", telegram_client=telegram_client)
         msg = f"💰 <b>Funding/News</b>\n{entry['title'][:120]}\n🔗 {entry.get('link', '')}"
         try:
             telegram_client.send_message(msg, parse_mode="HTML")
@@ -315,7 +324,7 @@ def run_tech_radar_scan(telegram_client) -> int:
         return 0
 
     for entry in all_entries[:3]:  # Max 3 alerts per scan
-        _maybe_bridge_to_agenda(entry["title"], entry.get("summary", ""), "tech_radar", "tech_radar_scan")
+        _maybe_bridge_to_agenda(entry["title"], entry.get("summary", ""), "tech_radar", "tech_radar_scan", telegram_client=telegram_client)
         msg = f"📡 <b>Tech Radar</b>\n{entry['title'][:120]}\n🔗 {entry.get('link', '')}"
         try:
             telegram_client.send_message(msg, parse_mode="HTML")

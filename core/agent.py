@@ -423,6 +423,26 @@ class COMETRiobambaAgent:
                     except Exception as e:
                         logger.debug("Home: quality issues alert failed: %s", e)
 
+                # ── Off-niche topics alert (once per cycle) ─────────────
+                if self.telegram_client and self.telegram_client.enabled:
+                    try:
+                        from services.telegram_control import check_recent_off_niche_issues
+                        alert = check_recent_off_niche_issues()
+                        if alert:
+                            self.telegram_client.send_message(alert)
+                    except Exception as e:
+                        logger.debug("Home: off_niche alert failed: %s", e)
+
+                # ── Phase B feed stall alert (once per cycle) ───────────
+                if self.telegram_client and self.telegram_client.enabled:
+                    try:
+                        from services.telegram_control import check_feed_stalled
+                        alert = check_feed_stalled()
+                        if alert:
+                            self.telegram_client.send_message(alert)
+                    except Exception as e:
+                        logger.debug("Home: feed stalled alert failed: %s", e)
+
             except Exception as e:
                 logger.warning("Home dashboard check failed (continuing cycle): %s", e)
 

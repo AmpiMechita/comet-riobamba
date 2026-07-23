@@ -338,6 +338,7 @@ class ModelCascade:
                 name=f"model_cascade.{p.name}",
                 failure_threshold=p.failure_threshold,
                 recovery_timeout=p.cooldown_seconds,
+                on_open=self._alert_circuit_open,
             )
 
     async def generate(
@@ -494,6 +495,24 @@ class ModelCascade:
         raise RuntimeError(
             f"🔴 Todos los proveedores fallaron. Intentados: {attempted}. Último error: {last_error}"
         )
+
+    def _alert_circuit_open(self, cb_name: str) -> None:
+        """Callback de CircuitBreaker cuando un proveedor pasa a OPEN. Nunca lanza excepción."""
+        try:
+            telegram = self._get_telegram_client()
+            if not telegram or not telegram.enabled:
+                return
+            provider = cb_name.split(".", 1)[-1] if "." in cb_name else cb_name
+            open_count = sum(1 for cb in self.circuit_breakers.values() if cb.state.value == "open")
+            total = len(self.circuit_breakers)
+            telegram.send_alert(
+                "Proveedor fuera de rotación",
+                f"'{provider}' quedó temporalmente fuera de rotación tras fallos repetidos. "
+                f"{open_count}/{total} proveedores en OPEN ahora mismo.",
+                level="WARNING",
+            )
+        except Exception as e:
+            logger.warning("ModelCascade: no se pudo enviar alerta de circuit breaker: %s", e)
 
     def _enter_degraded_mode(self, attempted: List[str], last_error: Optional[Exception]) -> None:
         """Cascade exhausted (tier_premium → tier_fallback all down): stop generation and alert.
