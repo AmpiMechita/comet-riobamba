@@ -42,6 +42,20 @@ class TestResearchMode:
         """There must be at least 3 research closing templates."""
         assert len(RESEARCH_CLOSING_TEMPLATES) >= 3
 
+    def test_publish_only_when_in_system_prompt(self):
+        """publication_policy.publish_only_when aparece textual en el system prompt."""
+        policy = {"publication_policy": {"publish_only_when": "the post states a falsifiable claim"}}
+        sys_prompt, _ = build_prompts("test topic", policy=policy)
+        assert "Publish only when: the post states a falsifiable claim.\n" in sys_prompt
+
+    def test_publish_only_when_absent_leaves_no_artifact(self):
+        """Sin publication_policy (o vacía) no queda línea ni artefacto en el prompt."""
+        for policy in (None, {}, {"publication_policy": {}}, {"publication_policy": {"publish_only_when": ""}}):
+            sys_prompt, _ = build_prompts("test topic", policy=policy)
+            assert "Publish only when" not in sys_prompt
+            assert "Preferred topic cluster:" in sys_prompt  # el resto del prompt sigue intacto
+            assert "\n\n\n" not in sys_prompt  # sin línea vacía residual
+
     def test_research_closing_templates_contain_question(self):
         """Each closing template must end with a question mark."""
         for tmpl in RESEARCH_CLOSING_TEMPLATES:

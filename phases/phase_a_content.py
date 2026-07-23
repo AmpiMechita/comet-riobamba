@@ -513,6 +513,8 @@ def build_prompts(topic: str, policy: Optional[Dict[str, Any]] = None, variant: 
     topic_weights = policy.get("topic_weights", {}) if isinstance(policy, dict) else {}
     preferred_topics = ", ".join(topic_weights.keys()) if topic_weights else "ai agents, agent architecture, memory, llm optimization"
     style_policy = policy.get("style_policy", {}) if isinstance(policy, dict) else {}
+    publication_policy = policy.get("publication_policy", {}) if isinstance(policy, dict) else {}
+    publish_only_when = publication_policy.get("publish_only_when", "")
     tone = style_policy.get("tone", "natural_directo")
     target_words_min = style_policy.get("target_words_min", 120)
     target_words_max = style_policy.get("target_words_max", 220)
@@ -533,9 +535,12 @@ def build_prompts(topic: str, policy: Optional[Dict[str, Any]] = None, variant: 
             "Use concrete percentages or metrics.\n"
         )
 
+    publish_line = f"Publish only when: {publish_only_when}.\n" if publish_only_when else ""
+
     system_prompt = (
         f"{mission}\n\nCore principles:\n{principles_text}\n\n"
         f"Preferred topic cluster: {preferred_topics}.\n"
+        f"{publish_line}"
         f"Tone policy: {tone}.\n"
         f"Target length: {target_words_min}-{target_words_max} words.\n"
         f"Question ending allowed: {allow_question_ending or (mode == 'research')}.\n"
