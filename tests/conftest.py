@@ -63,3 +63,15 @@ def _isolate_runtime_state(tmp_path, monkeypatch):
         "services.persistence.DB_PATH",
         tmp_path / "comet_state.db",
     )
+
+    # ── Generation attempts log (phases/phase_a_content.py) ──
+    monkeypatch.setattr(
+        "phases.phase_a_content._GENERATION_ATTEMPTS_LOG",
+        tmp_path / "generation_attempts.jsonl",
+    )
+
+    # ── Roadmap published-log constant propia (services/roadmap.py) ──
+    monkeypatch.setattr(
+        "services.roadmap.PUBLISHED_LOG_PATH",
+        tmp_path / "published_posts.json",
+    )

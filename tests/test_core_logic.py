@@ -191,19 +191,20 @@ def test_decide_reply_from_post_low_relevance():
 # ── State Manager: _check_daily_reset ──────────────────────────
 
 from core.state_manager import AgentState
-from services.persistence import init_db, DB_PATH
+from services import persistence
+from services.persistence import init_db
 
 
 def _clean_db():
-    if DB_PATH.exists():
-        DB_PATH.unlink()
+    # Referencia dinamica al modulo (persistence.DB_PATH), NO import por valor:
+    # el conftest redirige el atributo del modulo a tmp_path; un nombre copiado
+    # en el import quedaria apuntando a la base REAL de data/ y la borraria.
+    if persistence.DB_PATH.exists():
+        persistence.DB_PATH.unlink()
     init_db()
-    _log = DB_PATH.parent / "published_post.json"
-    if _log.exists():
-        _log.unlink()
-    _LOG_PATH = DB_PATH.parent / "published_posts.json"
-    if _LOG_PATH.exists():
-        _LOG_PATH.unlink()
+    _log_path = persistence.DB_PATH.parent / "published_posts.json"
+    if _log_path.exists():
+        _log_path.unlink()
 
 
 def test_agent_state_init():

@@ -7,6 +7,7 @@ import pytest
 import tempfile
 import shutil
 
+from services import roadmap
 from services.roadmap import (
     Roadmap, Series, load_roadmap, save_roadmap,
     choose_topic_from_roadmap, update_series_weight,
@@ -101,8 +102,10 @@ def test_choose_topic_anti_repetition(tmp_path: Path) -> None:
             "Topic C about agents",
         ]),
     ])
-    # Simulate published history with Topic A and Topic B
-    pub_path = Path("data/published_posts.json")
+    # Simulate published history with Topic A and Topic B.
+    # Via la constante del modulo (redirigida a tmp_path por conftest),
+    # NUNCA con Path("data/...") crudo: eso escribia/borraba el archivo REAL.
+    pub_path = roadmap.PUBLISHED_LOG_PATH
     pub_path.parent.mkdir(parents=True, exist_ok=True)
     pub_path.write_text(json.dumps([
         {"topic": "Topic A about agents"},
@@ -119,7 +122,7 @@ def test_choose_topic_anti_repetition(tmp_path: Path) -> None:
 
 def test_choose_topic_all_recent_falls_back(sample_roadmap: Roadmap) -> None:
     # If all topics are recent, it should still return something
-    pub_path = Path("data/published_posts.json")
+    pub_path = roadmap.PUBLISHED_LOG_PATH
     pub_path.parent.mkdir(parents=True, exist_ok=True)
     all_topics = sample_roadmap.all_topics()
     pub_path.write_text(json.dumps([
