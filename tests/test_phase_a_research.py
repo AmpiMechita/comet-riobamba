@@ -248,6 +248,9 @@ class TestLooksLowQualityPolicyGate:
         "quality_filters": {
             "reject_if_mentions_moltbook": True,
             "reject_if_mentions_llm": True,
+            # off_niche tiene su propia clase de tests; aqui se aisla el
+            # gate de menciones + min score.
+            "reject_if_off_niche": False,
             "min_quality_score": 0.72,
         }
     }
@@ -293,6 +296,61 @@ class TestLooksLowQualityPolicyGate:
         )
         assert len(text) >= EDITORIAL_CONFIG["min_length_chars"]
         low, reason = _looks_low_quality(text, self.POLICY)
+        assert low is False
+        assert reason == ""
+
+
+# ── Gate off-niche en _looks_low_quality ──────────────────────────
+
+class TestLooksLowQualityOffNiche:
+    """reject_if_off_niche exige que el texto mencione el nicho (agentes) o
+    alguna palabra de topic_weights."""
+
+    POLICY = {
+        "quality_filters": {"reject_if_off_niche": True},
+        "topic_weights": {"observability for multi-step workflows": 1.0},
+    }
+
+    RECIPE = (
+        "Start by simmering the tomatoes over low heat until they break down "
+        "into a rich sauce, then fold in the fresh basil and a generous pour "
+        "of olive oil. Season the dish and let the flavors meld overnight "
+        "before serving it alongside crusty bread and a bright salad."
+    )
+
+    @staticmethod
+    def _pad(text: str) -> str:
+        filler = " The team keeps refining the recipe over many quiet evenings at home."
+        while len(text) < EDITORIAL_CONFIG["min_length_chars"]:
+            text += filler
+        return text
+
+    def test_niche_mention_not_rejected(self):
+        text = self._pad(
+            "Running an autonomous agent in production surfaces failure modes "
+            "that never appear in local runs, especially around retries."
+        )
+        low, reason = _looks_low_quality(text, self.POLICY)
+        assert reason != "off_niche"
+        assert low is False
+
+    def test_topic_weights_word_not_rejected(self):
+        text = self._pad(
+            "Good observability changes which incidents you even notice, and "
+            "which quiet regressions slip past every reviewer unnoticed."
+        )
+        low, reason = _looks_low_quality(text, self.POLICY)
+        assert reason != "off_niche"
+        assert low is False
+
+    def test_off_niche_text_rejected(self):
+        low, reason = _looks_low_quality(self._pad(self.RECIPE), self.POLICY)
+        assert low is True
+        assert reason == "off_niche"
+
+    def test_off_niche_disabled_not_rejected(self):
+        policy = {"quality_filters": {"reject_if_off_niche": False}}
+        low, reason = _looks_low_quality(self._pad(self.RECIPE), policy)
         assert low is False
         assert reason == ""
 
@@ -361,8 +419,8 @@ async def test_retry_sends_correction_in_second_attempt(monkeypatch, tmp_path):
     valid_text = (
         "Retry loop integration check\n\n"
         "We spent three weeks tracing why our retry queue kept starving the primary "
-        "workers during peak load, and the answer turned out to be a lock held far "
-        "longer than anyone assumed.\n\n"
+        "workers during peak load in production, and the answer turned out to be a "
+        "lock held far longer than anyone assumed.\n\n"
         "Once we moved the bookkeeping out of the critical section, the starvation "
         "disappeared and throughput recovered. The lesson we keep relearning: measure "
         "the hot path before blaming the scheduler, because intuition about contention "

@@ -626,6 +626,16 @@ def _looks_low_quality(text: str, policy: dict | None = None) -> tuple[bool, str
     ):
         return True, "mentions_llm"
 
+    if qf.get("reject_if_off_niche", True):
+        niche_keywords = {"agent", "agents", "autonomous", "production"}
+        for phrase in (policy or {}).get("topic_weights", {}).keys():
+            for word in phrase.lower().split():
+                word = "".join(c for c in word if c.isalpha())
+                if len(word) >= 4 and word not in {"with", "that", "this", "from", "have", "when", "your"}:
+                    niche_keywords.add(word)
+        if not any(kw in text_lower for kw in niche_keywords):
+            return True, "off_niche"
+
     min_score = qf.get("min_quality_score")
     if min_score is not None:
         # Se compara research_value_score (no composite_score): en generacion

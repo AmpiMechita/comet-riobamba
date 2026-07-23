@@ -97,6 +97,31 @@ def _format_claim_alert(claim: dict) -> str:
     return "\n".join(lines)
 
 
+_AGENT_CROSSOVER_KEYWORDS = frozenset([
+    "agent", "agents", "autonomous", "monitoring", "predictive maintenance",
+    "anomaly detection", "control system", "automat", "orchestrat",
+    "pipeline", "trading algorithm", "grid management", "sensor network",
+])
+
+
+def _maybe_bridge_to_agenda(title: str, extra_text: str, category: str, source_label: str) -> None:
+    """Si el hallazgo tiene señal de cruce con agentes/automatización, propone
+    un tema enmarcado del lado de agentes en data/research_agenda.json.
+    Nunca lanza excepción — un fallo aquí no debe romper el scan de energy intel."""
+    try:
+        combined = f"{title} {extra_text}".lower()
+        if not any(kw in combined for kw in _AGENT_CROSSOVER_KEYWORDS):
+            return
+        from services.research_agenda import load_agenda, save_agenda
+        topic = f"production reliability of autonomous agents in {category} systems — case: {title[:100]}"
+        agenda = load_agenda()
+        agenda.add_topic(topic, source="energy_intel_bridge", tags=["energy_intel", category])
+        save_agenda(agenda)
+        logger.info("energy_intel_telegram: bridged to research_agenda (category=%s): %s", category, title[:60])
+    except Exception as e:
+        logger.warning("energy_intel_telegram: bridge to agenda failed: %s", e)
+
+
 def run_energy_intel_with_alerts(telegram_client=None) -> int:
     """Run energy intel ingest and send Telegram alerts for frontier claims.
 
@@ -136,6 +161,10 @@ def run_energy_intel_with_alerts(telegram_client=None) -> int:
         # Send max 3 alerts per run to avoid spam
         for claim in frontier_claims[:3]:
             msg = _format_claim_alert(claim)
+            _maybe_bridge_to_agenda(
+                claim.get("title", ""), claim.get("claim_text", ""),
+                claim.get("technology") or "energy", "frontier_claim",
+            )
             try:
                 telegram_client.send_message(msg, parse_mode="HTML")
             except Exception as e:
@@ -258,6 +287,7 @@ def run_funding_scan(telegram_client) -> int:
         return 0
 
     for entry in all_entries[:5]:  # Max 5 alerts per scan
+        _maybe_bridge_to_agenda(entry["title"], entry.get("summary", ""), "funding", "funding_scan")
         msg = f"💰 <b>Funding/News</b>\n{entry['title'][:120]}\n🔗 {entry.get('link', '')}"
         try:
             telegram_client.send_message(msg, parse_mode="HTML")
@@ -285,6 +315,7 @@ def run_tech_radar_scan(telegram_client) -> int:
         return 0
 
     for entry in all_entries[:3]:  # Max 3 alerts per scan
+        _maybe_bridge_to_agenda(entry["title"], entry.get("summary", ""), "tech_radar", "tech_radar_scan")
         msg = f"📡 <b>Tech Radar</b>\n{entry['title'][:120]}\n🔗 {entry.get('link', '')}"
         try:
             telegram_client.send_message(msg, parse_mode="HTML")
