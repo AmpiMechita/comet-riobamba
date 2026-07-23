@@ -43,8 +43,8 @@ def cascade(mock_credentials):
     return c
 
 
-def _add_provider(cascade, name, enabled=True, model="test-model", url="http://test.local"):
-    p = ProviderConfig(name=name, url=url, model=model, enabled=enabled)
+def _add_provider(cascade, name, enabled=True, model="test-model", url="http://test.local", paid=False):
+    p = ProviderConfig(name=name, url=url, model=model, enabled=enabled, paid=paid)
     cascade.providers.append(p)
     cascade.circuit_breakers[name] = CircuitBreaker(
         name=f"model_cascade.{name}",
@@ -119,6 +119,59 @@ async def test_fallback_to_next_provider_on_failure(cascade):
             result = await cascade.generate(prompt="hello")
             assert result == "fallback_ok"
             assert call_count == 2  # primary then backup
+
+
+@pytest.mark.asyncio
+async def test_fallback_prefers_free_providers_over_paid(cascade):
+    """Si el tier pedido (pago) falla, el fallback prueba gratis antes que pago.
+
+    Reproduce el ciclo real del 22/7/2026: tier_fallback (DeepSeek) devolvio
+    HTTP 402 y el cascade degrado directo a tier_premium (Anthropic pago) sin
+    probar ninguno de los gratis, solo por orden de registro.
+    """
+    _add_provider(cascade, "tier_premium", paid=True)   # registrado primero, como en _load_providers
+    _add_provider(cascade, "tier_sonnet")
+    _add_provider(cascade, "openrouter")
+    _add_provider(cascade, "tier_fallback", paid=True)
+
+    attempted = []
+
+    async def _call(provider, messages, max_tokens, temperature):
+        attempted.append(provider.name)
+        if provider.name == "tier_fallback":
+            raise RuntimeError("HTTP 402 desde tier_fallback - Insufficient Balance")
+        return "ok"
+
+    with patch.object(cascade, "_is_circuit_open", return_value=False):
+        with patch.object(cascade, "_call_with_retries", side_effect=_call):
+            result = await cascade.generate(prompt="hello", tier="fallback")
+
+    assert result == "ok"
+    # 1ro el preferido (tier_fallback), 2do un GRATIS — no tier_premium.
+    assert attempted[0] == "tier_fallback"
+    assert attempted[1] == "tier_sonnet", f"orden real: {attempted}"
+    assert "tier_premium" not in attempted, f"no debia llegar al pago: {attempted}"
+
+
+@pytest.mark.asyncio
+async def test_fallback_order_unchanged_without_paid_providers(cascade):
+    """Control: sin proveedores pagos, el reorden no altera el orden de registro."""
+    _add_provider(cascade, "tier_sonnet")
+    _add_provider(cascade, "openrouter")
+    _add_provider(cascade, "cloudflare")
+
+    attempted = []
+
+    async def _call(provider, messages, max_tokens, temperature):
+        attempted.append(provider.name)
+        raise RuntimeError("fail all")
+
+    with patch.object(cascade, "_is_circuit_open", return_value=False):
+        with patch.object(cascade, "_call_with_retries", side_effect=_call):
+            with pytest.raises(RuntimeError, match="Todos los proveedores fallaron"):
+                await cascade.generate(prompt="hello", tier="sonnet")
+
+    assert attempted == ["tier_sonnet", "openrouter", "cloudflare"]
 
 
 @pytest.mark.asyncio

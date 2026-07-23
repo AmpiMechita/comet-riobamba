@@ -58,6 +58,10 @@ class ProviderConfig:
     # tier (e.g. the CAPTCHA solver asking for tier="cerebras"). It is NEVER
     # picked as an automatic fallback for content generation.
     explicit_only: bool = False
+    # When True, the provider costs real money per call (Anthropic, DeepSeek).
+    # In the automatic fallback chain, free providers are tried before paid
+    # ones (see generate()); the explicitly requested tier still goes first.
+    paid: bool = False
 
 
 class ModelCascade:
@@ -117,6 +121,7 @@ class ModelCascade:
                     cooldown_seconds=self.default_cooldown,
                     failure_threshold=self.default_failure_threshold,
                     kind="anthropic",
+                    paid=True,
                 )
             )
         else:
@@ -136,15 +141,16 @@ class ModelCascade:
                         max_retries=self.default_retries,
                         cooldown_seconds=self.default_cooldown,
                         failure_threshold=self.default_failure_threshold,
+                        paid=True,
                     )
                 )
 
-        # ── tier_sonnet (Gemini) + openrouter: product-gated fallbacks ────
-        # Gemini desactivado por decisión de producto (solo modelos de pago).
-        # Reactivar con GEMINI_ENABLED=true solo en caso de fallo simultáneo de
-        # Anthropic y DeepSeek. OpenRouter sigue el mismo patrón reversible
-        # (OPENROUTER_ENABLED). Con ambos en false, la cascada de contenido queda
-        # limitada a Anthropic (primario) → DeepSeek (fallback).
+        # ── tier_sonnet (Gemini) + openrouter + cloudflare: flag-gated ────
+        # Proveedores gratis, reversibles por flag (GEMINI_ENABLED,
+        # OPENROUTER_ENABLED, CLOUDFLARE_ENABLED). Activados 22/7/2026 por falta
+        # de credito en DeepSeek; desde esa fecha el fallback automatico prueba
+        # gratis antes que pago (ver generate() y el campo `paid`), asi que
+        # estos cubren fallas de los tiers pagos sin degradar a Anthropic.
         _gemini_enabled = os.getenv("GEMINI_ENABLED", "false").strip().lower() in ("1", "true", "yes")
         _openrouter_enabled = os.getenv("OPENROUTER_ENABLED", "false").strip().lower() in ("1", "true", "yes")
         _cloudflare_enabled = os.getenv("CLOUDFLARE_ENABLED", "false").strip().lower() in ("1", "true", "yes")
@@ -213,6 +219,7 @@ class ModelCascade:
                     max_retries=self.default_retries,
                     cooldown_seconds=self.default_cooldown,
                     failure_threshold=self.default_failure_threshold,
+                    paid=True,
                 )
             )
         elif creds.tier_haiku is not None:
@@ -227,6 +234,7 @@ class ModelCascade:
                     max_retries=self.default_retries,
                     cooldown_seconds=self.default_cooldown,
                     failure_threshold=self.default_failure_threshold,
+                    paid=True,
                 )
             )
 
@@ -351,6 +359,15 @@ class ModelCascade:
             p for p in self.providers
             if p.name != provider_name and not p.explicit_only
         ]
+        # Gratis antes que pago en el fallback automatico (22/7/2026): si el
+        # tier pedido falla (p.ej. tier_fallback/DeepSeek sin credito), se
+        # prueban los proveedores gratis (Gemini/OpenRouter/Cloudflare/Cerebras)
+        # antes de degradar a uno pago (Anthropic). Orden relativo dentro de
+        # cada grupo se preserva (orden de registro).
+        fallback_pool = (
+            [p for p in fallback_pool if not p.paid]
+            + [p for p in fallback_pool if p.paid]
+        )
         if preferred:
             ordered_providers = [preferred] + fallback_pool
         else:
