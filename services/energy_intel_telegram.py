@@ -115,7 +115,7 @@ def _maybe_bridge_to_agenda(title: str, extra_text: str, category: str, source_l
         from services.research_agenda import load_agenda, save_agenda
         topic = f"production reliability of autonomous agents in {category} systems — case: {title[:100]}"
         agenda = load_agenda()
-        agenda.add_topic(topic, source="energy_intel_bridge", tags=["energy_intel", category])
+        agenda.add_topic(topic, source="energy_intel_bridge", tags=["energy_intel", category, source_label])
         save_agenda(agenda)
         logger.info("energy_intel_telegram: bridged to research_agenda (category=%s): %s", category, title[:60])
         if telegram_client and getattr(telegram_client, "enabled", False):

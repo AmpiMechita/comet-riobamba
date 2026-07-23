@@ -22,7 +22,7 @@ def test_bridge_adds_topic_on_crossover_keyword():
     assert "production reliability of autonomous agents" in topic
     assert "wind" in topic
     assert agenda.add_topic.call_args.kwargs["source"] == "energy_intel_bridge"
-    assert agenda.add_topic.call_args.kwargs["tags"] == ["energy_intel", "wind"]
+    assert agenda.add_topic.call_args.kwargs["tags"] == ["energy_intel", "wind", "frontier_claim"]
     mock_save.assert_called_once_with(agenda)
 
 
