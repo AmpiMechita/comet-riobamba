@@ -108,6 +108,55 @@ def test_validate_post_text_valid():
     assert reason == "ok"
 
 
+# ── contains_code: vocabulario del niche NO debe marcarse como código ──
+# Fix CODE_PATTERN: async/await/class como palabras sueltas de prosa (ingeniería
+# de agentes en producción) no son código. Antes daban falsos positivos.
+
+from phases.phase_a_content import CODE_PATTERN
+
+# Prosa legítima del niche que usa async/await/class como lenguaje natural.
+NICHE_PROSE_NOT_CODE = [
+    "the agent runs async",
+    "a new class of failure modes",
+    "a class of silent errors that async loops hide",
+    "the caller awaits the result",
+    "async execution and await semantics",
+]
+
+# Código real que SÍ debe seguir siendo rechazado.
+REAL_CODE_SNIPPETS = [
+    "def foo():",
+    "class Bar:",
+    "import os",
+    "async def handler():",
+    "Here is the fix:\n\n```\nx = 1\n```",
+]
+
+
+@pytest.mark.parametrize("prose", NICHE_PROSE_NOT_CODE)
+def test_code_pattern_allows_niche_prose(prose):
+    assert CODE_PATTERN.search(prose) is None, f"falso positivo de código en prosa: {prose!r}"
+
+
+@pytest.mark.parametrize("snippet", REAL_CODE_SNIPPETS)
+def test_code_pattern_flags_real_code(snippet):
+    assert CODE_PATTERN.search(snippet) is not None, f"código real no detectado: {snippet!r}"
+
+
+@pytest.mark.parametrize("prose", NICHE_PROSE_NOT_CODE)
+def test_validate_post_text_niche_prose_not_code(prose):
+    valid, reason = validate_post_text(_long_enough(prose))
+    assert reason != "contains_code", f"prosa del niche marcada como código: {prose!r}"
+    assert valid, f"esperaba válido, reason={reason}"
+
+
+def test_validate_post_text_real_code_still_rejected():
+    text = _long_enough("Here is how you solve it: async def handler(): pass")
+    valid, reason = validate_post_text(text)
+    assert not valid
+    assert reason == "contains_code"
+
+
 # ── Fase B: relevance scoring and decisions ────────────────────
 
 from phases.phase_b import PhaseB, RelevanceDecision
