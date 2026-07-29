@@ -70,6 +70,16 @@ def _isolate_runtime_state(tmp_path, monkeypatch):
         tmp_path / "generation_attempts.jsonl",
     )
 
+    # ── Rejected-posts log (phases/phase_a_content.py) ──
+    # Sin esto, los tests que ejercitan execute() real de Fase A escriben en
+    # el data/rejected_posts.jsonl REAL cuando un cuerpo generado cae en un gate.
+    # Los tests que ya parchean este path (Fix 2) siguen ganando: su monkeypatch
+    # se aplica despues de este fixture autouse y lo sobreescribe.
+    monkeypatch.setattr(
+        "phases.phase_a_content._REJECTED_POSTS_LOG",
+        tmp_path / "rejected_posts.jsonl",
+    )
+
     # ── Roadmap published-log constant propia (services/roadmap.py) ──
     monkeypatch.setattr(
         "services.roadmap.PUBLISHED_LOG_PATH",
