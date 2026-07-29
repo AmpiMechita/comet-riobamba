@@ -685,6 +685,31 @@ def _log_generation_attempt(topic: str, topic_source: str, attempt: int, max_att
         logger.debug("Phase A: no se pudo loguear generation attempt: %s", e)
 
 
+_REJECTED_POSTS_LOG = BASE_DIR / "data/rejected_posts.jsonl"
+
+
+def _log_rejected_body(topic: str, topic_source: str, attempt: int, reason: str, title: str, body: str) -> None:
+    """Persiste el cuerpo generado que fue rechazado, para poder auditar por que
+    rebota el gate de calidad (variantes clarification/metric_proposal). Append-only;
+    no toca la logica de decision. Complementa _log_generation_attempt, que solo
+    guarda la razon y no el texto."""
+    try:
+        _REJECTED_POSTS_LOG.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            "timestamp": datetime.now(UTC).isoformat(),
+            "topic": topic,
+            "topic_source": topic_source,
+            "attempt": attempt,
+            "reason": reason,
+            "title": title[:200],
+            "body": body[:800],
+        }
+        with open(_REJECTED_POSTS_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception as e:
+        logger.debug("Phase A: no se pudo registrar rejected body: %s", e)
+
+
 _RETRY_CORRECTION_HINTS: Dict[str, str] = {
     "too_short": "El intento anterior fue muy corto. Desarrolla la idea con mas profundidad hasta llegar al largo minimo requerido.",
     "too_long": "El intento anterior excedio el largo maximo. Se mas directo y recorta lo accesorio.",
@@ -1090,6 +1115,7 @@ class PhaseAContentGeneration:
                 if not is_valid:
                     logger.warning("Phase A: contenido invalido (reason=%s), reintentar...", reason)
                     _log_generation_attempt(topic, topic_source, attempt, max_attempts, f"validation_failed:{reason}")
+                    _log_rejected_body(topic, topic_source, attempt, f"validation_failed:{reason}", title, post_text)
                     retry_correction = _build_retry_correction(f"validation_failed:{reason}")
                     if attempt >= max_attempts:
                         generated_post = {"title": title, "body": post_text, "metadata": {"topic": topic, "validation_reason": reason}, "attempts": attempt, "published": False, "error": f"validation_failed:{reason}"}
@@ -1097,6 +1123,7 @@ class PhaseAContentGeneration:
                 if is_similar_to_recent(post_text):
                     logger.warning("Phase A: contenido muy similar a posts recientes. Se descarta.")
                     _log_generation_attempt(topic, topic_source, attempt, max_attempts, "similar_recent")
+                    _log_rejected_body(topic, topic_source, attempt, "similar_recent", title, post_text)
                     retry_correction = _build_retry_correction("similar_recent")
                     if attempt >= max_attempts:
                         generated_post = {"title": title, "body": post_text, "metadata": {"topic": topic, "validation_reason": "similar_recent"}, "attempts": attempt, "published": False, "error": "similar_recent"}
@@ -1105,6 +1132,7 @@ class PhaseAContentGeneration:
                 if low_quality:
                     logger.warning("Phase A: contenido descartado por baja calidad (reason=%s), reintentar...", low_quality_reason)
                     _log_generation_attempt(topic, topic_source, attempt, max_attempts, low_quality_reason)
+                    _log_rejected_body(topic, topic_source, attempt, low_quality_reason, title, post_text)
                     retry_correction = _build_retry_correction(low_quality_reason)
                     if attempt >= max_attempts:
                         generated_post = {"title": title, "body": post_text, "metadata": {"topic": topic, "validation_reason": low_quality_reason}, "attempts": attempt, "published": False, "error": f"low_quality:{low_quality_reason}"}

@@ -7,6 +7,7 @@ Tests unitarios para lógica core de COMET-RIOBAMBA:
 - Gates de cuota diarios, por ciclo, por post
 """
 
+import json
 import logging
 import os
 import sys
@@ -155,6 +156,53 @@ def test_validate_post_text_real_code_still_rejected():
     valid, reason = validate_post_text(text)
     assert not valid
     assert reason == "contains_code"
+
+
+# ── _log_rejected_body: persiste texto rechazado para observabilidad (Fix 2) ──
+
+def test_log_rejected_body_writes_valid_json_and_truncates(tmp_path, monkeypatch):
+    import phases.phase_a_content as pac
+
+    target = tmp_path / "rejected_posts.jsonl"
+    monkeypatch.setattr(pac, "_REJECTED_POSTS_LOG", target)
+
+    long_title = "T" * 300
+    long_body = "B" * 1000
+    pac._log_rejected_body(
+        topic="mi tópico de prueba",
+        topic_source="arxiv",
+        attempt=2,
+        reason="low_quality:below_min_quality_score:0.3:clarification",
+        title=long_title,
+        body=long_body,
+    )
+
+    assert target.exists(), "el archivo de rechazos no se escribió"
+    lines = target.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    rec = json.loads(lines[0])  # JSON válido
+    assert rec["topic"] == "mi tópico de prueba"
+    assert rec["topic_source"] == "arxiv"
+    assert rec["attempt"] == 2
+    assert rec["reason"] == "low_quality:below_min_quality_score:0.3:clarification"
+    assert len(rec["title"]) == 200 and rec["title"] == "T" * 200  # truncado a 200
+    assert len(rec["body"]) == 800 and rec["body"] == "B" * 800    # truncado a 800
+    assert "timestamp" in rec
+
+
+def test_log_rejected_body_appends(tmp_path, monkeypatch):
+    import phases.phase_a_content as pac
+
+    target = tmp_path / "rejected_posts.jsonl"
+    monkeypatch.setattr(pac, "_REJECTED_POSTS_LOG", target)
+
+    pac._log_rejected_body("t1", "arxiv", 1, "similar_recent", "title1", "body1")
+    pac._log_rejected_body("t2", "rss", 3, "validation_failed:contains_url", "title2", "body2")
+
+    lines = target.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 2
+    assert json.loads(lines[0])["topic"] == "t1"
+    assert json.loads(lines[1])["reason"] == "validation_failed:contains_url"
 
 
 # ── Fase B: relevance scoring and decisions ────────────────────
