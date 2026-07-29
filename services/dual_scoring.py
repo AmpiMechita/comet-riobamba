@@ -34,51 +34,54 @@ def _count_signals(text: str, *patterns: str) -> int:
     return sum(1 for p in patterns if p in text_lower)
 
 
+# Verbos de RESULTADO en pasado: indican un efecto ya medido (un hallazgo
+# empirico), no una propuesta de medir. Una metrica acompanada de uno de estos
+# NO debe caer a metric_proposal.
+OUTCOME_SIGNALS = (
+    "cut ", "reduced", "dropped", "rejected", "rejecting", "eliminated", "halved",
+    "decreased", "increased", "prevented", "caught", "the fix was", "the fix ",
+    "we now ", "we switched", "we moved", "in our runs", "in practice", "once we",
+)
+
+
 def classify_content(text: str) -> ResearchValueType:
-    # Framework: strong single signal (explicit proposal marker)
+    # 1. Framework: senal fuerte explicita
     if _count_signals(text, "i propose", "a framework for") >= 1:
         return ResearchValueType.FRAMEWORK_PROPOSAL
 
-    # Numeric/metric detection: numbers, percentages, or measurement terms.
-    # Check before empirical so that quantitative claims are caught.
-    if _has_metric_signals(text):
-        return ResearchValueType.METRIC_PROPOSAL
-
-    # Empirical: observation, measurement, production experience
-    if _count_signals(
-        text,
-        "measured", "observed", "in our tests", "in production", "data shows",
+    # 2. Empirical: keywords originales O (metrica + verbo de resultado en pasado).
+    #    Un hallazgo empirico ES una medicion con resultado; no debe caer a metric_proposal.
+    _orig_empirical = _count_signals(
+        text, "measured", "observed", "in our tests", "in production", "data shows",
         "latency", "throughput", "we deployed", "we benchmarked",
-    ) >= 1:
+    ) >= 1
+    _metric_with_outcome = _has_metric_signals(text) and _count_signals(text, *OUTCOME_SIGNALS) >= 1
+    if _orig_empirical or _metric_with_outcome:
         return ResearchValueType.EMPIRICAL_FINDING
 
-    # Framework: 2+ architecture/design keywords (catch incidental mentions)
+    # 3. Framework por 2+ keywords de arquitectura
     if _count_signals(
-        text,
-        "framework", "pattern", "architecture", "design",
+        text, "framework", "pattern", "architecture", "design",
         "invariant", "consensus", "dag", "merkle", "entropy", "schema",
     ) >= 2:
         return ResearchValueType.FRAMEWORK_PROPOSAL
 
-    has_critique = _count_signals(
-        text, "the problem is", "fails because", "breaks when", "does not handle",
-    ) >= 1
-    has_alternative = _count_signals(
-        text, "instead", "alternative", "better approach", "fix:", "solution is",
-    ) >= 1
+    # 4. Critica con alternativa
+    has_critique = _count_signals(text, "the problem is", "fails because", "breaks when", "does not handle") >= 1
+    has_alternative = _count_signals(text, "instead", "alternative", "better approach", "fix:", "solution is") >= 1
     if has_critique and has_alternative:
         return ResearchValueType.CRITIQUE_WITH_ALTERNATIVE
 
-    if _count_signals(
-        text, "in 199", "in 200", "similar to how", "parallel to", "learned from",
-    ) >= 2:
+    # 5. Metric_proposal: AHORA fallthrough — solo metricas SIN sustancia de arriba
+    #    (ej. "deberiamos trackear la latencia", una propuesta de medir sin resultado).
+    if _has_metric_signals(text):
+        return ResearchValueType.METRIC_PROPOSAL
+
+    # 6-8. Historical / agreement / clarification (igual que antes)
+    if _count_signals(text, "in 199", "in 200", "similar to how", "parallel to", "learned from") >= 2:
         return ResearchValueType.HISTORICAL_PARALLEL
-
-    if len(text) < 200 and _count_signals(
-        text, "good point", "exactly", "you're right", "solid engineering",
-    ) >= 2:
+    if len(text) < 200 and _count_signals(text, "good point", "exactly", "you're right", "solid engineering") >= 2:
         return ResearchValueType.AGREEMENT
-
     return ResearchValueType.CLARIFICATION
 
 

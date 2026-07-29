@@ -26,7 +26,11 @@ def test_classify_framework_proposal():
 # ---------------------------------------------------------------------------
 
 def test_classify_metric_proposal():
-    text = "A useful signal is to track the 95th percentile for latency."
+    # Nota: se quito "latency" del texto original porque, con el reorden de
+    # classify_content (empirical antes de metric_proposal), "latency" es una
+    # keyword empirica y desviaria esta frase a EMPIRICAL_FINDING. Sigue siendo
+    # una propuesta de medir (metrica sin verbo de resultado) -> METRIC_PROPOSAL.
+    text = "A useful signal is to track the 95th percentile for response time."
     result = classify_content(text)
     assert result == ResearchValueType.METRIC_PROPOSAL
 
@@ -99,6 +103,40 @@ def test_classify_default_clarification():
 # ---------------------------------------------------------------------------
 # Test 8: log_dual_score escribe JSONL correctamente
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Fix 3: hallazgos empiricos con metrica + verbo de resultado NO deben caer a
+#         metric_proposal. Cuerpos reales capturados (versiones abreviadas).
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("text", [
+    "The fix was splitting checkpoints into two tiers... This cut duplicate-action "
+    "incidents from roughly 4% of restores to near zero over 300 recovery events.",
+    "The fix was separating state into two tiers... If the diff shows more than "
+    "roughly 5% drift, rollback halts... This cut silent re-failures by more than "
+    "half in our runs.",
+    "The fix was separating state capture from validation... rejecting roughly 4% "
+    "of snapshots that looked structurally fine but failed replay.",
+])
+def test_classify_empirical_metric_with_outcome(text):
+    assert classify_content(text) == ResearchValueType.EMPIRICAL_FINDING
+
+
+def test_classify_metric_proposal_without_outcome():
+    # Metrica sin verbo de resultado -> propuesta de medir, no hallazgo.
+    text = "We should track the p99 of tool calls. A useful metric would be time to first token."
+    assert classify_content(text) == ResearchValueType.METRIC_PROPOSAL
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("I propose a two-phase commit for agent tool calls.", ResearchValueType.FRAMEWORK_PROPOSAL),
+    ("This pattern combines a schema invariant with a consensus design.", ResearchValueType.FRAMEWORK_PROPOSAL),
+    ("The problem is blind retries. Instead, use a circuit breaker.", ResearchValueType.CRITIQUE_WITH_ALTERNATIVE),
+    ("Interesting take on agent loops, worth thinking about more.", ResearchValueType.CLARIFICATION),
+])
+def test_classify_regression_types(text, expected):
+    assert classify_content(text) == expected
+
 
 def test_log_dual_score_writes_jsonl(tmp_path: Path):
     log_path = tmp_path / "dual_scores.jsonl"
