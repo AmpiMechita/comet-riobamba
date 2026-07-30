@@ -11,6 +11,33 @@ from phases.phase_a_content import (
     RESEARCH_CLOSING_TEMPLATES, _topic_with_matrix_fallback,
     compute_topic_weights, _looks_low_quality,
     _build_retry_correction, _log_generation_attempt,
+    _is_substantive_post,
+)
+
+
+# Fix 6: cuerpos reales buenos que dual_scoring etiqueta de bajo valor
+# (clarification 0.3) pero son publicables: largos, on-niche, cierran con
+# una pregunta abierta genuina. El override estructural NO debe rechazarlos.
+_GOOD_SUBSTANTIVE_1 = (
+    "Fix: treat each provider in the cascade as a distinct reliability profile, "
+    "not a redundant copy. Track per-provider error rates on semantic checks, not "
+    "just HTTP status. We now gate fallback responses through a lightweight "
+    "consistency scorer comparing action intent against the last known good state "
+    "before allowing continuation. Cascade depth beyond two providers without a "
+    "re-validation step is where confidence should drop, not stay flat. What's your "
+    "circuit breaker threshold for semantic drift versus hard failure, and do you "
+    "reset cascade state or preserve context across the switch."
+)
+_GOOD_SUBSTANTIVE_2 = (
+    "The fix isn't more retries, it's treating every tool response as untrusted "
+    "until validated against an expected-shape contract, not just a status code. We "
+    "run a checksum on output cardinality and type before it enters context, and log "
+    "a divergence score whenever a tool's output distribution shifts more than 2 "
+    "standard deviations from its 7-day baseline. That single metric caught a silent "
+    "API version bump last quarter that no integration test flagged, because the "
+    "response was valid JSON, just semantically empty. If your orchestration layer "
+    "trusts HTTP 200 as ground truth, what's your plan for the failure mode where "
+    "the tool lies successfully?"
 )
 
 
@@ -312,6 +339,41 @@ class TestLooksLowQualityPolicyGate:
         low, reason = _looks_low_quality(text, self.POLICY)
         assert low is False
         assert reason == ""
+
+    # ── Fix 6: override estructural — post largo + pregunta abierta genuina
+    #    NO se rechaza aunque dual_scoring lo etiquete de bajo valor (clarification). ──
+
+    @pytest.mark.parametrize("body", [_GOOD_SUBSTANTIVE_1, _GOOD_SUBSTANTIVE_2])
+    def test_substantive_good_body_passes_override(self, body):
+        # Precondicion: dual_scoring lo puntua < 0.72 (entra al bloque min_score).
+        low, reason = _looks_low_quality(body, self.POLICY)
+        assert low is False, f"cuerpo bueno rechazado por el gate: {reason}"
+        assert reason == ""
+
+    def test_long_generic_without_question_still_rejected(self):
+        # >400 chars pero cierra con afirmacion, no pregunta -> el override NO rescata.
+        text = "Good point, exactly. You're right, solid engineering all around. " * 7
+        assert len(text.strip()) >= 400
+        low, reason = _looks_low_quality(text, self.POLICY)
+        assert low is True
+        assert reason.startswith("below_min_quality_score")
+
+
+class TestIsSubstantivePost:
+    """Estructura pura: post largo (>=400) que cierra con pregunta abierta de >=8
+    palabras. No depende de keywords del dominio."""
+
+    @pytest.mark.parametrize("text", [_GOOD_SUBSTANTIVE_1, _GOOD_SUBSTANTIVE_2])
+    def test_substantive_true(self, text):
+        assert _is_substantive_post(text) is True
+
+    @pytest.mark.parametrize("text", [
+        "Interesting take on agent loops, worth thinking about more.",  # corto
+        "Good point, exactly right, solid engineering here.",           # corto + generico
+        "What do you think?",                                           # pregunta pero < 400
+    ])
+    def test_substantive_false(self, text):
+        assert _is_substantive_post(text) is False
 
 
 # ── Gate off-niche en _looks_low_quality ──────────────────────────

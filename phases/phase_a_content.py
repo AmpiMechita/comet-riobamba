@@ -618,6 +618,31 @@ async def call_model(deps: PhaseADeps, system_prompt: str, user_prompt: str) -> 
         )
     raise RuntimeError("ModelCascade no tiene metodo generate compatible")
 
+SUBSTANTIVE_MIN_CHARS = 400
+_INTERROGATIVE_MARKERS = (
+    "what", "how", "why", "when", "which", "where", "who", "do you", "does your",
+    "did you", "have you", "has anyone", "would you", "is there", "what's", "how's",
+    "how do", "how would", "can you",
+)
+
+
+def _is_substantive_post(text: str) -> bool:
+    """True si el texto es un post de longitud completa que cierra con una pregunta
+    abierta genuina. Sirve para NO rechazar contenido bueno que el clasificador de
+    tipo (dual_scoring) etiqueta bajo por vocabulario, sin dejar pasar comentarios
+    cortos/genericos. Detecta estructura, no keywords del dominio."""
+    s = (text or "").strip()
+    if len(s) < SUBSTANTIVE_MIN_CHARS:
+        return False
+    import re as _re
+    sents = [x.strip() for x in _re.split(r'(?<=[.!?])\s+|\n+', s) if x.strip()]
+    if not sents:
+        return False
+    last = sents[-1].lower()
+    is_question = ("?" in last) or any(last.startswith(m) for m in _INTERROGATIVE_MARKERS)
+    return is_question and len(last.split()) >= 8
+
+
 def _looks_low_quality(text: str, policy: dict | None = None) -> tuple[bool, str]:
     if not text or not isinstance(text, str):
         return True, "empty_or_invalid"
@@ -662,6 +687,12 @@ def _looks_low_quality(text: str, policy: dict | None = None) -> tuple[bool, str
         # historical y rechaza metric/clarification/agreement/repetition.
         score = compute_dual_score(stripped)
         if score["research_value_score"] < float(min_score):
+            # Override estructural (Fix 6): un post de longitud completa que cierra
+            # con una pregunta abierta genuina es publicable aunque el content_type
+            # sea de bajo valor. dual_scoring clasifica TIPO (disenado para rankear
+            # comentarios ajenos en Fase B), no captura todo el vocabulario del niche.
+            if _is_substantive_post(stripped):
+                return False, ""
             return True, f"below_min_quality_score:{score['research_value_score']}:{score['content_type']}"
 
     return False, ""
