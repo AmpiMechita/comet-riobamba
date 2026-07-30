@@ -138,6 +138,45 @@ def test_classify_regression_types(text, expected):
     assert classify_content(text) == expected
 
 
+# ---------------------------------------------------------------------------
+# Fix 4: contenido tecnico bueno del niche NO debe caer a clarification.
+#         (a) "N percent" escrito cuenta como metrica; (b) outcome en presente;
+#         (c) keywords de mecanismo del niche para framework.
+# ---------------------------------------------------------------------------
+
+def test_classify_niche_mechanism_is_framework():
+    # 4 kw de mecanismo: checkpoint, rollback, idempotency, two classes -> FRAMEWORK.
+    text = (
+        "Split state into two classes: reversible (context, plan, scratch memory) and "
+        "irreversible (anything crossing a network boundary). Only checkpoint the reversible "
+        "class. For irreversible actions, log an idempotency key and outcome hash before the "
+        "call. Track rollback-induced duplicate actions as a metric."
+    )
+    assert classify_content(text) == ResearchValueType.FRAMEWORK_PROPOSAL
+
+
+def test_classify_percent_plus_present_outcome_is_empirical():
+    # "2 percent" (metrica escrita) + "drops"/"turns" (outcome en presente) -> EMPIRICAL.
+    text = (
+        "This reframes evidence-seeking with a stopping criterion. Cap evidence retrieval "
+        "rounds, score each item for marginal decision impact, and kill the loop once "
+        "confidence delta drops below a threshold, say 2 percent. This turns context window "
+        "exhaustion into a measurable, bounded budget."
+    )
+    assert classify_content(text) == ResearchValueType.EMPIRICAL_FINDING
+
+
+@pytest.mark.parametrize("text,expected", [
+    # Adversariales: no sobre-promover. 1 sola kw de framework -> se queda en clarification.
+    ("I think checkpointing is important for agents, honestly.", ResearchValueType.CLARIFICATION),
+    ("Nice thread. Rollback is a hard problem in general.", ResearchValueType.CLARIFICATION),
+    # percent presente pero SIN outcome -> propuesta de medir, no hallazgo.
+    ("We should measure 5 percent of requests as a sample.", ResearchValueType.METRIC_PROPOSAL),
+])
+def test_classify_fix4_adversarial(text, expected):
+    assert classify_content(text) == expected
+
+
 def test_log_dual_score_writes_jsonl(tmp_path: Path):
     log_path = tmp_path / "dual_scores.jsonl"
     from services.dual_scoring import DUAL_SCORE_LOG as _orig

@@ -41,6 +41,8 @@ OUTCOME_SIGNALS = (
     "cut ", "reduced", "dropped", "rejected", "rejecting", "eliminated", "halved",
     "decreased", "increased", "prevented", "caught", "the fix was", "the fix ",
     "we now ", "we switched", "we moved", "in our runs", "in practice", "once we",
+    # Fix 4: variantes en PRESENTE (el niche narra en presente: "drops below", "turns into")
+    "cuts ", "reduces", "drops ", "rejects", "eliminates", "prevents", "catches", "turns ",
 )
 
 
@@ -63,6 +65,9 @@ def classify_content(text: str) -> ResearchValueType:
     if _count_signals(
         text, "framework", "pattern", "architecture", "design",
         "invariant", "consensus", "dag", "merkle", "entropy", "schema",
+        # Fix 4: mecanismos de alta precision del vocabulario del niche (agentes/sistemas).
+        "checkpoint", "rollback", "idempotency", "idempotent", "state machine",
+        "commit log", "stopping criterion", "two tiers", "two classes",
     ) >= 2:
         return ResearchValueType.FRAMEWORK_PROPOSAL
 
@@ -87,6 +92,8 @@ def classify_content(text: str) -> ResearchValueType:
 
 def _has_metric_signals(text: str) -> bool:
     if re.search(r'\d+\.?\d*\s*%', text):
+        return True
+    if re.search(r'\d+\.?\d*\s*percent\b', text, re.IGNORECASE):  # Fix 4: "N percent" escrito
         return True
     if re.search(r'\b\d+(\.\d+)?\s*(ms|seconds|minutes|hours|rps|tps|qps|requests per)\b', text, re.IGNORECASE):
         return True
