@@ -60,10 +60,15 @@ CODE_PATTERN = re.compile(
     r"```",                     # fenced code block
     re.MULTILINE,
 )
-ERROR_PATTERN = re.compile(r"Traceback \(most recent call last\)|Exception|HTTPError|ConnectionError", re.IGNORECASE)
+# Fix 5: exige FORMA de log/excepcion (no la palabra suelta "exception" en prosa).
+# Sin IGNORECASE: los nombres reales de excepcion van en PascalCase.
+ERROR_PATTERN = re.compile(r"Traceback \(most recent call last\)|^\s*raise\s+\w+|\b[A-Z]\w*(Error|Exception):", re.MULTILINE)
 BULLET_PATTERN = re.compile(r"^\s*[-*•]\s+", re.MULTILINE)
 EMOJI_PATTERN = re.compile(r"[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF\U0001F1E0-\U0001F1FF\U00002702-\U000027B0\U0001F900-\U0001F9FF]", re.UNICODE)
-ACADEMIC_SUBTITLE_PATTERN = re.compile(r"^\s*(Abstract|Claim|Introduction|Conclusion|Failure Case|Discussion|Methodology)\s*:?", re.IGNORECASE | re.MULTILINE)
+# Fix 5: rebota subtitulo real -> dos puntos ("Abstract:") O palabra sola en su
+# linea ("Abstract\n\n..."), via \s*(:|$) con MULTILINE. Deja pasar prosa que
+# empieza con esas palabras seguidas de mas texto ("Claim verification is hard.").
+ACADEMIC_SUBTITLE_PATTERN = re.compile(r"^\s*(Abstract|Claim|Introduction|Conclusion|Failure Case|Discussion|Methodology)\s*(:|$)", re.IGNORECASE | re.MULTILINE)
 FILLER_STARTS = re.compile(r"^(In the realm of|One non-obvious|Consider a scenario where)", re.IGNORECASE)
 
 EDITORIAL_CONFIG = {

@@ -158,6 +158,66 @@ def test_validate_post_text_real_code_still_rejected():
     assert reason == "contains_code"
 
 
+# ── Fix 5: ERROR_PATTERN — "exception" en prosa NO es un error log ──
+# La palabra suelta "exception"/"except" es vocabulario del niche; solo debe
+# rebotar la FORMA de un log/excepcion (Traceback, raise X, XError:/XException:).
+
+ERROR_PROSE_OK = [
+    "we tag every exception handler",
+    "with one exception all retries succeeded",
+    "the try-except swallowed the failure",
+]
+ERROR_REAL_REJECT = [
+    "Traceback (most recent call last):",
+    "raise ValueError",
+    "ConnectionError: timeout",
+    "ValueError: bad input",
+]
+
+
+@pytest.mark.parametrize("prose", ERROR_PROSE_OK)
+def test_validate_post_text_error_prose_ok(prose):
+    valid, reason = validate_post_text(_long_enough(prose))
+    assert reason != "contains_error_log", f"falso positivo de error log en prosa: {prose!r}"
+    assert valid, f"esperaba válido, reason={reason}"
+
+
+@pytest.mark.parametrize("snippet", ERROR_REAL_REJECT)
+def test_validate_post_text_real_error_still_rejected(snippet):
+    valid, reason = validate_post_text(_long_enough(snippet))
+    assert not valid
+    assert reason == "contains_error_log", f"error real no detectado: {snippet!r} -> {reason}"
+
+
+# ── Fix 5: ACADEMIC_SUBTITLE_PATTERN — dos puntos obligatorio ──
+# Prosa que empieza con esas palabras es válida; solo el subtítulo real "X:" rebota.
+
+ACADEMIC_PROSE_OK = [
+    "Claim verification in agents is hard.",
+    "Discussion threads rarely capture the failure.",
+    "Conclusion drift happens when loops never terminate.",
+]
+ACADEMIC_REAL_REJECT = [
+    "Abstract: this paper",
+    "Conclusion: the agent failed",
+    "Methodology:\nWe ran",
+]
+
+
+@pytest.mark.parametrize("prose", ACADEMIC_PROSE_OK)
+def test_validate_post_text_academic_prose_ok(prose):
+    valid, reason = validate_post_text(_long_enough(prose))
+    assert reason != "contains_academic_subtitles", f"falso positivo de subtítulo académico: {prose!r}"
+    assert valid, f"esperaba válido, reason={reason}"
+
+
+@pytest.mark.parametrize("prose", ACADEMIC_REAL_REJECT)
+def test_validate_post_text_real_academic_subtitle_still_rejected(prose):
+    valid, reason = validate_post_text(_long_enough(prose))
+    assert not valid
+    assert reason == "contains_academic_subtitles", f"subtítulo real no detectado: {prose!r} -> {reason}"
+
+
 # ── _log_rejected_body: persiste texto rechazado para observabilidad (Fix 2) ──
 
 def test_log_rejected_body_writes_valid_json_and_truncates(tmp_path, monkeypatch):
