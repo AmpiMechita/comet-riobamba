@@ -88,6 +88,7 @@ class ModelCascade:
     TIER_MAPPING = {
         # Tiers named by FUNCTION (not by legacy model heritage):
         "premium": "tier_premium",     # Anthropic claude-sonnet-5 (primary content)
+        "premium_opus": "tier_premium_opus",  # Anthropic claude-opus-4-8 (Fase A generation only)
         "fallback": "tier_fallback",   # DeepSeek V4 Pro (paid content fallback)
         "sonnet": "tier_sonnet",
         "openrouter": "openrouter",
@@ -144,6 +145,25 @@ class ModelCascade:
                         paid=True,
                     )
                 )
+
+        # ── tier_premium_opus: Anthropic Claude Opus 4.8 (SOLO generación Fase A) ──
+        # Mismo patrón que tier_premium pero modelo Opus. Fase B sigue usando
+        # tier_premium (Sonnet). Solo se registra si hay ANTHROPIC_API_KEY.
+        if anthropic_key:
+            self.providers.append(
+                ProviderConfig(
+                    name="tier_premium_opus",
+                    url=getattr(creds, "anthropic_url", "") or "https://api.anthropic.com/v1/messages",
+                    model=os.getenv("ANTHROPIC_OPUS_MODEL", "claude-opus-4-8"),
+                    api_key=anthropic_key,
+                    timeout=getattr(creds, "anthropic_timeout", 120) or 120,
+                    max_retries=self.default_retries,
+                    cooldown_seconds=self.default_cooldown,
+                    failure_threshold=self.default_failure_threshold,
+                    kind="anthropic",
+                    paid=True,
+                )
+            )
 
         # ── tier_sonnet (Gemini) + openrouter + cloudflare: flag-gated ────
         # Proveedores gratis, reversibles por flag (GEMINI_ENABLED,

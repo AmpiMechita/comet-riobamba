@@ -615,7 +615,7 @@ async def call_model(deps: PhaseADeps, system_prompt: str, user_prompt: str) -> 
     cascade = deps.model_cascade
     if cascade is None: raise RuntimeError("ModelCascade no disponible en deps")
     if hasattr(cascade, "generate"):
-        return await cascade.generate(tier="premium",
+        return await cascade.generate(tier="premium_opus",
             prompt=user_prompt, systemprompt=system_prompt,
             maxtokens=EDITORIAL_CONFIG["max_tokens"], temperature=EDITORIAL_CONFIG["temperature"],
         )
