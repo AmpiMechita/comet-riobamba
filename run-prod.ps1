@@ -6,6 +6,13 @@ $env:PYTHONIOENCODING = "utf-8"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Set-Location $PSScriptRoot
 
+# ── Python del proyecto (venv local) ───────────────────────────
+# Preferir .venv del proyecto; fallback a 'python' del PATH por si
+# el venv no existe (setup mínimo).
+$python = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
+if (-not (Test-Path $python)) { $python = "python" }
+Write-Host "Usando Python: $python" -ForegroundColor Cyan
+
 # ── Prevent duplicate instances ──────────────────────────────
 $lockFile = Join-Path $PSScriptRoot ".agent.lock"
 if (Test-Path $lockFile) {
@@ -34,14 +41,14 @@ if (Test-Path ".env") {
 
 # ── Syntax check ─────────────────────────────────────────────
 Write-Host "Validando sintaxis..." -ForegroundColor Cyan
-python -m py_compile .\core\agent.py .\phases\phase_a_content.py .\services\moltbook_api_client.py
+& $python -m py_compile .\core\agent.py .\phases\phase_a_content.py .\services\moltbook_api_client.py
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Error de sintaxis. Abortando." -ForegroundColor Red
     exit 1
 }
 
 # ── Write lock and start ─────────────────────────────────────
-$agentProcess = Start-Process python -ArgumentList "run_agent.py" -PassThru -NoNewWindow
+$agentProcess = Start-Process $python -ArgumentList "run_agent.py" -PassThru -NoNewWindow
 $agentProcess.Id | Out-File $lockFile -Force
 Write-Host "Iniciando COMET-RIOBAMBA (PID $($agentProcess.Id))..." -ForegroundColor Green
 
