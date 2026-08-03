@@ -455,6 +455,8 @@ class COMETRiobambaAgent:
 
         logger.info("Comment outbox: reintentando %s comentarios pendientes...", len(comment_items))
         max_daily = behavior_cfg.get("max_comments_per_day", POLICY.max_comments_per_day)
+        min_backoff = POLICY.outbox_min_backoff_seconds
+        max_backoff = POLICY.outbox_max_backoff_seconds
 
         for item in comment_items:
             if int(self.state.posts_today) + int(self.state.comments_today) >= max_daily:
@@ -489,9 +491,39 @@ class COMETRiobambaAgent:
                     mark_outbox(item["id"], "published")
                     logger.info("Comment outbox: comentario publicado en post %s (ID outbox: %s)", post_id, item.get("id"))
                 else:
-                    retry_attempt = item.get("retry_attempt", 0) + 1
-                    update_outbox_backoff(item["id"], str(result)[:200], retry_attempt)
-                    logger.warning("Comment outbox: fallo publicando comentario en post %s, retry_attempt=%s: %s", post_id, retry_attempt, result)
+                    # Clasificar el fallo igual que el outbox de posts (_retry_outbox):
+                    #   - 429 rate-limit → pending con Retry-After (backoff).
+                    #   - 4xx client error (p.ej. 404 "Parent comment not found") → failed,
+                    #     no se reintenta (un padre borrado nunca va a volver).
+                    #   - 5xx / status=0 (error de red capturado por create_comment) → pending
+                    #     con backoff (transitorio, seguro de reintentar).
+                    http_status = result.get("status") if isinstance(result, dict) else 0
+                    if http_status == 429:
+                        retry_after = result.get("retry_after_seconds")
+                        retry_attempt = item.get("retry_attempt", 0) + 1
+                        capped = min(retry_after or 60, max_backoff)
+                        update_outbox_backoff(
+                            item["id"], str(result)[:200], retry_attempt,
+                            min_backoff, max_backoff, explicit_delay_seconds=capped,
+                        )
+                        logger.warning(
+                            "Comment outbox: 429 rate-limit (Retry-After=%ss, capped=%ss), retry_attempt=%s",
+                            retry_after, capped, retry_attempt,
+                        )
+                    elif 400 <= http_status < 500:
+                        mark_outbox(item["id"], "failed", str(result)[:200])
+                        logger.warning(
+                            "Comment outbox: comentario marcado 'failed' (HTTP %s) en post %s", http_status, post_id
+                        )
+                    else:
+                        retry_attempt = item.get("retry_attempt", 0) + 1
+                        update_outbox_backoff(
+                            item["id"], str(result)[:200], retry_attempt, min_backoff, max_backoff
+                        )
+                        logger.warning(
+                            "Comment outbox: fallo publicando comentario en post %s, retry_attempt=%s: %s",
+                            post_id, retry_attempt, result,
+                        )
             except Exception as e:
                 retry_attempt = item.get("retry_attempt", 0) + 1
                 update_outbox_backoff(item["id"], str(e)[:200], retry_attempt)
