@@ -40,6 +40,11 @@ OWN_POST_IDS_PATH = Path("data/own_post_ids.json")
 
 # ── Public API ───────────────────────────────────────────────────
 
+def load_all_own_post_ids() -> List[str]:
+    """Return the complete registered set of own post IDs (no recency cap)."""
+    return _load_own_post_ids()
+
+
 def load_own_posts(limit: int = 10) -> List[Dict[str, Any]]:
     """Return recent own posts from the best available source.
     Each dict has at least an 'id' key.

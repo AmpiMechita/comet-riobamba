@@ -65,6 +65,7 @@ from .constants import (
     _COLD_START_MIN_SCORE,
     _cold_start_lock,
     MAX_CONVERSATION_DEPTH,
+    _OWN_POST_REPLY_SCORE_LIMIT,
 )
 from .scoring import RelevanceDecision, _get_feed_min_score
 from . import constants as _constants_mod
@@ -899,6 +900,40 @@ class PhaseB:
         existing = agent_comments.get(post_id, [])
         return len(existing)
 
+    def _reconcile_deleted_agent_comments(self, post_id: str) -> None:
+        """Prune recorded agent comment IDs that no longer exist on the platform
+        (HTTP 404). Deleted comments would otherwise count toward the per-post
+        reply cap forever, permanently blocking the thread."""
+        try:
+            agent_comments = self._dedup.get_agent_comment_ids()
+        except Exception as e:
+            logger.debug("Phase B: reconcile skip (dedup read failed): %s", e)
+            return
+        ids = agent_comments.get(post_id, [])
+        if not ids:
+            return
+        deleted: List[str] = []
+        for cid in ids:
+            try:
+                resp = self.api._request("GET", f"/comments/{cid}")
+            except Exception as e:
+                logger.debug("Phase B: reconcile comment %s error: %s", cid, e)
+                continue
+            if resp.get("status") == 404:
+                deleted.append(cid)
+        if deleted:
+            for cid in deleted:
+                ids.remove(cid)
+            try:
+                self._dedup.sync_agent_comment_ids(agent_comments)
+                self._agent_comment_ids = agent_comments
+            except Exception as e:
+                logger.warning("Phase B: reconcile prune persist failed: %s", e)
+            logger.info(
+                "Phase B: pruned %d deleted agent comment(s) on post %s (%s)",
+                len(deleted), post_id, ", ".join(cid[:8] for cid in deleted),
+            )
+
 
 
     def _safe_publish_comment(self, post_id: str, content: str, parent_comment_id: Optional[str] = None) -> Optional[Dict]:
@@ -924,13 +959,12 @@ class PhaseB:
         # Hard cap: never exceed max_comments_per_post total (across all cycles)
         # Only enforce for proper UUID post IDs (skip for test/synthetic IDs)
         if len(post_id) > 10:  # UUID-length check
-            max_per_post = 2  # v5.1: hard limit of 2 comments per post
             current_count = self._get_agent_reply_count_in_post(post_id)
-            if current_count >= max_per_post:
+            if current_count >= self.max_comments_per_post:
                 logger.warning(
                     "Phase B: SAFETY NET hard cap triggered for post %s (%d/%d). "
                     "This should have been caught earlier — investigate.",
-                    post_id, current_count, max_per_post,
+                    post_id, current_count, self.max_comments_per_post,
                 )
                 return None
         # Publish
@@ -2024,7 +2058,7 @@ class PhaseB:
                 return []
 
             try:
-                posts = self.api.fetch_my_posts()
+                posts = self._fetch_own_posts_for_replies()
             except Exception as e:
                 logger.error(f"Phase B: error fetching my posts: {e}")
                 span.set("results", 0)
@@ -2034,6 +2068,15 @@ class PhaseB:
                 logger.info("Phase B: no published posts found")
                 span.set("results", 0)
                 return []
+
+            # Focus on posts with active discussion first (most comments), so
+            # older high-engagement threads stay on the radar. Bound the pool so
+            # the per-candidate comment scoring keeps the API GET count sane.
+            posts = sorted(
+                posts,
+                key=lambda p: int(p.get("comment_count") or p.get("comments_count") or 0),
+                reverse=True,
+            )[:_OWN_POST_REPLY_SCORE_LIMIT]
 
             # Score own posts by unreplied comment count; prioritize threads with pending discussion
             scored_own_posts: List[tuple] = []
@@ -2063,8 +2106,9 @@ class PhaseB:
                     unreplied += 1
                 logger.info(f"Phase B: own post {post_id} has {unreplied} unreplied comments")
                 scored_own_posts.append((unreplied, idx, post))
-            # Sort: most unreplied comments first; tiebreak by recency (higher idx = newer)
-            scored_own_posts.sort(key=lambda x: (-x[0], -x[1]))
+            # Sort: most unreplied comments first; tiebreak by engagement rank
+            # (lower idx = higher comment count in the sorted pool).
+            scored_own_posts.sort(key=lambda x: (-x[0], x[1]))
             candidate_posts = [p for _, _, p in scored_own_posts[:3]]
             logger.info(f"Phase B: processing up to {len(candidate_posts)} own posts")
 
@@ -2086,17 +2130,47 @@ class PhaseB:
             span.set("results", len(results))
             return results
 
+    def _fetch_own_posts_for_replies(
+        self,
+        ranked_limit: int = 50,
+        fresh_limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """Own posts to consider for replies: high-engagement posts first (from
+        the platform API, sort=top) merged with the newest posts (durable store)
+        so fresh threads are never missed before they accumulate comments."""
+        merged: Dict[str, Dict[str, Any]] = {}
+        try:
+            resp = self.api._request(
+                "GET", "/agents/me/posts", params={"limit": ranked_limit, "sort": "top"}
+            )
+            data = resp.get("data") or {}
+            for p in data.get("posts") or data.get("items") or []:
+                pid = p.get("id") or p.get("post_id")
+                if pid:
+                    merged[pid] = dict(p)
+        except Exception as e:
+            logger.warning(f"Phase B: error fetching own posts by engagement: {e}")
+        try:
+            for p in self.api.fetch_my_posts(limit=fresh_limit):
+                pid = p.get("id") or p.get("post_id")
+                if pid and pid not in merged:
+                    merged[pid] = dict(p)
+        except Exception as e:
+            logger.warning(f"Phase B: error fetching recent own posts: {e}")
+        return list(merged.values())
+
     def _get_own_post_ids(self) -> Set[str]:
         """Return the set of the agent's own post IDs (from own_post_ids.json),
         cached per PhaseB instance. Used by the relevance bypass to detect
-        direct replies to the agent's own posts."""
+        direct replies to the agent's own posts. Loads the full registry so
+        older posts (outside the recent window) still get the own-post bypass."""
         cached = getattr(self, "_own_post_ids_cache", None)
         if cached is not None:
             return cached
         ids: Set[str] = set()
         try:
-            from services.own_post_store import load_own_posts
-            ids = {str(p.get("id")) for p in load_own_posts(limit=100) if p.get("id")}
+            from services.own_post_store import load_all_own_post_ids
+            ids = set(load_all_own_post_ids())
         except Exception as e:
             logger.debug("Phase B: could not load own_post_ids for bypass: %s", e)
         self._own_post_ids_cache = ids
@@ -2119,6 +2193,10 @@ class PhaseB:
             )
             return []
 
+        # Prune recorded agent comment IDs that no longer exist on the platform
+        # (deleted), so they stop counting against the per-post reply cap.
+        self._reconcile_deleted_agent_comments(post_id)
+
         try:
             comments = self.api.fetch_post_comments(post_id)
         except Exception as e:
@@ -2131,12 +2209,10 @@ class PhaseB:
 
         # Early exit: check hard cap BEFORE generating replies (saves LLM tokens)
         if len(post_id) > 10:
-            max_per_post = 2  # v5.1: hard limit
             current_count = self._get_agent_reply_count_in_post(post_id)
-            if current_count >= max_per_post:
-                logger.info("Phase B: Límite de 2 comentarios por post alcanzado en %s (%d/%d). Cerrando hilo.",
-                            post_id, current_count, max_per_post)
-                close_thread(post_id)
+            if current_count >= self.max_comments_per_post:
+                logger.info("Phase B: Límite de %s comentarios por post alcanzado en %s (%d/%d).",
+                            self.max_comments_per_post, post_id, current_count, self.max_comments_per_post)
                 return []
 
         # Update conversation state from latest other-agent comment

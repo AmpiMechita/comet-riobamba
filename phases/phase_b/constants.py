@@ -19,6 +19,10 @@ _cold_start_lock = Lock()
 # Conversational depth limit
 MAX_CONVERSATION_DEPTH = 3
 
+# Own-post reply candidate scoring: how many own posts (ranked by engagement)
+# are fetched for unreplied-comment scoring per cycle.
+_OWN_POST_REPLY_SCORE_LIMIT = 15
+
 COMMENT_STYLE_INSTRUCTIONS = """
 REGLAS DE ESTILO Y LONGITUD (v5.1 — Sniper Técnico):
 
