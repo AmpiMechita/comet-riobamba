@@ -80,6 +80,14 @@ def _isolate_runtime_state(tmp_path, monkeypatch):
         tmp_path / "rejected_posts.jsonl",
     )
 
+    # ── Hero-post state (phases/phase_a_content.py) ──
+    # Estado del enrutado hero/no-hero de Fase A (1 Opus/día). Sin esto los tests
+    # que ejercitan execute() escribirían el data/hero_state.json REAL.
+    monkeypatch.setattr(
+        "phases.phase_a_content._HERO_STATE_FILE",
+        tmp_path / "hero_state.json",
+    )
+
     # ── Anthropic spend tracker (services/model_cascade.py) ──
     # Sin esto, los tests que ejercitan _call_anthropic leen el data/
     # anthropic_spend_tracker.json REAL y fallan cuando el gasto del dia cruza el

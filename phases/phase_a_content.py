@@ -611,11 +611,43 @@ def build_prompts(topic: str, policy: Optional[Dict[str, Any]] = None, variant: 
         )
     return system_prompt.strip(), user_prompt.strip()
 
-async def call_model(deps: PhaseADeps, system_prompt: str, user_prompt: str) -> str:
+_HERO_STATE_FILE = BASE_DIR / "data/hero_state.json"
+
+
+def _should_use_opus_hero() -> bool:
+    """True si HOY (UTC) todavía no se usó el post 'hero' con Opus.
+
+    Estado en data/hero_state.json: {"date":"YYYY-MM-DD","opus_done":bool}.
+    Si el date != hoy (o el archivo falta/ilegible) -> opus_done=False (reset diario)."""
+    try:
+        data = json.loads(_HERO_STATE_FILE.read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError, OSError):
+        return True
+    today = datetime.now(timezone.utc).date().isoformat()
+    if data.get("date") != today:
+        return True
+    return not bool(data.get("opus_done"))
+
+
+def _mark_opus_hero_used() -> None:
+    """Marca que el hero Opus de HOY (UTC) ya se consumió."""
+    today = datetime.now(timezone.utc).date().isoformat()
+    try:
+        _HERO_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _HERO_STATE_FILE.write_text(
+            json.dumps({"date": today, "opus_done": True}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except OSError as e:
+        logger.warning("Phase A: no se pudo escribir hero_state: %s", e)
+
+
+async def call_model(deps: PhaseADeps, system_prompt: str, user_prompt: str,
+                     tier: str = "premium_opus") -> str:
     cascade = deps.model_cascade
     if cascade is None: raise RuntimeError("ModelCascade no disponible en deps")
     if hasattr(cascade, "generate"):
-        return await cascade.generate(tier="premium_opus",
+        return await cascade.generate(tier=tier,
             prompt=user_prompt, systemprompt=system_prompt,
             maxtokens=EDITORIAL_CONFIG["max_tokens"], temperature=EDITORIAL_CONFIG["temperature"],
         )
@@ -1127,11 +1159,21 @@ class PhaseAContentGeneration:
             # actualiza para que el proximo intento sepa QUE corregir en vez
             # de repetir el mismo prompt a ciegas (cada retry paga una llamada).
             retry_correction = ""
+            # ── Enrutado hero/no-hero (tiering de generación) ──────────────
+            # 1 post "hero" por día con Opus (calidad máxima); el resto con
+            # DeepSeek V4-Flash (barato). Decisión UNA vez por post (no por retry).
+            # Edge case aceptado: si el post hero rebota el gate, el hero del día
+            # queda "usado" igual (simple, no dealbreaker). Fase B no se toca.
+            _gen_tier = "premium_opus" if _should_use_opus_hero() else "flash"
+            if _gen_tier == "premium_opus":
+                _mark_opus_hero_used()
+            logger.info("Phase A: tier de generación = %s (%s)", _gen_tier,
+                        "hero Opus del día" if _gen_tier == "premium_opus" else "no-hero DeepSeek Flash")
             for attempt in range(1, max_attempts + 1):
                 attempt_user_prompt = user_prompt + retry_correction
                 try:
                     logger.info("Phase A: llamada al modelo (intento %s/%s)...", attempt, max_attempts)
-                    raw_text = await call_model(self.deps, system_prompt, attempt_user_prompt)
+                    raw_text = await call_model(self.deps, system_prompt, attempt_user_prompt, tier=_gen_tier)
                 except Exception as e:
                     logger.warning("Phase A: error en llamada al modelo: %s", e)
                     _log_generation_attempt(topic, topic_source, attempt, max_attempts, "model_error")

@@ -90,6 +90,7 @@ class ModelCascade:
         "premium": "tier_premium",     # Anthropic claude-sonnet-5 (primary content)
         "premium_opus": "tier_premium_opus",  # Anthropic claude-opus-4-8 (Fase A generation only)
         "fallback": "tier_fallback",   # DeepSeek V4 Pro (paid content fallback)
+        "flash": "tier_flash",         # DeepSeek V4 Flash (generación barata Fase A no-hero)
         "sonnet": "tier_sonnet",
         "openrouter": "openrouter",
         "cerebras": "cerebras",
@@ -251,6 +252,25 @@ class ModelCascade:
                     model=cfg.model,
                     api_key=cfg.api_key,
                     timeout=cfg.timeout_seconds,
+                    max_retries=self.default_retries,
+                    cooldown_seconds=self.default_cooldown,
+                    failure_threshold=self.default_failure_threshold,
+                    paid=True,
+                )
+            )
+
+        # ── tier_flash: DeepSeek V4 Flash (generación barata de Fase A no-hero) ──
+        # Espeja tier_fallback (mismo path DeepSeek: thinking=disabled + piso 2048
+        # tokens, ver _call_provider). Usado por el enrutado hero/no-hero de Fase A;
+        # Fase B no lo toca. Solo se registra si hay DEEPSEEK_API_KEY.
+        if deepseek_key:
+            self.providers.append(
+                ProviderConfig(
+                    name="tier_flash",
+                    url=getattr(creds, "deepseek_url", "") or "https://api.deepseek.com/v1/chat/completions",
+                    model=os.getenv("DEEPSEEK_FLASH_MODEL", "deepseek-v4-flash"),
+                    api_key=deepseek_key,
+                    timeout=getattr(creds, "deepseek_timeout", 90) or 90,
                     max_retries=self.default_retries,
                     cooldown_seconds=self.default_cooldown,
                     failure_threshold=self.default_failure_threshold,
