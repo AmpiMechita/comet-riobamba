@@ -80,6 +80,15 @@ def _isolate_runtime_state(tmp_path, monkeypatch):
         tmp_path / "rejected_posts.jsonl",
     )
 
+    # ── Anthropic spend tracker (services/model_cascade.py) ──
+    # Sin esto, los tests que ejercitan _call_anthropic leen el data/
+    # anthropic_spend_tracker.json REAL y fallan cuando el gasto del dia cruza el
+    # cap (spend guard). Cada test arranca con su propio tracker vacio en tmp.
+    monkeypatch.setattr(
+        "services.model_cascade._ANTHROPIC_SPEND_FILE",
+        str(tmp_path / "anthropic_spend_tracker.json"),
+    )
+
     # ── Roadmap published-log constant propia (services/roadmap.py) ──
     monkeypatch.setattr(
         "services.roadmap.PUBLISHED_LOG_PATH",

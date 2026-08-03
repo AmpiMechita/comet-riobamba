@@ -33,23 +33,26 @@ TOPICS = [
 _TELEMETRY = os.path.join("data", "cascade_telemetry.jsonl")
 
 
-def _last_premium_provider():
+def _served_by():
+    """Devuelve (provider_name, detalle) de la ULTIMA entrada de telemetria con
+    tier=='premium_opus' y success. Filtrar por ese tier aisla nuestras llamadas
+    de las del agente vivo (PID) que corre en paralelo con tier=='premium'."""
     try:
         with open(_TELEMETRY, encoding="utf-8") as f:
             lines = f.readlines()
-        for ln in reversed(lines[-8:]):
+        for ln in reversed(lines[-80:]):
             j = json.loads(ln)
-            if str(j.get("tier", "")).endswith("premium") or j.get("tier") == "premium":
-                return f"{j.get('provider')} (tier={j.get('tier')}, success={j.get('success')})"
+            if j.get("tier") == "premium_opus" and j.get("success"):
+                return j.get("provider"), f"provider={j.get('provider')} tier={j.get('tier')} success={j.get('success')}"
     except Exception as e:
-        return f"(telemetria no legible: {e})"
-    return "(sin entrada premium en telemetria)"
+        return None, f"(telemetria no legible: {e})"
+    return None, "(sin entrada premium_opus exitosa en telemetria)"
 
 
 async def generate_one(cascade, topic, policy, mode):
     system_prompt, user_prompt = pac.build_prompts(topic, policy, variant=None, mode=mode)
     raw = await cascade.generate(
-        tier="premium",
+        tier="premium_opus",
         prompt=user_prompt,
         systemprompt=system_prompt,
         maxtokens=pac.EDITORIAL_CONFIG["max_tokens"],
@@ -68,6 +71,10 @@ async def main():
     print("=" * 80)
     print(f"temperature={pac.EDITORIAL_CONFIG['temperature']}  mode={mode}  variant=None")
     print(f"max_tokens={pac.EDITORIAL_CONFIG['max_tokens']}")
+    # Confirmar que el provider tier_premium_opus existe y su modelo es Opus 4.8.
+    _opus = next((p for p in cascade.providers if p.name == "tier_premium_opus"), None)
+    print(f"tier_premium_opus registrado: {_opus is not None} | model={getattr(_opus,'model',None)}")
+    print(f"(el agente vivo usa tier='premium'/Sonnet; este script usa tier='premium_opus')")
 
     # Mostrar UNA vez el system prompt para confirmar que el mission/core_principles
     # nuevos realmente entran al modelo.
@@ -86,7 +93,8 @@ async def main():
             print(f"  ERROR generando: {e}")
             continue
 
-        provider = _last_premium_provider()
+        served_provider, served_detail = _served_by()
+        opus_ok = (served_provider == "tier_premium_opus")
 
         title, body = pac.extract_title_and_body(raw)
         title = pac._normalize_moltbook_title(title)
@@ -101,7 +109,8 @@ async def main():
         except Exception:
             similar = "(n/a)"
 
-        print(f"\nPROVEEDOR: {provider}")
+        print(f"\nPROVEEDOR: {served_detail}  ->  " +
+              ("OPUS 4.8 ✅" if opus_ok else "⚠️ NO ES tier_premium_opus (revisar ruteo/fallback)"))
         print(f"\nTITULO:\n  {title}")
         print(f"\nBODY ({len(post_text)} chars):")
         for line in post_text.splitlines() or [post_text]:

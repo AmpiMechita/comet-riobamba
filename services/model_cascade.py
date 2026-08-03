@@ -30,7 +30,7 @@ logger = logging.getLogger("services.model_cascade")
 _ANTHROPIC_INPUT_PRICE_PER_1M = 2.0
 _ANTHROPIC_OUTPUT_PRICE_PER_1M = 10.0
 _ANTHROPIC_SPEND_FILE = os.path.join("data", "anthropic_spend_tracker.json")
-_ANTHROPIC_SPEND_LIMIT_DEFAULT = 4.50
+_ANTHROPIC_SPEND_LIMIT_DEFAULT = 5.00
 
 # ── Degraded-mode re-alert cooldown ──────────────────────────────
 # When the paid content cascade (tier_premium → tier_fallback) is fully down,
@@ -842,13 +842,14 @@ class ModelCascade:
         spent = self._get_anthropic_spend()
         limit = self._anthropic_spend_limit()
         if spent >= limit:
+            _today = datetime.now(timezone.utc).date().isoformat()
             logger.warning(
-                "💸 ModelCascade: límite de gasto Anthropic alcanzado "
-                "($%.4f >= $%.2f). Saltando '%s' y usando siguiente proveedor.",
-                spent, limit, provider.name,
+                "💸 ModelCascade: límite de gasto Anthropic DIARIO alcanzado "
+                "($%.4f >= $%.2f para %s). Saltando '%s' y usando siguiente proveedor.",
+                spent, limit, _today, provider.name,
             )
             raise RuntimeError(
-                f"Anthropic spend limit reached (${spent:.4f} >= ${limit:.2f}) "
+                f"Anthropic DAILY spend limit reached (${spent:.4f} >= ${limit:.2f} for {_today}) "
                 f"desde {provider.name}:{provider.model} - fallback to next provider"
             )
 
@@ -882,6 +883,11 @@ class ModelCascade:
                     max_tokens=int(max_tokens),
                     system=system_text or None,
                     messages=chat_messages,
+                    # Sin esto, Sonnet 5 corre thinking adaptativo por default y se
+                    # come el max_tokens chico de Fase B (120-180) -> content vacio.
+                    # 'disabled' es aceptado por Sonnet 5 y Opus 4.8 (para Opus es
+                    # no-op: ya corre sin thinking). Mismo patron que el path DeepSeek.
+                    thinking={"type": "disabled"},
                 )
                 self._record_anthropic_spend_from_response(resp)
                 return self._extract_anthropic_text(resp, provider)
@@ -909,6 +915,9 @@ class ModelCascade:
         }
         if system_text:
             payload["system"] = system_text
+        # Igual que el path SDK: desactivar thinking para que el max_tokens vaya
+        # full al output (Sonnet 5 corre adaptativo por default si se omite).
+        payload["thinking"] = {"type": "disabled"}
 
         response = requests.post(
             provider.url,
@@ -943,10 +952,17 @@ class ModelCascade:
             return _ANTHROPIC_SPEND_LIMIT_DEFAULT
 
     def _get_anthropic_spend(self) -> float:
-        """Return cumulative estimated Anthropic spend in USD (0.0 if none)."""
+        """Return TODAY's estimated Anthropic spend in USD (0.0 if none).
+
+        Presupuesto DIARIO: si el tracker no tiene clave 'date' (formato viejo
+        lifetime) o su 'date' != hoy (UTC), se considera 0.0 — esto migra el total
+        viejo y resetea automáticamente al cambiar de día."""
         try:
             with open(_ANTHROPIC_SPEND_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
+            today = datetime.now(timezone.utc).date().isoformat()
+            if data.get("date") != today:
+                return 0.0
             return float(data.get("total_usd", 0.0))
         except (FileNotFoundError, ValueError, TypeError, json.JSONDecodeError):
             return 0.0
@@ -974,11 +990,15 @@ class ModelCascade:
                 input_tokens * _ANTHROPIC_INPUT_PRICE_PER_1M / 1_000_000
                 + output_tokens * _ANTHROPIC_OUTPUT_PRICE_PER_1M / 1_000_000
             )
+            today = datetime.now(timezone.utc).date().isoformat()
+            # _get_anthropic_spend() ya devuelve 0.0 si el tracker es de otro día
+            # (o formato viejo) → el total arranca en `cost` al cambiar de día.
             total = self._get_anthropic_spend() + cost
             os.makedirs(os.path.dirname(_ANTHROPIC_SPEND_FILE) or ".", exist_ok=True)
             with open(_ANTHROPIC_SPEND_FILE, "w", encoding="utf-8") as f:
                 json.dump(
                     {
+                        "date": today,
                         "total_usd": round(total, 6),
                         "last_updated": datetime.now(timezone.utc).isoformat(),
                     },
