@@ -11,7 +11,8 @@ from phases.phase_a_content import (
     RESEARCH_CLOSING_TEMPLATES, _topic_with_matrix_fallback,
     compute_topic_weights, _looks_low_quality,
     _build_retry_correction, _log_generation_attempt,
-    _is_substantive_post,
+    _is_substantive_post, _extract_arxiv_id, _paper_title_and_arxiv_id,
+    validate_post_text,
 )
 
 
@@ -99,7 +100,7 @@ class TestResearchMode:
         topic, source = choose_topic(mode="research")
         assert topic == "agenda topic 1"
         assert source == "test"
-        mock_agenda.get_uncovered_topics.assert_called_once_with(limit=50)
+        mock_agenda.get_uncovered_topics.assert_called_once_with(limit=None)
 
     @patch("phases.phase_a_content.load_agenda")
     def test_choose_topic_falls_back_when_agenda_empty(self, mock_load):
@@ -110,6 +111,26 @@ class TestResearchMode:
         topic, source = choose_topic(mode="research")
         assert isinstance(topic, str) and isinstance(source, str)
         assert len(topic) > 0
+
+    @patch("phases.phase_a_content.load_agenda")
+    def test_choose_topic_prefers_recent_arxiv_over_older_feed_topics(self, mock_load):
+        """Un topic arXiv reciente (al final de la lista) se elige aunque haya
+        topics phase_b_feed mas viejos delante: el fix del diagnostico de la
+        agenda (limit=None + sort por created_at + filtro phase_b_feed)."""
+        mock_agenda = MagicMock()
+        mock_agenda.get_uncovered_topics.return_value = [
+            {"topic": "old feed artifact", "source": "phase_b_feed", "created_at": "2026-07-15T00:00:00+00:00"},
+            {"topic": "recent feed artifact", "source": "phase_b_feed", "created_at": "2026-07-20T00:00:00+00:00"},
+            {
+                "topic": 'production agent engineering implications of the paper "X" (arXiv:2607.99999v1) for production agent reliability',
+                "source": "arxiv",
+                "created_at": "2026-08-03T00:00:00+00:00",
+            },
+        ]
+        mock_load.return_value = mock_agenda
+        topic, source = choose_topic(mode="research")
+        assert source == "arxiv"
+        assert "arXiv:2607.99999v1" in topic
 
     @patch("phases.phase_a_content.load_agenda")
     def test_choose_topic_filters_phase_b_feed_by_default(self, mock_load):
@@ -541,3 +562,134 @@ async def test_retry_sends_correction_in_second_attempt(monkeypatch, tmp_path):
     assert second_prompt.startswith("user prompt base")
     # y el intento 2 termino en post generado (whisper: no se publica)
     assert result["drafts_generated"] == 1
+
+
+# ── Cita verificable arXiv en el body (brecha de especificidad) ─────────────
+_ARXIV_TOPIC = (
+    'production agent engineering implications of the paper "The Shared Discovery '
+    'Paradox" (arXiv:2607.18045v1) for production agent reliability and orchestration'
+)
+_ARXIV_BODY = (
+    "The fix is a rolling re-injection trigger that tracks distance in tokens since "
+    "the last critical directive and re-inserts a compressed core-constraints preamble "
+    "past sixty percent of the effective recall horizon. This resets the attention "
+    "baseline without duplicating full history, and catches the identity drift that "
+    "precedes every silent failure.\n\n"
+    "Where do you place the re-injected directive when the tool output stream is "
+    "already dense, and how do you measure the tradeoff between preamble cost and "
+    "drift prevention."
+)
+
+
+class TestArxivCitation:
+    def test_extract_arxiv_id_from_anchored_topic(self):
+        assert _extract_arxiv_id(_ARXIV_TOPIC) == "2607.18045v1"
+
+    def test_extract_arxiv_id_plain_topic_returns_none(self):
+        assert _extract_arxiv_id("agent tool safety") is None
+        assert _extract_arxiv_id("") is None
+
+    def test_build_prompts_arxiv_topic_adds_citation_instruction(self):
+        for mode in ("research", "expository"):
+            sys_prompt, user_prompt = build_prompts(_ARXIV_TOPIC, mode=mode)
+            assert "HARD REQUIREMENT" in user_prompt
+            assert "(arXiv:2607.18045v1)" in user_prompt
+            assert "TITLE must NOT contain the arXiv identifier" in user_prompt
+            assert "FIRST paragraph" in user_prompt
+            assert "SOURCE ANCHOR" in sys_prompt
+            assert "arXiv:2607.18045v1" in sys_prompt
+
+    def test_build_prompts_plain_topic_has_no_citation_instruction(self):
+        sys_prompt, user_prompt = build_prompts("agent tool safety", mode="research")
+        assert "HARD REQUIREMENT" not in user_prompt
+        assert "SOURCE ANCHOR" not in sys_prompt
+
+    def test_validate_rejects_body_without_citation(self):
+        valid, reason = validate_post_text(_ARXIV_BODY, required_citation="2607.18045v1")
+        assert valid is False
+        assert reason == "missing_arxiv_citation"
+
+    def test_validate_accepts_body_with_citation(self):
+        body = "The paper (arXiv:2607.18045v1) shows a parallel result. " + _ARXIV_BODY
+        valid, reason = validate_post_text(body, required_citation="2607.18045v1")
+        assert valid is True
+        assert reason == "ok"
+
+    def test_validate_tolerates_missing_version_suffix(self):
+        body = "The paper (arXiv:2607.18045) shows a parallel result. " + _ARXIV_BODY
+        valid, reason = validate_post_text(body, required_citation="2607.18045v1")
+        assert valid is True
+        assert reason == "ok"
+
+    def test_validate_without_required_citation_keeps_old_behavior(self):
+        valid, reason = validate_post_text(_ARXIV_BODY)
+        assert valid is True
+        assert reason == "ok"
+
+    def test_paper_title_and_arxiv_id_extraction(self):
+        title, arxiv_id = _paper_title_and_arxiv_id(_ARXIV_TOPIC)
+        assert title == "The Shared Discovery Paradox"
+        assert arxiv_id == "2607.18045v1"
+
+    def test_paper_title_and_arxiv_id_plain_topic(self):
+        title, arxiv_id = _paper_title_and_arxiv_id("agent tool safety")
+        assert title is None
+        assert arxiv_id is None
+
+    @pytest.mark.asyncio
+    async def test_arxiv_citation_injected_when_model_wont_cite(self):
+        """Si el modelo no cita el arXiv ID en N intentos, el pipeline inyecta
+        'Source: <titulo> (arXiv:ID)' al final del body en vez de descartar el post."""
+        from phases.phase_a_content import PhaseAContentGeneration
+        from phases.deps import PhaseADeps
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from datetime import datetime
+
+        deps = PhaseADeps(
+            model_cascade=AsyncMock(),
+            moltbook_client=MagicMock(),
+            behavior_cfg={"max_posts_per_day": 5},
+            posts_today=0,
+            get_posts_today=lambda: 0,
+        )
+        fake_now = datetime(2026, 7, 22, 12, 0, 0)
+        model_body = (
+            "Retry loop integration check\n\n"
+            "We spent three weeks tracing why our retry queue kept starving the primary "
+            "workers during peak load in production, and the answer turned out to be a "
+            "lock held far longer than anyone assumed.\n\n"
+            "Once we moved the bookkeeping out of the critical section, the starvation "
+            "disappeared and throughput recovered. The lesson we keep relearning: measure "
+            "the hot path before blaming the scheduler, because intuition about contention "
+            "is usually wrong."
+        )
+        mock_call_model = AsyncMock(return_value=model_body)
+
+        with (
+            patch("phases.phase_a_content.datetime") as mock_dt,
+            patch("phases.phase_a_content.behavior_cfg",
+                  {"max_posts_per_day": 5, "phase_a_mode": "research", "whisper_mode": True}),
+            patch("phases.phase_a_content.EDITORIAL_CONFIG",
+                  {**EDITORIAL_CONFIG, "phase_a_max_attempts": 1}),
+            patch("services.persistence.load_agent_state", return_value={}),
+            patch("services.own_post_store.count_posts_since", return_value=0),
+            patch("phases.phase_a_content.choose_topic", return_value=(_ARXIV_TOPIC, "arxiv")),
+            patch("phases.phase_a_content.load_topic_matrix", return_value=None),
+            patch("phases.phase_a_content._is_allowed_topic", return_value=True),
+            patch("phases.phase_a_content._is_topic_recently_used", return_value=False),
+            patch("phases.phase_a_content.build_prompts", return_value=("sys", "user")),
+            patch("phases.phase_a_content.load_editorial_policy", return_value={}),
+            patch("phases.phase_a_content.is_similar_to_recent", return_value=False),
+            patch("phases.phase_a_content.call_model", new=mock_call_model),
+        ):
+            mock_dt.now.return_value = fake_now
+            mock_dt.fromisoformat.side_effect = lambda s: datetime.fromisoformat(s)
+            phase_a = PhaseAContentGeneration(deps=deps)
+            result = await phase_a.execute()
+
+        assert result["drafts_generated"] == 1
+        assert mock_call_model.call_count == 1
+        draft = result["posts"][0]
+        assert draft.get("error") is None
+        assert "Source: The Shared Discovery Paradox (arXiv:2607.18045v1)" in draft["body"]
+        assert "missing_arxiv_citation" not in str(draft.get("metadata", {}))

@@ -347,7 +347,37 @@ def _save_published_post(post_id: str, topic: str, body: str = ""):
     register_post(post_id, topic, body=body)
     logger.info(f"Tracker: Post {post_id[:8]}... registrado en own_post_store")
 
-def validate_post_text(text: str) -> Tuple[bool, str]:
+_ARXIV_ID_RE = re.compile(r"arXiv:\s*([\w.\-]+)", re.IGNORECASE)
+_PAPER_TITLE_RE = re.compile(r'paper\s+"([^"]+)"', re.IGNORECASE)
+
+
+def _extract_arxiv_id(topic: str) -> Optional[str]:
+    """Extrae el arXiv ID de un topic anclado (ej. '... (arXiv:2607.18045v1) ...').
+
+    Devuelve el ID completo con su version (p.ej. '2607.18045v1') o None si el
+    topic no trae cita. Es la fuente verificable que el body debe citar."""
+    if not topic:
+        return None
+    m = _ARXIV_ID_RE.search(topic)
+    return m.group(1) if m else None
+
+
+def _paper_title_and_arxiv_id(topic: str) -> Tuple[Optional[str], Optional[str]]:
+    """Extrae (titulo del paper, arXiv ID) de un topic anclado a arXiv.
+
+    El topic tiene la forma 'production agent engineering implications of the
+    paper "TITULO" (arXiv:XXXX.XXXXXv1) for ...'. Devuelve None para el titulo
+    si el formato no matchea."""
+    arxiv_id = _extract_arxiv_id(topic)
+    title = None
+    if topic:
+        m = _PAPER_TITLE_RE.search(topic)
+        if m:
+            title = m.group(1).strip()
+    return title, arxiv_id
+
+
+def validate_post_text(text: str, required_citation: Optional[str] = None) -> Tuple[bool, str]:
     if not text or not isinstance(text, str): return False, "empty_or_invalid"
     length = len(text)
     if length < EDITORIAL_CONFIG["min_length_chars"]: return False, "too_short"
@@ -362,6 +392,12 @@ def validate_post_text(text: str) -> Tuple[bool, str]:
     first_line = text.split('\n')[0].strip()
     if FILLER_STARTS.match(first_line): return False, "contains_filler_opening"
     if text.count("\n\n") < 1: return False, "single_paragraph"
+    if required_citation:
+        # La cita verificable debe estar en el body (tolerando el sufijo de
+        # version: '2607.18045' == '2607.18045v1'). Sin ancla, no hay evidencia.
+        base = re.sub(r"v\d+$", "", required_citation).lower()
+        if f"arxiv:{base}" not in text.lower():
+            return False, "missing_arxiv_citation"
     return True, "ok"
 
 
@@ -449,7 +485,10 @@ def choose_topic(mode: str = "research") -> tuple[str, str]:
     if mode == "research":
         agenda = load_agenda()
         allow_feed = os.environ.get("ALLOW_PHASE_B_FEED_TOPICS", "").lower() == "true"
-        all_uncovered = agenda.get_uncovered_topics(limit=50)
+        # limit=None: la agenda completa (los topics arXiv llegan al final del
+        # array pending_topics; un limit corto los deja afuera y la agenda nunca
+        # alimenta posts anclados a papers reales).
+        all_uncovered = agenda.get_uncovered_topics(limit=None)
         # Prioriza los temas mas recientes primero (no orden de insercion/FIFO).
         # Sin esto, un backlog viejo bloquea indefinidamente temas nuevos y de
         # mejor calidad (ej. arxiv, postmortem_own) que quedan al final de la
@@ -609,6 +648,21 @@ def build_prompts(topic: str, policy: Optional[Dict[str, Any]] = None, variant: 
             "- FORBIDDEN: do not end with a question.\n"
             "- You MUST finish your last thought completely. Do not get cut off.\n"
         )
+    arxiv_id = _extract_arxiv_id(topic)
+    if arxiv_id:
+        system_prompt = system_prompt.rstrip() + (
+            f"\nSOURCE ANCHOR: your post is anchored to a real paper. The BODY must "
+            f"contain the exact identifier (arXiv:{arxiv_id}) in its first paragraph. "
+            "The TITLE must not contain it. This is non-negotiable."
+        )
+        citation_extra = (
+            "HARD REQUIREMENT (non-negotiable):\n"
+            f"- The BODY text MUST contain the exact identifier (arXiv:{arxiv_id}) at least once.\n"
+            "- The identifier goes in the FIRST paragraph of the BODY, integrated into the prose "
+            f"like: 'The paper (arXiv:{arxiv_id}) introduces a value-aware controller...'\n"
+            "- The TITLE must NOT contain the arXiv identifier or the word arXiv.\n"
+        )
+        user_prompt = user_prompt.rstrip() + "\n\n" + citation_extra
     return system_prompt.strip(), user_prompt.strip()
 
 _HERO_STATE_FILE = BASE_DIR / "data/hero_state.json"
@@ -798,6 +852,7 @@ _RETRY_CORRECTION_HINTS: Dict[str, str] = {
     "placeholder_text": "El intento anterior tenia texto de relleno generico. Generá contenido real y especifico.",
     "mentions_moltbook": "El intento anterior menciono 'Moltbook' explicitamente. No nombres la plataforma.",
     "mentions_llm": "El intento anterior menciono 'LLM' o 'large language model' explicitamente. Evita esa jerga meta sobre el modelo.",
+    "missing_arxiv_citation": "El intento anterior no cito la fuente arXiv del paper en el cuerpo. Incluí el identificador textualmente (formato arXiv:XXXX.XXXXXv1, tal cual viene en el tema del post) en el PRIMER parrafo, junto con el nombre del paper. Es la evidencia verificable del post.",
 }
 
 
@@ -834,7 +889,9 @@ def _topic_with_matrix_fallback(
     if mode == "research":
         agenda = load_agenda()
         allow_feed = os.environ.get("ALLOW_PHASE_B_FEED_TOPICS", "").lower() == "true"
-        all_uncovered = agenda.get_uncovered_topics(limit=50)
+        # limit=None: ver nota en choose_topic — los topics arXiv quedan fuera
+        # del array con un limit corto y nunca se seleccionan.
+        all_uncovered = agenda.get_uncovered_topics(limit=None)
         # Prioriza los temas mas recientes primero (no orden de insercion/FIFO).
         # Sin esto, un backlog viejo bloquea indefinidamente temas nuevos y de
         # mejor calidad (ej. arxiv, postmortem_own) que quedan al final de la
@@ -1192,13 +1249,31 @@ class PhaseAContentGeneration:
                 title = _truncate_title(title, max_chars=100)
                 body = _normalize_moltbook_body(body)
                 post_text = _truncate_to_limit(body, EDITORIAL_CONFIG["max_length_chars"])
-                is_valid, reason = validate_post_text(post_text)
+                required_citation = _extract_arxiv_id(topic)
+                is_valid, reason = validate_post_text(post_text, required_citation=required_citation)
                 if not is_valid:
                     logger.warning("Phase A: contenido invalido (reason=%s), reintentar...", reason)
                     _log_generation_attempt(topic, topic_source, attempt, max_attempts, f"validation_failed:{reason}")
                     _log_rejected_body(topic, topic_source, attempt, f"validation_failed:{reason}", title, post_text)
                     retry_correction = _build_retry_correction(f"validation_failed:{reason}")
                     if attempt >= max_attempts:
+                        # Fallback de cita: el modelo no obedecio en N intentos.
+                        # En vez de descartar el post anclado, inyectamos la cita
+                        # verificable al final del body (el post ES sobre ese paper).
+                        if reason == "missing_arxiv_citation" and required_citation:
+                            paper_title, _ = _paper_title_and_arxiv_id(topic)
+                            src_label = paper_title or topic
+                            source_line = f"Source: {src_label} (arXiv:{required_citation})"
+                            room = EDITORIAL_CONFIG["max_length_chars"] - len(source_line) - 2
+                            base = _truncate_to_limit(post_text, room)
+                            injected = (base + "\n\n" + source_line).strip()
+                            injected_ok, injected_reason = validate_post_text(
+                                injected, required_citation=required_citation
+                            )
+                            if injected_ok:
+                                _log_generation_attempt(topic, topic_source, attempt, max_attempts, "success_arxiv_injected")
+                                generated_post = {"title": title, "body": injected, "metadata": {"topic": topic, "generated_at": datetime.now(UTC).isoformat() + "Z", "attempts": attempt, "policy_tone": policy.get("style_policy", {}).get("tone", "natural_directo")}, "published": False}
+                                break
                         generated_post = {"title": title, "body": post_text, "metadata": {"topic": topic, "validation_reason": reason}, "attempts": attempt, "published": False, "error": f"validation_failed:{reason}"}
                     continue
                 if is_similar_to_recent(post_text):
