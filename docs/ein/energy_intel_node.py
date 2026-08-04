@@ -50,9 +50,10 @@ DB_PATH       = str(Path(__file__).resolve().parents[2] / "data" / "energy_intel
 ARXIV_API     = "https://export.arxiv.org/api/query"
 USPTO_PV_API  = "https://api.patentsview.org/patents/query"
 USPTO_ODP_URL = "https://developer.uspto.gov/api/v1/patent/query"
-EPO_AUTH_URL  = "https://ops.epo.org/3.2/auth/accesstoken"
-EPO_SEARCH_URL = "https://ops.epo.org/3.2/rest-services/published-data/search"
-EPO_BIBLIO_URL = "https://ops.epo.org/3.2/rest-services/published-data/publication/epodoc/{docno}/biblio"
+EPO_AUTH_URL    = "https://ops.epo.org/3.2/auth/accesstoken"
+EPO_SEARCH_URL  = "https://ops.epo.org/3.2/rest-services/published-data/search"
+EPO_BIBLIO_URL  = "https://ops.epo.org/3.2/rest-services/published-data/publication/docdb/{docno}/biblio"
+EPO_ABSTRACT_URL = "https://ops.epo.org/3.2/rest-services/published-data/publication/docdb/{docno}/abstract"
 EPO_TERMS     = ["solid state battery", "perovskite solar cell", "sodium ion battery",
                  "green hydrogen electrolysis", "flow battery"]
 CLIMATE_FEEDS = [
@@ -345,39 +346,97 @@ def _epo_token() -> Optional[str]:
 
 
 def _parse_epo_search_response(payload: dict) -> list:
-    """Extrae doc-numbers (epodoc) del JSON de OPS search. Aislado para test sin red."""
+    """Extrae doc-numbers (docdb: country.number.kind) del JSON de OPS search.
+
+    OPS v3.2 real: la raiz es 'ops:biblio-search' (no 'ops:query-result') y los
+    document-id vienen anidados como country/doc-number/kind con {'$': ...}.
+    Devuelve docnos en formato docdb 'WO.2026160546.A1' para usar directo en
+    publication/docdb/{docno}/biblio. Aislado para test sin red."""
     refs = []
     try:
-        search = payload["ops:world-patent-data"]["ops:query-result"]["ops:search-result"]
-        pubs = search.get("ops:publication-reference", [])
+        wpd = payload["ops:world-patent-data"]
+        search = wpd.get("ops:biblio-search") or wpd.get("ops:query-result") or {}
+        result = search.get("ops:search-result", {})
+        pubs = result.get("ops:publication-reference", [])
         if isinstance(pubs, dict):
             pubs = [pubs]
         for pub in pubs:
-            for did in pub.get("ops:document-id", []):
-                if did.get("@document-id-type") == "epodoc":
-                    refs.append(did["ops:doc-number"])
+            doc_ids = pub.get("document-id", [])
+            if isinstance(doc_ids, dict):
+                doc_ids = [doc_ids]
+            docdb_docno = None
+            epodoc_docno = None
+            for did in doc_ids:
+                if did.get("@document-id-type") == "docdb":
+                    def _v(node):
+                        return node.get("$") if isinstance(node, dict) else node
+                    country = _v(did.get("country")) or ""
+                    number = _v(did.get("doc-number")) or ""
+                    kind = _v(did.get("kind")) or ""
+                    if number:
+                        docdb_docno = f"{country}.{number}.{kind}"
+                elif did.get("@document-id-type") == "epodoc":
+                    num = did.get("doc-number")
+                    if isinstance(num, dict):
+                        num = num.get("$")
+                    if num:
+                        epodoc_docno = num
+            # Preferir docdb (formato real del search OPS v3.2); epodoc solo como fallback.
+            if docdb_docno or epodoc_docno:
+                refs.append(docdb_docno or epodoc_docno)
     except Exception:
         pass
     return refs
 
 
 def _parse_epo_biblio_response(payload: dict) -> dict:
-    """Extrae title/date/abstract del JSON de biblio OPS. Aislado para test sin red."""
+    """Extrae title/date/abstract del JSON de biblio OPS.
+
+    OPS v3.2 real: 'exchange-documents' -> 'exchange-document' -> 'bibliographic-data'
+    (sin prefijo ops:). El title es una LISTA de {'$': ..., '@lang': ...} — se elige
+    la inglesa. Aislado para test sin red."""
     out: dict = {}
     try:
-        biblio = (
-            payload["ops:world-patent-data"]["ops:document-instance"]
-            ["ops:exchange-document"]["ops:bibliographic-data"]
-        )
-        title = biblio.get("ops:invention-title", {})
-        out["title"] = (title.get("@value") or "").strip() if isinstance(title, dict) else str(title).strip()
-        for did in biblio.get("ops:publication-reference", {}).get("ops:document-id", []):
-            if did.get("@document-id-type") == "docdb":
-                d = did.get("ops:publication-date", {}).get("$", "")
-                out["date"] = f"{d[:4]}-{d[4:6]}-{d[6:8]}" if len(d) == 8 else d
-        abstract = biblio.get("ops:abstract", {})
-        if isinstance(abstract, dict):
-            txt = abstract.get("ops:abstract-text", "")
+        wpd = payload["ops:world-patent-data"]
+        docs = wpd.get("exchange-documents", {}).get("exchange-document", {})
+        if isinstance(docs, list):
+            docs = docs[0] if docs else {}
+        biblio = docs.get("bibliographic-data", {}) or {}
+        if not biblio:
+            biblio = (wpd.get("ops:document-instance", {})
+                          .get("ops:exchange-document", {})
+                          .get("ops:bibliographic-data", {}) or {})
+        title = biblio.get("invention-title", {}) or biblio.get("ops:invention-title", {})
+        if isinstance(title, list):
+            title = next((t for t in title if t.get("@lang") == "en"), title[0] if title else {})
+        if isinstance(title, dict):
+            out["title"] = (title.get("$") or title.get("@value") or "").strip()
+        else:
+            out["title"] = str(title).strip()
+        pubref = biblio.get("publication-reference", {}) or biblio.get("ops:publication-reference", {})
+        doc_ids = pubref.get("document-id", [])
+        if isinstance(doc_ids, dict):
+            doc_ids = [doc_ids]
+        for did in doc_ids:
+            date_node = did.get("date") or did.get("ops:publication-date", {})
+            d = date_node.get("$") if isinstance(date_node, dict) else date_node
+            if d and len(str(d)) == 8 and str(d).isdigit():
+                out["date"] = f"{d[:4]}-{d[4:6]}-{d[6:8]}"
+                break
+        abstract = biblio.get("abstract", {})
+        if not abstract:
+            abstract = docs.get("abstract", {})
+        if isinstance(abstract, list):
+            for a in abstract:
+                if a.get("@lang") == "en":
+                    p = a.get("p", {})
+                    if isinstance(p, dict):
+                        out["abstract"] = p.get("$", "")
+                    else:
+                        out["abstract"] = str(p or "")
+                    break
+        elif isinstance(abstract, dict):
+            txt = abstract.get("abstract-text", "") or abstract.get("ops:abstract-text", "")
             if isinstance(txt, dict):
                 out["abstract"] = txt.get("$", "")
             elif isinstance(txt, str):
@@ -417,6 +476,10 @@ def scrape_epo_ops(terms: list[str] = None, max_results: int = MAX_RESULTS) -> l
                 rb = requests.get(EPO_BIBLIO_URL.format(docno=doc_id), headers=headers, timeout=30)
                 rb.raise_for_status()
                 biblio = _parse_epo_biblio_response(rb.json())
+                if not biblio.get("abstract"):
+                    ra = requests.get(EPO_ABSTRACT_URL.format(docno=doc_id), headers=headers, timeout=30)
+                    ra.raise_for_status()
+                    biblio.update(_parse_epo_biblio_response(ra.json()))
             except Exception as e:
                 logger.warning("[EPO] biblio error %s: %s", doc_id, e)
                 continue

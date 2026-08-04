@@ -155,26 +155,33 @@ def test_uspto_skips_without_api_key():
 
 
 # ── EPO OPS (patentes sin SSN) ────────────────────────────────────
+# Formatos reales de OPS v3.2 (verificados en vivo 04/08/2026):
+# - search devuelve 'ops:biblio-search' con document-id docdb {country/doc-number/kind: {'$': ...}}
+# - biblio devuelve 'exchange-documents' (sin prefijo ops:) con invention-title LISTA {'$':..., '@lang':...}
+#   y la fecha como date.$ (YYYYMMDD) dentro del document-id docdb
 
 _SEARCH_SAMPLE = {
     "ops:world-patent-data": {
-        "ops:query-result": {
+        "ops:biblio-search": {
             "ops:search-result": {
                 "ops:publication-reference": [
                     {
-                        "ops:document-id": [
-                            {"@document-id-type": "docdb", "ops:country": "US", "ops:doc-number": "12345678", "ops:kind": "B2"},
-                            {"@document-id-type": "epodoc", "ops:doc-number": "US12345678B2"},
+                        "document-id": [
+                            {"@document-id-type": "docdb", "country": {"$": "WO"},
+                             "doc-number": {"$": "2026160546"}, "kind": {"$": "A1"}},
+                            {"@document-id-type": "epodoc", "doc-number": {"$": "WO2026160546"}},
                         ]
                     },
                     {
-                        "ops:document-id": [
-                            {"@document-id-type": "epodoc", "ops:doc-number": "EP4000001A1"},
+                        "document-id": [
+                            {"@document-id-type": "docdb", "country": {"$": "EP"},
+                             "doc-number": {"$": "4000001"}, "kind": {"$": "A1"}},
                         ]
                     },
                     {
-                        "ops:document-id": [
-                            {"@document-id-type": "docdb", "ops:country": "EP", "ops:doc-number": "3999999", "ops:kind": "A1"},
+                        "document-id": [
+                            {"@document-id-type": "docdb", "country": {"$": "KR"},
+                             "doc-number": {"$": "102990604"}, "kind": {"$": "B1"}},
                         ]
                     },
                 ]
@@ -185,21 +192,25 @@ _SEARCH_SAMPLE = {
 
 _BIBLIO_SAMPLE = {
     "ops:world-patent-data": {
-        "ops:document-instance": {
-            "ops:exchange-document": {
-                "ops:bibliographic-data": {
-                    "ops:publication-reference": {
-                        "ops:document-id": [
-                            {"@document-id-type": "docdb", "ops:country": "US",
-                             "ops:doc-number": "12345678", "ops:kind": "B2",
-                             "ops:publication-date": {"$": "20250915"}}
+        "exchange-documents": {
+            "exchange-document": {
+                "bibliographic-data": {
+                    "publication-reference": {
+                        "document-id": [
+                            {"@document-id-type": "docdb", "country": {"$": "US"},
+                             "doc-number": {"$": "12345678"}, "kind": {"$": "B2"},
+                             "date": {"$": "20250915"}},
+                            {"@document-id-type": "epodoc", "doc-number": {"$": "US12345678B2"},
+                             "date": {"$": "20250915"}},
                         ]
                     },
-                    "ops:invention-title": {"@value": "Solid state battery with sulfide electrolyte"},
-                    "ops:abstract": {
-                        "@lang": "en",
-                        "ops:abstract-text": {"$": "A solid state battery achieving 165 Wh/kg with sulfide electrolyte."},
-                    },
+                    "invention-title": [
+                        {"$": "ÉLECTRODE À NANOTUBES POUR CELLULE SOLAIRE À PÉROVSKITE", "@lang": "fr"},
+                        {"$": "Carbon nanotube electrode for perovskite solar cell", "@lang": "en"},
+                    ],
+                    "abstract": [
+                        {"@lang": "en", "p": {"$": "A solid state battery achieving 165 Wh/kg with sulfide electrolyte."}},
+                    ],
                 }
             }
         }
@@ -208,17 +219,17 @@ _BIBLIO_SAMPLE = {
 
 
 def test_parse_epo_search_response_extracts_epodoc_numbers():
-    """Solo los document-id tipo epodoc salen del search (los docdb no tienen doc-number util)."""
+    """Del search salen docnos docdb listos para publication/docdb/{docno}/biblio."""
     import energy_intel_node
     refs = energy_intel_node._parse_epo_search_response(_SEARCH_SAMPLE)
-    assert refs == ["US12345678B2", "EP4000001A1"]
+    assert refs == ["WO.2026160546.A1", "EP.4000001.A1", "KR.102990604.B1"]
 
 
 def test_parse_epo_biblio_response_extracts_fields():
-    """Del biblio salen titulo, fecha (normalizada) y abstract."""
+    """Del biblio salen titulo (ingles), fecha (normalizada) y abstract."""
     import energy_intel_node
     b = energy_intel_node._parse_epo_biblio_response(_BIBLIO_SAMPLE)
-    assert b["title"] == "Solid state battery with sulfide electrolyte"
+    assert b["title"] == "Carbon nanotube electrode for perovskite solar cell"
     assert b["date"] == "2025-09-15"
     assert "165 Wh/kg" in b["abstract"]
 
@@ -250,17 +261,20 @@ def test_epo_ops_skips_without_credentials():
 
 
 def test_epo_ops_ingests_patents_with_credentials(monkeypatch):
-    """Con credenciales, search+biblio producen claims de patente clasificados."""
+    """Con credenciales, search+biblio(+abstract) producen claims de patente clasificados."""
     import energy_intel_node as ein
     monkeypatch.setenv("EPO_CONSUMER_KEY", "k")
     monkeypatch.setenv("EPO_CONSUMER_SECRET", "s")
     ein._EPO_TOKEN_CACHE.update({"token": "tok", "expires_at": time.time() + 600})
     token_body = {
         "ops:world-patent-data": {
-            "ops:query-result": {
+            "ops:biblio-search": {
                 "ops:search-result": {
                     "ops:publication-reference": [
-                        {"ops:document-id": [{"@document-id-type": "epodoc", "ops:doc-number": "US9999999B2"}]}
+                        {"document-id": [
+                            {"@document-id-type": "docdb", "country": {"$": "US"},
+                             "doc-number": {"$": "9999999"}, "kind": {"$": "B2"}},
+                        ]}
                     ]
                 }
             }
@@ -268,18 +282,33 @@ def test_epo_ops_ingests_patents_with_credentials(monkeypatch):
     }
     biblio_body = {
         "ops:world-patent-data": {
-            "ops:document-instance": {
-                "ops:exchange-document": {
-                    "ops:bibliographic-data": {
-                        "ops:publication-reference": {
-                            "ops:document-id": [
-                                {"@document-id-type": "docdb", "ops:doc-number": "9999999",
-                                 "ops:publication-date": {"$": "20250601"}}
+            "exchange-documents": {
+                "exchange-document": {
+                    "bibliographic-data": {
+                        "publication-reference": {
+                            "document-id": [
+                                {"@document-id-type": "docdb", "doc-number": {"$": "9999999"},
+                                 "date": {"$": "20250601"}},
                             ]
                         },
-                        "ops:invention-title": {"@value": "Sodium ion battery cathode"},
-                        "ops:abstract": {"ops:abstract-text": {"$": "A sodium-ion battery with 1100 mAh g-1 capacity."}},
+                        "invention-title": [
+                            {"$": "Sodium ion battery cathode", "@lang": "en"},
+                        ],
+                        "abstract": [
+                            {"@lang": "en", "p": {"$": "A sodium-ion battery with 1100 mAh g-1 capacity."}},
+                        ],
                     }
+                }
+            }
+        }
+    }
+    abstract_body = {
+        "ops:world-patent-data": {
+            "exchange-documents": {
+                "exchange-document": {
+                    "abstract": [
+                        {"@lang": "en", "p": {"$": "A sodium-ion battery with 1100 mAh g-1 capacity."}},
+                    ]
                 }
             }
         }
@@ -289,6 +318,8 @@ def test_epo_ops_ingests_patents_with_credentials(monkeypatch):
         resp = MagicMock()
         if "search" in url:
             resp.json.return_value = token_body
+        elif "abstract" in url:
+            resp.json.return_value = abstract_body
         else:
             resp.json.return_value = biblio_body
         return resp
