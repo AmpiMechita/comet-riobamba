@@ -1,0 +1,19 @@
+# Normalizar fin de linea: los archivos se guardan como LF en el repo
+# (los checkouts en Windows usan CRLF automaticamente).
+* text=auto
+
+# Binarios y datos que no deben normalizarse
+*.db binary
+*.db-wal binary
+*.db-shm binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.pdf binary
+*.pyc binary
+*.lock binary
+*.jsonl text
+
+# Archivos de entorno / secretos (nunca versionados)
+.env -text

@@ -673,6 +673,18 @@ class PhaseCAnalytics:
         # diarios la bloquearia la mayoria de los dias. ──
         await self._maybe_synthesize_ideas()
 
+        # ── Post-mortems reales del proyecto (estrategia 4.3) como topics.
+        # Barato e idempotente (add_topic dedup por nombre) — se registran una
+        # vez y la agenda los alimenta como topics anclados a evidencia
+        # verificable, el patron del mejor post de u/vina. ──
+        try:
+            from services.postmortem_source import register_postmortems
+            added = register_postmortems()
+            if added:
+                logger.info("Phase C: %d post-mortem(s) agregados a la agenda", added)
+        except Exception as e:
+            logger.warning("Phase C: postmortem registration failed: %s", e)
+
         # Check if analytics should run (time-based gate)
         if not self._should_run_analytics(state):
             logger.info(f"Phase C: analytics skipped (next run in ~{(self.analytics_interval - (datetime.now() - datetime.fromisoformat(state['last_analytics_run'])).total_seconds())/3600:.1f}h)")
