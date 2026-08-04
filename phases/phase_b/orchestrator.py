@@ -658,6 +658,7 @@ class PhaseB:
         self.max_comments_per_day = behavior.get("max_comments_per_day", 15)
         self.max_replies_per_cycle = behavior.get("max_comment_replies_per_cycle", 2)
         self.max_feed_comments_per_post = behavior.get("max_feed_comments_per_post", 1)
+        self.max_own_posts_per_cycle = behavior.get("phase_b_max_own_posts_per_cycle", 6)
         self.delay_between_comments = behavior.get("delay_between_comments", 8)
         self._last_comment_per_thread: Dict[str, str] = {}
         self._dedup = DedupStore()
@@ -2109,7 +2110,11 @@ class PhaseB:
             # Sort: most unreplied comments first; tiebreak by engagement rank
             # (lower idx = higher comment count in the sorted pool).
             scored_own_posts.sort(key=lambda x: (-x[0], x[1]))
-            candidate_posts = [p for _, _, p in scored_own_posts[:3]]
+            # Límite de posts por ciclo configurable (phase_b_max_own_posts_per_cycle,
+            # default 6). Antes era 3 fijo: los top-3 absorbían todo el presupuesto
+            # diario y los posts con menos comentarios quedaban desatendidos
+            # indefinidamente (~218 pendientes en los posts fuera del top-3).
+            candidate_posts = [p for _, _, p in scored_own_posts[:self.max_own_posts_per_cycle]]
             logger.info(f"Phase B: processing up to {len(candidate_posts)} own posts")
 
             results: List[Dict[str, Any]] = []

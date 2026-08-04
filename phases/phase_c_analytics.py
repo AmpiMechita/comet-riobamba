@@ -394,11 +394,13 @@ class PhaseCAnalytics:
             return []
 
     def _maybe_run_energy_intel(self) -> None:
-        """Run energy intel ingest + Telegram alerts if throttle allows (1h interval)."""
+        """Run energy intel ingest + Telegram alerts if throttle allows (1h interval).
+
+        El ingest y el bridge a research_agenda corren SIEMPRE (el agente usa la
+        info si es relevante); solo los mensajes de Telegram dependen del toggle
+        energy_intel_telegram_alerts (ahorro de tokens)."""
         if not behavior_cfg.get("energy_intel_enabled", True):
             logger.debug("Phase C: Energy Intel deshabilitado por config (energy_intel_enabled=False)")
-            return
-        if not self.telegram or not self.telegram.enabled:
             return
         try:
             from services.energy_intel_telegram import (

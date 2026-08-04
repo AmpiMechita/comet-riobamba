@@ -54,12 +54,13 @@ def test_bridge_swallows_exceptions(caplog):
 
 
 def test_bridge_notifies_telegram_when_enabled():
-    """Con telegram habilitado y señal de cruce, se notifica el tema propuesto."""
+    """Con telegram habilitado, señal de cruce y toggle de alerts ON, se notifica."""
     agenda = MagicMock()
     telegram = MagicMock()
     telegram.enabled = True
     with patch("services.research_agenda.load_agenda", return_value=agenda), \
-         patch("services.research_agenda.save_agenda"):
+         patch("services.research_agenda.save_agenda"), \
+         patch.object(eit, "_telegram_alerts_enabled", return_value=True):
         eit._maybe_bridge_to_agenda(
             "Autonomous inspection agents for substations",
             "monitoring pilots in three utilities",
@@ -71,6 +72,26 @@ def test_bridge_notifies_telegram_when_enabled():
     msg = telegram.send_message.call_args.args[0]
     assert "Nuevo tema propuesto (energy intel)" in msg
     assert "production reliability of autonomous agents" in msg
+
+
+def test_bridge_does_not_notify_when_alerts_off():
+    """Con toggle de alerts OFF, el bridge guarda en agenda pero NO envía Telegram
+    (ahorro de tokens — la info se usa internamente)."""
+    agenda = MagicMock()
+    telegram = MagicMock()
+    telegram.enabled = True
+    with patch("services.research_agenda.load_agenda", return_value=agenda), \
+         patch("services.research_agenda.save_agenda"), \
+         patch.object(eit, "_telegram_alerts_enabled", return_value=False):
+        eit._maybe_bridge_to_agenda(
+            "Autonomous inspection agents for substations",
+            "monitoring pilots in three utilities",
+            "grid", "frontier_claim",
+            telegram_client=telegram,
+        )
+
+    agenda.add_topic.assert_called_once()
+    telegram.send_message.assert_not_called()
 
 
 def test_bridge_with_none_telegram_does_not_break():

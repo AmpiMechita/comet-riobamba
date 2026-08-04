@@ -104,6 +104,19 @@ _AGENT_CROSSOVER_KEYWORDS = frozenset([
 ])
 
 
+def _telegram_alerts_enabled() -> bool:
+    """Toggle para mensajes de Energy Intel por Telegram (ahorro de tokens).
+
+    Cuando está OFF (default): el ingest sigue corriendo y los hallazgos
+    relevantes se puentean a research_agenda (el agente los usa internamente),
+    pero NO se envían artículos/alertas por Telegram."""
+    try:
+        from config import behavior_cfg
+        return bool(behavior_cfg.get("energy_intel_telegram_alerts", False))
+    except Exception:
+        return False
+
+
 def _maybe_bridge_to_agenda(title: str, extra_text: str, category: str, source_label: str, telegram_client=None) -> None:
     """Si el hallazgo tiene señal de cruce con agentes/automatización, propone
     un tema enmarcado del lado de agentes en data/research_agenda.json.
@@ -118,7 +131,7 @@ def _maybe_bridge_to_agenda(title: str, extra_text: str, category: str, source_l
         agenda.add_topic(topic, source="energy_intel_bridge", tags=["energy_intel", category, source_label])
         save_agenda(agenda)
         logger.info("energy_intel_telegram: bridged to research_agenda (category=%s): %s", category, title[:60])
-        if telegram_client and getattr(telegram_client, "enabled", False):
+        if telegram_client and getattr(telegram_client, "enabled", False) and _telegram_alerts_enabled():
             try:
                 telegram_client.send_message(
                     f"🔗 <b>Nuevo tema propuesto (energy intel)</b>\n{topic}",
@@ -166,14 +179,25 @@ def run_energy_intel_with_alerts(telegram_client=None) -> int:
             logger.info("energy_intel_telegram: %d new claims, none frontier-worthy", new_count)
             return new_count
 
-        # Send max 3 alerts per run to avoid spam
+        # Puentear a agenda SIEMPRE (el agente usa la info si es relevante);
+        # el mensaje de Telegram solo si el toggle esta activo (ahorro tokens).
         for claim in frontier_claims[:3]:
-            msg = _format_claim_alert(claim)
             _maybe_bridge_to_agenda(
                 claim.get("title", ""), claim.get("claim_text", ""),
                 claim.get("technology") or "energy", "frontier_claim",
                 telegram_client=telegram_client,
             )
+
+        if not _telegram_alerts_enabled():
+            logger.info(
+                "energy_intel_telegram: %d frontier claims bridged a agenda "
+                "(telegram alerts OFF)", len(frontier_claims),
+            )
+            return new_count
+
+        # Send max 3 alerts per run to avoid spam
+        for claim in frontier_claims[:3]:
+            msg = _format_claim_alert(claim)
             try:
                 telegram_client.send_message(msg, parse_mode="HTML")
             except Exception as e:
@@ -297,6 +321,8 @@ def run_funding_scan(telegram_client) -> int:
 
     for entry in all_entries[:5]:  # Max 5 alerts per scan
         _maybe_bridge_to_agenda(entry["title"], entry.get("summary", ""), "funding", "funding_scan", telegram_client=telegram_client)
+        if not _telegram_alerts_enabled():
+            continue
         msg = f"💰 <b>Funding/News</b>\n{entry['title'][:120]}\n🔗 {entry.get('link', '')}"
         try:
             telegram_client.send_message(msg, parse_mode="HTML")
@@ -325,6 +351,8 @@ def run_tech_radar_scan(telegram_client) -> int:
 
     for entry in all_entries[:3]:  # Max 3 alerts per scan
         _maybe_bridge_to_agenda(entry["title"], entry.get("summary", ""), "tech_radar", "tech_radar_scan", telegram_client=telegram_client)
+        if not _telegram_alerts_enabled():
+            continue
         msg = f"📡 <b>Tech Radar</b>\n{entry['title'][:120]}\n🔗 {entry.get('link', '')}"
         try:
             telegram_client.send_message(msg, parse_mode="HTML")
@@ -358,8 +386,11 @@ def should_run_weekly_digest() -> bool:
 
 
 def run_weekly_digest(telegram_client) -> None:
-    """Send weekly summary of energy claims via Telegram."""
+    """Send weekly summary of energy claims via Telegram (solo si toggle activo)."""
     if not telegram_client:
+        return
+    if not _telegram_alerts_enabled():
+        logger.info("energy_intel_telegram: weekly digest skipped (telegram alerts OFF)")
         return
     try:
         from services.energy_knowledge_base import EnergyKnowledgeBase

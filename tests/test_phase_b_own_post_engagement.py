@@ -31,17 +31,21 @@ def _incrementing_reply(*args, **kwargs):
 
 def _make_pb(max_comments_per_post=10, max_comments_per_day=15,
              max_replies_per_cycle=5, agent_name="COMET-RIOBAMBA",
-             get_comments_today=None, increment_comments_today=None):
+             get_comments_today=None, increment_comments_today=None,
+             behavior_extra=None):
+    behavior = {
+        "max_comments_per_post": max_comments_per_post,
+        "max_comments_per_day": max_comments_per_day,
+        "max_comment_replies_per_cycle": max_replies_per_cycle,
+        "max_feed_replies_per_day": 3,
+        "delay_between_comments": 0,
+    }
+    if behavior_extra:
+        behavior.update(behavior_extra)
     deps = PhaseBDeps(
         model_cascade=MagicMock(),
         moltbook_client=MagicMock(),
-        behavior_cfg={
-            "max_comments_per_post": max_comments_per_post,
-            "max_comments_per_day": max_comments_per_day,
-            "max_comment_replies_per_cycle": max_replies_per_cycle,
-            "max_feed_replies_per_day": 3,
-            "delay_between_comments": 0,
-        },
+        behavior_cfg=behavior,
         agent_name=agent_name,
         get_comments_today=get_comments_today or (lambda: 0),
         increment_comments_today=increment_comments_today or (lambda: 0),
@@ -143,6 +147,54 @@ class TestEngagementRanking:
                         for c in pb.api.create_comment.call_args_list if c.kwargs or c.args]
         assert called_posts, "No reply posted at all"
         assert called_posts[0] == top_post["id"], f"High-engagement post should be first, got {called_posts}"
+
+    @pytest.mark.asyncio
+    async def test_own_posts_per_cycle_uses_configurable_limit(self, _redirect_paths):
+        """El límite de posts propios por ciclo debe ser configurable
+        (phase_b_max_own_posts_per_cycle), no 3 fijo: los posts fuera del top-3
+        quedaban desatendidos indefinidamente."""
+        pb = _make_pb(max_comments_per_day=50, max_replies_per_cycle=5)
+        posts = [
+            {"id": f"top-{i}000000-aaaa-bbbb-cccc-ddddeeeeffff", "comment_count": 100 - i}
+            for i in range(4)
+        ]
+        pb.api._request = MagicMock(return_value={"status": 200, "data": {"posts": posts}})
+        pb.api.fetch_my_posts = MagicMock(return_value=[])
+        pb.api.fetch_post_comments.return_value = [
+            {"id": "c1", "author": {"name": "user1"},
+             "content": "What about error handling?", "text": "What about error handling?"},
+        ]
+        pb.api.create_comment.return_value = {"success": True, "id": "new", "status": 201}
+
+        # default 6: los 4 posts entran al ciclo
+        await pb._execute_own_post_replies()
+        called = set()
+        for c in pb.api.create_comment.call_args_list:
+            if c.kwargs:
+                called.add(c.kwargs.get("post_id"))
+            elif c.args:
+                called.add(c.args[0])
+        assert called == {p["id"] for p in posts}, f"Los 4 posts deberian entrar, got {len(called)}"
+
+        # con limit 1: solo el primero entra (posts distintos para evitar el
+        # dedup compartido con el caso anterior)
+        pb2 = _make_pb(max_comments_per_day=50, max_replies_per_cycle=5,
+                       behavior_extra={"phase_b_max_own_posts_per_cycle": 1})
+        posts2 = [
+            {"id": f"top2-{i}000000-aaaa-bbbb-cccc-ddddeeeeffff", "comment_count": 100 - i}
+            for i in range(4)
+        ]
+        pb2.api._request = MagicMock(return_value={"status": 200, "data": {"posts": posts2}})
+        pb2.api.fetch_my_posts = MagicMock(return_value=[])
+        pb2.api.fetch_post_comments.return_value = [
+            {"id": "c1", "author": {"name": "user1"},
+             "content": "What about error handling?", "text": "What about error handling?"},
+        ]
+        pb2.api.create_comment.return_value = {"success": True, "id": "new", "status": 201}
+        await pb2._execute_own_post_replies()
+        called2 = {c.kwargs.get("post_id") or c.args[0]
+                   for c in pb2.api.create_comment.call_args_list if c.kwargs or c.args}
+        assert called2 == {posts2[0]["id"]}, f"Solo el top-1 deberia entrar, got {called2}"
 
 
 class TestReconcileDeletedComments:

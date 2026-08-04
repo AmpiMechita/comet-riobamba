@@ -13,7 +13,7 @@ class AgentPolicy:
     phase_a_mode: str = "research"
 
     # ── Activity Budget (per day) ──────────────────────────────────
-    max_comments_per_day: int = 50        # v5.0: synced with phase_b_strategy.yaml
+    max_comments_per_day: int = 80        # v5.0: synced with phase_b_strategy.yaml
     max_feed_initiations_per_day: int = 6      # First comment in a new feed post
     max_feed_replies_per_day: int = 20         # Total feed replies (legacy compat)
 

@@ -50,7 +50,7 @@ def test_clamp_value_to_allowlist_bounds():
         {"param": "max_comments_per_day", "suggested": 999, "reason": "subir"}, cfg
     )
     assert r["status"] == "applied"
-    assert r["applied"] == 50  # max de allowlist
+    assert r["applied"] == 80  # max de allowlist
     r2 = pa.apply_structured_proposal(
         {"param": "max_comments_per_day", "suggested": -5, "reason": "bajar"}, cfg
     )
@@ -101,7 +101,7 @@ def test_overlay_skips_unknown_params_on_merge(tmp_path):
     )
     assert "nonsense_param" not in ALLOWLIST
     assert "max_comments_per_day" in ALLOWLIST
-    assert ALLOWLIST["max_comments_per_day"][1] == 50  # clamp a 50
+    assert ALLOWLIST["max_comments_per_day"][1] == 80  # clamp a 80
 
 
 def test_apply_log_is_auditable(tmp_path):

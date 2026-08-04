@@ -29,6 +29,26 @@ logger = logging.getLogger("services.model_cascade")
 # cumulative cost of Anthropic calls and stop before blowing the budget.
 _ANTHROPIC_INPUT_PRICE_PER_1M = 2.0
 _ANTHROPIC_OUTPUT_PRICE_PER_1M = 10.0
+
+# ── Precios USD por 1M tokens (input, output) por proveedor, para el
+# dashboard de gasto en vivo (cascade_telemetry.jsonl). Los proveedores
+# gratis (Gemini AI Studio, OpenRouter free, Cloudflare, Cerebras, Groq)
+# cotizan 0. DeepSeek: $0.28/M input, $1.14/M output (2026). ──
+_PROVIDER_PRICES_PER_1M: Dict[str, tuple] = {
+    "tier_premium": (_ANTHROPIC_INPUT_PRICE_PER_1M, _ANTHROPIC_OUTPUT_PRICE_PER_1M),
+    "tier_premium_opus": (5.0, 25.0),
+    "tier_fallback": (0.28, 1.14),
+    "tier_flash": (0.28, 1.14),
+}
+
+
+def _estimate_cost_usd(provider_name: str, input_tokens: int, output_tokens: int) -> float:
+    """Estima el costo USD de una llamada exitosa (0 para proveedores gratis)."""
+    prices = _PROVIDER_PRICES_PER_1M.get(provider_name)
+    if not prices:
+        return 0.0
+    in_price, out_price = prices
+    return (input_tokens * in_price + output_tokens * out_price) / 1_000_000
 _ANTHROPIC_SPEND_FILE = os.path.join("data", "anthropic_spend_tracker.json")
 _ANTHROPIC_SPEND_LIMIT_DEFAULT = 5.00
 
@@ -76,6 +96,9 @@ class ModelCascade:
         self.circuit_breakers: Dict[str, CircuitBreaker] = {}
         self._health_histories: Dict[str, Deque[bool]] = {}
         self._telemetry_file = os.path.join("data", "cascade_telemetry.jsonl")
+        # usage de la ultima llamada exitosa por proveedor (para telemetria de
+        # tokens/costo): {"provider": {"input_tokens": n, "output_tokens": n}}
+        self._last_usage: Dict[str, Dict[str, int]] = {}
 
         # ── Degraded mode: tier cascade (tier_premium → tier_fallback) exhausted ──
         # In-memory mirror of the persisted degraded state; the source of truth is
@@ -391,6 +414,8 @@ class ModelCascade:
         **kwargs,
     ) -> str:
         caller = kwargs.pop("caller", "unknown")
+        if caller == "unknown":
+            caller = self._infer_caller()
         provider_name = self.TIER_MAPPING.get(tier, "ollama_local")
         preferred = next((p for p in self.providers if p.name == provider_name and p.enabled), None)
         # explicit_only providers (e.g. cerebras for CAPTCHA) are excluded from the
@@ -482,6 +507,10 @@ class ModelCascade:
                     logger.debug(
                         f"ModelCascade: provider={provider.name} health={self._get_health_score(provider):.2f}"
                     )
+                    usage = self._last_usage.get(provider.name, {}) or {}
+                    input_tokens = int(usage.get("input_tokens", 0) or 0)
+                    output_tokens = int(usage.get("output_tokens", 0) or 0)
+                    cost_usd = _estimate_cost_usd(provider.name, input_tokens, output_tokens)
                     self._append_telemetry_jsonl({
                         "ts": datetime.now(timezone.utc).isoformat(),
                         "caller": caller,
@@ -490,6 +519,9 @@ class ModelCascade:
                         "latency_ms": latency_ms,
                         "success": True,
                         "error": None,
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                        "cost_usd": round(cost_usd, 6),
                     })
                     return result.strip()
 
@@ -524,6 +556,9 @@ class ModelCascade:
                     "latency_ms": latency_ms,
                     "success": False,
                     "error": error_type,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cost_usd": 0.0,
                 })
                 continue
 
@@ -818,6 +853,8 @@ class ModelCascade:
         if not choices:
             raise RuntimeError(f"Respuesta sin choices desde {provider.name}:{provider.model}")
 
+        self._last_usage[provider.name] = self._extract_openai_usage(data)
+
         message = choices[0].get("message") or {}
         content = message.get("content")
 
@@ -910,6 +947,8 @@ class ModelCascade:
                     thinking={"type": "disabled"},
                 )
                 self._record_anthropic_spend_from_response(resp)
+                inp, outp = self._extract_anthropic_usage(resp)
+                self._last_usage[provider.name] = {"input_tokens": inp, "output_tokens": outp}
                 return self._extract_anthropic_text(resp, provider)
             except Exception as e:
                 # Normalize SDK errors into the same string format the cascade
@@ -960,6 +999,8 @@ class ModelCascade:
 
         data = response.json()
         self._record_anthropic_spend_from_response(data)
+        inp, outp = self._extract_anthropic_usage(data)
+        self._last_usage[provider.name] = {"input_tokens": inp, "output_tokens": outp}
         return self._extract_anthropic_text(data, provider)
 
     # ── Anthropic spend tracking (simple, file-persisted) ─────────────
@@ -992,13 +1033,24 @@ class ModelCascade:
 
     @staticmethod
     def _extract_anthropic_usage(resp: Any) -> tuple:
-        """Return (input_tokens, output_tokens) from an SDK object or dict."""
+        """Return (input_tokens, output_tokens) from an Anthropic SDK object or dict."""
         usage = resp.get("usage") if isinstance(resp, dict) else getattr(resp, "usage", None)
         if usage is None:
             return 0, 0
         if isinstance(usage, dict):
             return int(usage.get("input_tokens", 0) or 0), int(usage.get("output_tokens", 0) or 0)
         return int(getattr(usage, "input_tokens", 0) or 0), int(getattr(usage, "output_tokens", 0) or 0)
+
+    @staticmethod
+    def _extract_openai_usage(data: dict) -> Dict[str, int]:
+        """Return {"input_tokens": n, "output_tokens": n} from an OpenAI-compatible response."""
+        usage = data.get("usage") or {}
+        if isinstance(usage, dict):
+            return {
+                "input_tokens": int(usage.get("prompt_tokens", 0) or 0),
+                "output_tokens": int(usage.get("completion_tokens", 0) or 0),
+            }
+        return {"input_tokens": 0, "output_tokens": 0}
 
     def _record_anthropic_spend_from_response(self, resp: Any) -> None:
         """Estimate the cost of one Anthropic response and persist the running total."""
@@ -1164,6 +1216,27 @@ class ModelCascade:
         if not history:
             return 0.0
         return sum(history) / len(history)
+
+    @staticmethod
+    def _infer_caller() -> str:
+        """Deriva el caller del stack frame del que llamo generate().
+
+        Fallback ante llamadas que no pasan caller=: usa el archivo del
+        llamador (ej. 'phases/phase_b/orchestrator.py' -> 'phase_b.orchestrator')
+        para el dashboard de gasto por tarea."""
+        try:
+            import inspect
+            frame = inspect.currentframe()
+            for f in iter(lambda: frame.f_back, None):
+                mod = f.f_globals.get("__name__", "")
+                if mod and not mod.startswith("services.model_cascade") and mod != "__main__":
+                    parts = [p for p in mod.split(".") if p]
+                    if len(parts) >= 2:
+                        return ".".join(parts[-2:])
+                    return mod
+        except Exception:
+            pass
+        return "unknown"
 
     def _append_telemetry_jsonl(self, record: dict) -> None:
         try:

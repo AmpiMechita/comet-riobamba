@@ -64,7 +64,7 @@ behavior_cfg = {
     "max_posts_per_day": _validate_bounded_int("AGENT_MAX_POSTS_PER_DAY", _POLICY.max_posts_per_day),
     "value_review_interval_days": int(os.getenv("AGENT_VALUE_REVIEW_INTERVAL_DAYS", _POLICY.value_review_interval_days)),
     "max_comments_per_post": _validate_bounded_int("AGENT_MAX_COMMENTS_PER_POST", _POLICY.max_comments_per_post, min_val=0, max_val=10),
-    "max_comments_per_day": _validate_bounded_int("AGENT_MAX_COMMENTS_PER_DAY", _POLICY.max_comments_per_day, min_val=0, max_val=50),
+    "max_comments_per_day": _validate_bounded_int("AGENT_MAX_COMMENTS_PER_DAY", _POLICY.max_comments_per_day, min_val=0, max_val=80),
     "max_feed_comments_per_post": _validate_bounded_int("AGENT_MAX_FEED_COMMENTS_PER_POST", _POLICY.max_feed_comments_per_post, min_val=0, max_val=10),
     "max_feed_replies_per_day": _validate_bounded_int("AGENT_MAX_FEED_REPLIES_PER_DAY", _POLICY.max_feed_replies_per_day, min_val=0, max_val=20),
     "max_comment_replies_per_cycle": _validate_bounded_int("AGENT_MAX_COMMENT_REPLIES_PER_CYCLE", _POLICY.max_comment_replies_per_cycle, min_val=0, max_val=10),
@@ -85,6 +85,7 @@ behavior_cfg = {
     "phase_c_enabled": bool(int(os.getenv("AGENT_PHASE_C_ENABLED", 1))),
     "phase_c_disabled_reason": os.getenv("AGENT_PHASE_C_DISABLED_REASON", ""),
     "energy_intel_enabled": bool(int(os.getenv("AGENT_ENERGY_INTEL_ENABLED", 1))),
+    "energy_intel_telegram_alerts": bool(int(os.getenv("AGENT_ENERGY_INTEL_TELEGRAM_ALERTS", 0))),
     "domain_keywords": {
         "inteligencia artificial",
         "IA aplicada",

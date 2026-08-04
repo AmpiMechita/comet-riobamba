@@ -290,6 +290,8 @@ def handle_command(command: str, agent=None) -> str:
         return _cmd_ideas()
     elif cmd == "/learnings":
         return _cmd_learnings()
+    elif cmd == "/spend":
+        return _cmd_spend()
     else:
         return (
             "📋 <b>Comandos:</b>\n"
@@ -303,7 +305,8 @@ def handle_command(command: str, agent=None) -> str:
             "/resume — Reanudar agente\n"
             "/proposals — Últimas propuestas de mejora\n"
             "/ideas — Ideas de proyectos I+D\n"
-            "/learnings — Lo que aprendí hoy en Moltbook"
+            "/learnings — Lo que aprendí hoy en Moltbook\n"
+            "/spend — Gasto LLM de hoy por tarea"
         )
 
 
@@ -529,6 +532,76 @@ def _cmd_learnings() -> str:
             count = c.get("reinforcement_count", 1)
             lines.append(f"\n🏷 [{html.escape(cluster)}] (x{count})")
             lines.append(f"{text}")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error: {html.escape(str(e))}"
+
+
+def _cmd_spend() -> str:
+    """Gasto LLM de HOY por tarea (caller) + por proveedor + guard Anthropic.
+
+    Las llamadas sin tarea etiquetada ('unknown') se agrupan por proveedor
+    (ej. 'unknown → tier_premium') para no perder visibilidad del gasto."""
+    try:
+        telemetry_path = Path("data/cascade_telemetry.jsonl")
+        if not telemetry_path.exists():
+            return "📊 No hay telemetría de gasto aún."
+        today = datetime.now(timezone.utc).date().isoformat()
+        by_caller: Dict[str, dict] = {}
+        by_provider: Dict[str, dict] = {}
+        total_cost = 0.0
+        total_calls = 0
+        for line in telemetry_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                e = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            ts = (e.get("ts") or "")[:10]
+            if ts != today:
+                continue
+            caller = str(e.get("caller") or "unknown")
+            provider = str(e.get("provider") or "?")
+            cost = float(e.get("cost_usd", 0.0) or 0.0)
+            total_cost += cost
+            total_calls += 1
+            # 'unknown' se agrupa por proveedor para no perder el gasto real
+            if caller == "unknown":
+                caller = f"unknown→{provider}"
+            c = by_caller.setdefault(caller, {"calls": 0, "cost": 0.0})
+            c["calls"] += 1
+            c["cost"] += cost
+            p = by_provider.setdefault(provider, {"calls": 0, "cost": 0.0})
+            p["calls"] += 1
+            p["cost"] += cost
+
+        tracker_usd = 0.0
+        tracker_path = Path("data/anthropic_spend_tracker.json")
+        if tracker_path.exists():
+            try:
+                tracker_usd = float(json.loads(
+                    tracker_path.read_text(encoding="utf-8")).get("total_usd", 0.0))
+            except Exception:
+                pass
+
+        lines = [
+            "📊 <b>Gasto LLM de hoy</b>",
+            f"💵 Total: <code>${total_cost:.4f}</code> | Llamadas: <code>{total_calls}</code>",
+            f"🛡️ Guard Anthropic: <code>${tracker_usd:.4f}</code>\n",
+            "── Por tarea ──",
+        ]
+        for caller, s in sorted(by_caller.items(), key=lambda kv: -kv[1]["cost"])[:8]:
+            lines.append(
+                f"• <code>{html.escape(caller[:26])}</code> "
+                f"<code>{s['calls']}x</code> ${s['cost']:.4f}"
+            )
+        lines.append("\n── Por proveedor ──")
+        for provider, s in sorted(by_provider.items(), key=lambda kv: -kv[1]["cost"]):
+            lines.append(
+                f"• <code>{html.escape(provider[:20])}</code> "
+                f"<code>{s['calls']}x</code> ${s['cost']:.4f}"
+            )
         return "\n".join(lines)
     except Exception as e:
         return f"Error: {html.escape(str(e))}"

@@ -10,7 +10,7 @@ Cada entrada: (min, max, default). Solo enteros.
 """
 
 ALLOWLIST = {
-    "max_comments_per_day": (0, 50, 15),
+    "max_comments_per_day": (0, 80, 15),
     "max_feed_replies_per_day": (0, 20, 3),
     "max_comment_replies_per_cycle": (0, 10, 3),
     "max_comments_per_post": (0, 10, 3),
