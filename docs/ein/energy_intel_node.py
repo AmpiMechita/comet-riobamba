@@ -50,6 +50,11 @@ DB_PATH       = str(Path(__file__).resolve().parents[2] / "data" / "energy_intel
 ARXIV_API     = "https://export.arxiv.org/api/query"
 USPTO_PV_API  = "https://api.patentsview.org/patents/query"
 USPTO_ODP_URL = "https://developer.uspto.gov/api/v1/patent/query"
+EPO_AUTH_URL  = "https://ops.epo.org/3.2/auth/accesstoken"
+EPO_SEARCH_URL = "https://ops.epo.org/3.2/rest-services/published-data/search"
+EPO_BIBLIO_URL = "https://ops.epo.org/3.2/rest-services/published-data/publication/epodoc/{docno}/biblio"
+EPO_TERMS     = ["solid state battery", "perovskite solar cell", "sodium ion battery",
+                 "green hydrogen electrolysis", "flow battery"]
 CLIMATE_FEEDS = [
     "https://cleantechnica.com/feed/",
     "https://renewablesnow.com/feed/",
@@ -301,6 +306,141 @@ def scrape_uspto(terms: list[str] = None, max_results: int = MAX_RESULTS) -> lis
     logger.info("USPTO scrape: %d patents", len(claims))
     return claims
 
+
+# ── EPO Open Patent Services (OPS) — patentes sin SSN ─────────────
+# Registro gratuito en developers.epo.org (email, sin SSN). Cobertura
+# mundial incl. EEUU (INPADOC). Credenciales via env:
+#   EPO_CONSUMER_KEY / EPO_CONSUMER_SECRET
+_EPO_TOKEN_CACHE: dict = {"token": None, "expires_at": 0.0}
+
+
+def _epo_token() -> Optional[str]:
+    """OAuth2 client_credentials -> Bearer token (cacheado hasta expirar)."""
+    key = os.environ.get("EPO_CONSUMER_KEY", "")
+    secret = os.environ.get("EPO_CONSUMER_SECRET", "")
+    if not key or not secret:
+        logger.warning(
+            "[EPO] skip: faltan EPO_CONSUMER_KEY/EPO_CONSUMER_SECRET. Registro gratis "
+            "en developers.epo.org (solo email, sin SSN) para activar patentes."
+        )
+        return None
+    if _EPO_TOKEN_CACHE["token"] and time.time() < _EPO_TOKEN_CACHE["expires_at"]:
+        return _EPO_TOKEN_CACHE["token"]
+    try:
+        r = requests.post(
+            EPO_AUTH_URL,
+            data={"grant_type": "client_credentials"},
+            auth=(key, secret),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=30,
+        )
+        r.raise_for_status()
+        data = r.json()
+        _EPO_TOKEN_CACHE["token"] = data["access_token"]
+        _EPO_TOKEN_CACHE["expires_at"] = time.time() + int(data.get("expires_in", 3000)) - 60
+        return _EPO_TOKEN_CACHE["token"]
+    except Exception as e:
+        logger.warning("[EPO] token error: %s", e)
+        return None
+
+
+def _parse_epo_search_response(payload: dict) -> list:
+    """Extrae doc-numbers (epodoc) del JSON de OPS search. Aislado para test sin red."""
+    refs = []
+    try:
+        search = payload["ops:world-patent-data"]["ops:query-result"]["ops:search-result"]
+        pubs = search.get("ops:publication-reference", [])
+        if isinstance(pubs, dict):
+            pubs = [pubs]
+        for pub in pubs:
+            for did in pub.get("ops:document-id", []):
+                if did.get("@document-id-type") == "epodoc":
+                    refs.append(did["ops:doc-number"])
+    except Exception:
+        pass
+    return refs
+
+
+def _parse_epo_biblio_response(payload: dict) -> dict:
+    """Extrae title/date/abstract del JSON de biblio OPS. Aislado para test sin red."""
+    out: dict = {}
+    try:
+        biblio = (
+            payload["ops:world-patent-data"]["ops:document-instance"]
+            ["ops:exchange-document"]["ops:bibliographic-data"]
+        )
+        title = biblio.get("ops:invention-title", {})
+        out["title"] = (title.get("@value") or "").strip() if isinstance(title, dict) else str(title).strip()
+        for did in biblio.get("ops:publication-reference", {}).get("ops:document-id", []):
+            if did.get("@document-id-type") == "docdb":
+                d = did.get("ops:publication-date", {}).get("$", "")
+                out["date"] = f"{d[:4]}-{d[4:6]}-{d[6:8]}" if len(d) == 8 else d
+        abstract = biblio.get("ops:abstract", {})
+        if isinstance(abstract, dict):
+            txt = abstract.get("ops:abstract-text", "")
+            if isinstance(txt, dict):
+                out["abstract"] = txt.get("$", "")
+            elif isinstance(txt, str):
+                out["abstract"] = txt
+    except Exception:
+        pass
+    return out
+
+
+def scrape_epo_ops(terms: list[str] = None, max_results: int = MAX_RESULTS) -> list[dict]:
+    """EPO OPS → claims de patentes (cobertura mundial incl. EEUU).
+
+    Registro gratuito por email en developers.epo.org (sin SSN), OAuth2
+    client_credentials. Sin credenciales: skip visible, nunca silencioso."""
+    if terms is None:
+        terms = EPO_TERMS
+    token = _epo_token()
+    if not token:
+        return []
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    claims = []
+    for term in terms:
+        try:
+            r = requests.get(
+                EPO_SEARCH_URL,
+                params={"q": f'ti="{term}"', "Range": f"1-{min(max_results, 5)}"},
+                headers=headers,
+                timeout=30,
+            )
+            r.raise_for_status()
+            doc_ids = _parse_epo_search_response(r.json())
+        except Exception as e:
+            logger.warning("[EPO] search error '%s': %s", term, e)
+            continue
+        for doc_id in doc_ids[:5]:
+            try:
+                rb = requests.get(EPO_BIBLIO_URL.format(docno=doc_id), headers=headers, timeout=30)
+                rb.raise_for_status()
+                biblio = _parse_epo_biblio_response(rb.json())
+            except Exception as e:
+                logger.warning("[EPO] biblio error %s: %s", doc_id, e)
+                continue
+            title = biblio.get("title", "")
+            if not title:
+                continue
+            abstract = biblio.get("abstract", "") or ""
+            tech = classify_technology(f"{title} {abstract}")
+            meta = extract_metrics(f"{title} {abstract}")
+            claims.append({
+                "source_type": "patent",
+                "source_url": f"https://worldwide.espacenet.com/patent/search?q={doc_id}",
+                "title": title,
+                "authors": "",
+                "date_pub": biblio.get("date", "")[:10],
+                "technology": tech,
+                **meta,
+                "claim_text": (abstract or title)[:500],
+                "raw": {"epo_doc_id": doc_id},
+            })
+            time.sleep(SCRAPE_DELAY)
+    logger.info("EPO OPS scrape: %d patents", len(claims))
+    return claims
+
 def scrape_climate_pr(feeds: list[str] = None) -> list[dict]:
     """RSS feeds de Climate Tech → press releases."""
     feeds = feeds or CLIMATE_FEEDS
@@ -354,7 +494,7 @@ def run_ingest():
     init_db()
     new = 0
     with db_conn() as conn:
-        for scraper in [scrape_arxiv, scrape_uspto, scrape_climate_pr]:
+        for scraper in [scrape_arxiv, scrape_uspto, scrape_epo_ops, scrape_climate_pr]:
             for claim in scraper():
                 if upsert_claim(conn, claim):
                     new += 1

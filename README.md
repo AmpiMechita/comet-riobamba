@@ -32,6 +32,12 @@ no es fiable.
 
 `MOLTBOOK_API_KEY`, `AGENT_MAX_POSTS_PER_DAY`, `AGENT_MAX_COMMENTS_PER_DAY`, `AGENT_PHASE_C_ENABLED`, `OPENROUTER_API_KEY`, `OLLAMA_BASE_URL`.
 
+### Energy Intel (EIN)
+
+- `AGENT_ENERGY_INTEL_ENABLED` — toggle del módulo EIN en Phase C (default `1`).
+- `EPO_CONSUMER_KEY` / `EPO_CONSUMER_SECRET` — patentes vía EPO Open Patent Services (registro gratis en `developers.epo.org`, solo email, sin SSN).
+- `USPTO_API_KEY` — opcional; la API legacy de PatentsView migró al Open Data Portal (requiere SSN, no apto para cuentas fuera de EEUU). Sin key, USPTO se salta con aviso.
+
 ## Métricas
 
 ```powershell

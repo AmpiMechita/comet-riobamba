@@ -3,8 +3,9 @@
 
 import os
 import sys
+import time
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -151,3 +152,155 @@ def test_uspto_skips_without_api_key():
     finally:
         if old:
             os.environ["USPTO_API_KEY"] = old
+
+
+# ── EPO OPS (patentes sin SSN) ────────────────────────────────────
+
+_SEARCH_SAMPLE = {
+    "ops:world-patent-data": {
+        "ops:query-result": {
+            "ops:search-result": {
+                "ops:publication-reference": [
+                    {
+                        "ops:document-id": [
+                            {"@document-id-type": "docdb", "ops:country": "US", "ops:doc-number": "12345678", "ops:kind": "B2"},
+                            {"@document-id-type": "epodoc", "ops:doc-number": "US12345678B2"},
+                        ]
+                    },
+                    {
+                        "ops:document-id": [
+                            {"@document-id-type": "epodoc", "ops:doc-number": "EP4000001A1"},
+                        ]
+                    },
+                    {
+                        "ops:document-id": [
+                            {"@document-id-type": "docdb", "ops:country": "EP", "ops:doc-number": "3999999", "ops:kind": "A1"},
+                        ]
+                    },
+                ]
+            }
+        }
+    }
+}
+
+_BIBLIO_SAMPLE = {
+    "ops:world-patent-data": {
+        "ops:document-instance": {
+            "ops:exchange-document": {
+                "ops:bibliographic-data": {
+                    "ops:publication-reference": {
+                        "ops:document-id": [
+                            {"@document-id-type": "docdb", "ops:country": "US",
+                             "ops:doc-number": "12345678", "ops:kind": "B2",
+                             "ops:publication-date": {"$": "20250915"}}
+                        ]
+                    },
+                    "ops:invention-title": {"@value": "Solid state battery with sulfide electrolyte"},
+                    "ops:abstract": {
+                        "@lang": "en",
+                        "ops:abstract-text": {"$": "A solid state battery achieving 165 Wh/kg with sulfide electrolyte."},
+                    },
+                }
+            }
+        }
+    }
+}
+
+
+def test_parse_epo_search_response_extracts_epodoc_numbers():
+    """Solo los document-id tipo epodoc salen del search (los docdb no tienen doc-number util)."""
+    import energy_intel_node
+    refs = energy_intel_node._parse_epo_search_response(_SEARCH_SAMPLE)
+    assert refs == ["US12345678B2", "EP4000001A1"]
+
+
+def test_parse_epo_biblio_response_extracts_fields():
+    """Del biblio salen titulo, fecha (normalizada) y abstract."""
+    import energy_intel_node
+    b = energy_intel_node._parse_epo_biblio_response(_BIBLIO_SAMPLE)
+    assert b["title"] == "Solid state battery with sulfide electrolyte"
+    assert b["date"] == "2025-09-15"
+    assert "165 Wh/kg" in b["abstract"]
+
+
+def test_parse_epo_responses_malformed_return_empty():
+    """Respuestas malformadas no lanzan — devuelven vacio (error-safe)."""
+    import energy_intel_node
+    assert energy_intel_node._parse_epo_search_response({}) == []
+    assert energy_intel_node._parse_epo_biblio_response({}) == {}
+
+
+def test_epo_ops_skips_without_credentials():
+    """Sin EPO_CONSUMER_KEY/SECRET el scraper no llama a la red."""
+    import energy_intel_node
+    import os
+    old_key = os.environ.get("EPO_CONSUMER_KEY")
+    old_secret = os.environ.get("EPO_CONSUMER_SECRET")
+    os.environ.pop("EPO_CONSUMER_KEY", None)
+    os.environ.pop("EPO_CONSUMER_SECRET", None)
+    try:
+        with patch("requests.post") as mock_post:
+            assert energy_intel_node.scrape_epo_ops() == []
+            mock_post.assert_not_called()
+    finally:
+        if old_key:
+            os.environ["EPO_CONSUMER_KEY"] = old_key
+        if old_secret:
+            os.environ["EPO_CONSUMER_SECRET"] = old_secret
+
+
+def test_epo_ops_ingests_patents_with_credentials(monkeypatch):
+    """Con credenciales, search+biblio producen claims de patente clasificados."""
+    import energy_intel_node as ein
+    monkeypatch.setenv("EPO_CONSUMER_KEY", "k")
+    monkeypatch.setenv("EPO_CONSUMER_SECRET", "s")
+    ein._EPO_TOKEN_CACHE.update({"token": "tok", "expires_at": time.time() + 600})
+    token_body = {
+        "ops:world-patent-data": {
+            "ops:query-result": {
+                "ops:search-result": {
+                    "ops:publication-reference": [
+                        {"ops:document-id": [{"@document-id-type": "epodoc", "ops:doc-number": "US9999999B2"}]}
+                    ]
+                }
+            }
+        }
+    }
+    biblio_body = {
+        "ops:world-patent-data": {
+            "ops:document-instance": {
+                "ops:exchange-document": {
+                    "ops:bibliographic-data": {
+                        "ops:publication-reference": {
+                            "ops:document-id": [
+                                {"@document-id-type": "docdb", "ops:doc-number": "9999999",
+                                 "ops:publication-date": {"$": "20250601"}}
+                            ]
+                        },
+                        "ops:invention-title": {"@value": "Sodium ion battery cathode"},
+                        "ops:abstract": {"ops:abstract-text": {"$": "A sodium-ion battery with 1100 mAh g-1 capacity."}},
+                    }
+                }
+            }
+        }
+    }
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        resp = MagicMock()
+        if "search" in url:
+            resp.json.return_value = token_body
+        else:
+            resp.json.return_value = biblio_body
+        return resp
+
+    with patch("energy_intel_node.requests.get", side_effect=fake_get), \
+         patch("energy_intel_node.SCRAPE_DELAY", 0), \
+         patch("energy_intel_node.time.sleep"):
+        claims = ein.scrape_epo_ops(terms=["sodium ion battery"], max_results=1)
+
+    assert len(claims) == 1
+    assert claims[0]["source_type"] == "patent"
+    assert claims[0]["technology"] == "sodium-ion"
+    assert claims[0]["metric_name"] == "specific_capacity"
+    assert "1100.0" in str(claims[0]["metric_value"])
+    assert "espacenet.com" in claims[0]["source_url"]
