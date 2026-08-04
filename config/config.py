@@ -84,6 +84,7 @@ behavior_cfg = {
     "phase_b_enabled": bool(int(os.getenv("AGENT_PHASE_B_ENABLED", 0))),
     "phase_c_enabled": bool(int(os.getenv("AGENT_PHASE_C_ENABLED", 1))),
     "phase_c_disabled_reason": os.getenv("AGENT_PHASE_C_DISABLED_REASON", ""),
+    "energy_intel_enabled": bool(int(os.getenv("AGENT_ENERGY_INTEL_ENABLED", 1))),
     "domain_keywords": {
         "inteligencia artificial",
         "IA aplicada",

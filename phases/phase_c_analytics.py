@@ -394,6 +394,9 @@ class PhaseCAnalytics:
 
     def _maybe_run_energy_intel(self) -> None:
         """Run energy intel ingest + Telegram alerts if throttle allows (1h interval)."""
+        if not behavior_cfg.get("energy_intel_enabled", True):
+            logger.debug("Phase C: Energy Intel deshabilitado por config (energy_intel_enabled=False)")
+            return
         if not self.telegram or not self.telegram.enabled:
             return
         try:
@@ -618,7 +621,12 @@ class PhaseCAnalytics:
         }
         
         state = self._load_state()
-        
+
+        # ── Energy Intel: corre con su propio throttle (60 min), ANTES del
+        # gate de analytics de 24h — antes quedaba dominado por ese gate y
+        # solo corria ~1x/dia, perdiendo papers frescos de arXiv. ──
+        self._maybe_run_energy_intel()
+
         # Check if analytics should run (time-based gate)
         if not self._should_run_analytics(state):
             logger.info(f"Phase C: analytics skipped (next run in ~{(self.analytics_interval - (datetime.now() - datetime.fromisoformat(state['last_analytics_run'])).total_seconds())/3600:.1f}h)")
@@ -789,9 +797,6 @@ class PhaseCAnalytics:
 
         await self._run_social_harvester()
         await self._update_research_agenda_from_feedback()
-
-        # ── Energy Intel: frontier technology alerts via Telegram ──────────
-        self._maybe_run_energy_intel()
 
         # ── Reply strategy feedback loop ──────────────────────────────
         try:

@@ -33,7 +33,7 @@ Arquitectura (todo en este archivo, < 500 líneas):
               └───────────────┘
 """
 
-import argparse, hashlib, json, re, sqlite3, time
+import argparse, hashlib, json, logging, os, re, sqlite3, time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,17 +42,32 @@ from typing import Optional
 import requests
 from bs4 import BeautifulSoup
 
+logger = logging.getLogger("energy_intel_node")
+
 # ──────────────────────────── CONFIG ─────────────────────────────
 
 DB_PATH       = str(Path(__file__).resolve().parents[2] / "data" / "energy_intel.db")
 ARXIV_API     = "https://export.arxiv.org/api/query"
 USPTO_PV_API  = "https://api.patentsview.org/patents/query"
+USPTO_ODP_URL = "https://developer.uspto.gov/api/v1/patent/query"
 CLIMATE_FEEDS = [
     "https://cleantechnica.com/feed/",
     "https://renewablesnow.com/feed/",
 ]
 SCRAPE_DELAY  = 2.0   # segundos entre requests (educado)
 MAX_RESULTS   = 25    # por fuente por corrida
+
+# Query arXiv acotada: categorias APLICADAS (fisica aplicada, quimica-fisica,
+# ciencia de materiales, sistemas de energia, ing. civil) + terminos de
+# energia/baterias. La query amplia anterior ("all:renewable energy AND
+# cat:physics*") traia optica, nanofotonica y fisica general (80% ruido).
+DEFAULT_QUERY = (
+    '((all:"energy storage" OR all:battery OR all:"solar cell" OR all:photovoltaic '
+    'OR all:electrolysis OR all:"green hydrogen" OR all:perovskite OR all:"flow battery" '
+    'OR all:thermophotovoltaic OR all:fusion OR all:agrivoltaic) '
+    'AND (cat:physics.app-ph OR cat:physics.chem-ph OR cat:cond-mat.mtrl-sci '
+    'OR cat:eess.SY OR cat:cs.CE))'
+)
 
 # ──────────────────────── DATABASE LAYER ─────────────────────────
 
@@ -121,27 +136,35 @@ def upsert_claim(conn, claim: dict) -> bool:
 # ──────────────────── EXTRACTION HELPERS ─────────────────────────
 
 TECH_KEYWORDS = {
-    "solid-state-battery":  r"solid.?state.?batter|ssb|sulfide.?electrolyte",
-    "perovskite-solar":     r"perovskite.?solar|psk.?pv|perovskite.?photovol",
-    "sodium-ion":           r"sodium.?ion.?batter|na.?ion",
-    "green-hydrogen":       r"green.?hydrogen|electrolysis|pem.?electroly",
-    "flow-battery":         r"flow.?batter|redox.?flow|vanadium.?flow",
-    "thermophotovoltaic":   r"thermophotovoltaic|tpv|thermo.?pv",
-    "fusion":               r"fusion.?energy|inertial.?confinement|magnetic.?fusion",
-    "agrivoltaics":         r"agrivoltaic|dual.?use.?solar|crop.?solar",
+    "solid-state-battery":  r"solid.?state.?batter|\bssb\b|solid.?electrolyte|sulfide.?electrolyte",
+    "perovskite-solar":     r"perovskite",
+    "sodium-ion":           r"sodium.?ion|na.?ion\b|prussian.?blue|sodium.?batter",
+    "green-hydrogen":       r"green.?hydrogen|electrolys|alkaline.?water|anion.?exchange.?membrane|proton.?exchange.?membrane|\bpem\b",
+    "flow-battery":         r"flow.?batter|redox.?flow|vanadium.?flow|organic.?redox",
+    "thermophotovoltaic":   r"thermophotovoltaic|\btpv\b|thermo.?photovoltaic",
+    "fusion":               r"fusion.?energy|tokamak|stellarator|inertial.?confinement",
+    "agrivoltaics":         r"agrivoltaic|agri.?voltaic|crop.?solar|dual.?use.?solar",
 }
 
 METRIC_PATTERNS = [
     # (regex, metric_name, unit, value_group_idx)
-    (r"(\d+(?:\.\d+)?)\s*Wh/kg",              "energy_density",  "Wh/kg", 1),
-    (r"(\d+(?:\.\d+)?)\s*Wh/L",               "volumetric_density","Wh/L",1),
+    (r"(\d+(?:\.\d+)?)\s*Wh\s*(?:kg[\-−]?1?|/kg)",
+                                               "energy_density",   "Wh/kg", 1),
+    (r"(\d+(?:\.\d+)?)\s*Wh\s*L[\-−]?1?",     "volumetric_density","Wh/L",1),
+    (r"(\d+(?:\.\d+)?)\s*W\s*kg[\-−]?1?",     "specific_power",   "W/kg",  1),
+    (r"(\d+(?:\.\d+)?)\s*kW\s*kg[\-−]?1?",    "specific_power",   "kW/kg", 1),
+    (r"(\d+(?:\.\d+)?)\s*mAh\s*g[\-−]?1?",    "specific_capacity","mAh/g", 1),
+    (r"efficiency\s+of\s+(\d+(?:\.\d+)?)\s*%",
+                                               "efficiency",       "%",      1),
     (r"(\d+(?:\.\d+)?)\s*%\s*(?:efficiency|PCE|power conversion)",
-                                                "efficiency",      "%",      1),
-    (r"(\d+(?:\.\d+)?)\s*mW/cm[²2]",          "power_density",   "mW/cm²", 1),
-    (r"(\d+(?:\.\d+)?)\s*kW/kg",              "specific_power",  "kW/kg",  1),
-    (r"(\d+(?:\.\d+)?)\s*\$/kWh",             "cost",            "$/kWh",  1),
-    (r"(\d+(?:\.\d+)?)\s*hours?.*cycling",     "cycle_life",      "hours",  1),
-    (r"(\d+(?:\.\d+)?)\s*cycles",             "cycle_life",      "cycles", 1),
+                                               "efficiency",       "%",      1),
+    (r"(\d+(?:\.\d+)?)\s*mW\s*cm[\-−]?2",     "power_density",    "mW/cm2", 1),
+    (r"(\d+(?:\.\d+)?)\s*\$\/\s*kWh",         "cost",             "$/kWh",  1),
+    (r"(\d+(?:\.\d+)?)\s*cents?\/\s*kWh",     "cost",             "cents/kWh",1),
+    (r"(\d+(?:\.\d+)?)\s*%\s*(?:after|over|retains?)",
+                                               "capacity_retention","%",     1),
+    (r"(\d+(?:\.\d+)?)\s*hours?.*cycling",     "cycle_life",       "hours",  1),
+    (r"(\d+(?:\.\d+)?)\s*cycles?",             "cycle_life",       "cycles", 1),
 ]
 
 def classify_technology(text: str) -> str:
@@ -162,7 +185,7 @@ def extract_metrics(text: str) -> dict:
 
 # ──────────────────── SCRAPERS ───────────────────────────────────
 
-def scrape_arxiv(query: str = "all:renewable energy AND cat:physics*",
+def scrape_arxiv(query: str = DEFAULT_QUERY,
                  max_results: int = MAX_RESULTS) -> list[dict]:
     """ArXiv API (Atom XML) → lista de claims normalizados."""
     claims = []
@@ -172,7 +195,7 @@ def scrape_arxiv(query: str = "all:renewable energy AND cat:physics*",
         r = requests.get(ARXIV_API, params=params, timeout=30)
         r.raise_for_status()
     except Exception as e:
-        print(f"[ArXiv] Error: {e}")
+        logger.warning("[ArXiv] Error: %s", e)
         return claims
 
     soup = BeautifulSoup(r.text, "lxml-xml")
@@ -203,10 +226,25 @@ def scrape_arxiv(query: str = "all:renewable energy AND cat:physics*",
             "raw": {"abstract_len": len(abstract)},
         })
     print(f"[ArXiv] {len(claims)} papers")
+    logger.info("arXiv scrape: %d papers, %d clasificados", len(claims),
+                sum(1 for c in claims if c["technology"] != "other"))
     return claims
 
+
 def scrape_uspto(terms: list[str] = None, max_results: int = MAX_RESULTS) -> list[dict]:
-    """USPTO PatentsView API → claims de patentes."""
+    """USPTO PatentsView → claims de patentes.
+
+    La API legacy de api.patentsview.org migro al Open Data Portal (ODP) de
+    developer.uspto.gov y ya no devuelve JSON (responde HTML). ODP requiere
+    API key (variable USPTO_API_KEY). Sin key el scraper se salta con un
+    warning visible — nunca mas fallo silencioso."""
+    if not os.environ.get("USPTO_API_KEY"):
+        logger.warning(
+            "[USPTO] skip: PatentsView legacy migro a Open Data Portal "
+            "(developer.uspto.gov). Registra una key y define USPTO_API_KEY "
+            "para reactivar el scraper de patentes."
+        )
+        return []
     if terms is None:
         terms = ["solid state battery", "perovskite solar cell",
                  "sodium ion battery", "green hydrogen electrolysis"]
@@ -215,7 +253,7 @@ def scrape_uspto(terms: list[str] = None, max_results: int = MAX_RESULTS) -> lis
         body = {
             "q": {"_and": [
                 {"_text_any": {"patent_title": term}},
-                {"_gte": {"patent_date": "2023-01-01"}}
+                {"_gte": {"patent_date": "2024-01-01"}}
             ]},
             "f": ["patent_number","patent_title","patent_date",
                   "inventor_first_name","inventor_last_name","patent_abstract"],
@@ -223,14 +261,20 @@ def scrape_uspto(terms: list[str] = None, max_results: int = MAX_RESULTS) -> lis
             "o": {"per_page": min(max_results, 25)}
         }
         try:
-            r = requests.post(USPTO_PV_API, json=body, timeout=30)
+            r = requests.post(USPTO_ODP_URL, headers={"X-Api-Key": os.environ["USPTO_API_KEY"]},
+                              json=body, timeout=30)
             r.raise_for_status()
         except Exception as e:
-            print(f"[USPTO] Error '{term}': {e}")
+            logger.warning("[USPTO] Error '%s': %s", term, e)
+            continue
+        if not r.headers.get("content-type", "").startswith("application/json"):
+            logger.warning("[USPTO] respuesta no-JSON para '%s' (API migrada/cambio de contrato): %s",
+                           term, r.text[:120])
             continue
         try:
             patents = r.json().get("patents") or []
         except Exception:
+            logger.warning("[USPTO] JSON invalido para '%s'", term)
             patents = []
         for p in patents:
             title = p.get("patent_title","")
@@ -254,7 +298,7 @@ def scrape_uspto(terms: list[str] = None, max_results: int = MAX_RESULTS) -> lis
                 "raw": {"patent_number": p.get("patent_number","")},
             })
         time.sleep(SCRAPE_DELAY)
-    print(f"[USPTO] {len(claims)} patents")
+    logger.info("USPTO scrape: %d patents", len(claims))
     return claims
 
 def scrape_climate_pr(feeds: list[str] = None) -> list[dict]:
@@ -267,7 +311,7 @@ def scrape_climate_pr(feeds: list[str] = None) -> list[dict]:
                              headers={"User-Agent":"EnergyIntelBot/1.0"})
             r.raise_for_status()
         except Exception as e:
-            print(f"[PR] Error {feed_url}: {e}")
+            logger.warning("[PR] Error %s: %s", feed_url, e)
             continue
         soup = BeautifulSoup(r.text, "lxml-xml")
         for item in soup.find_all("item")[:MAX_RESULTS]:
@@ -300,7 +344,7 @@ def scrape_climate_pr(feeds: list[str] = None) -> list[dict]:
                 "raw": {"feed": feed_url},
             })
         time.sleep(SCRAPE_DELAY)
-    print(f"[PR] {len(claims)} releases")
+    logger.info("PR scrape: %d releases (de %d feeds)", len(claims), len(feeds))
     return claims
 
 # ──────────────────── INGEST PIPELINE ────────────────────────────
@@ -314,7 +358,7 @@ def run_ingest():
             for claim in scraper():
                 if upsert_claim(conn, claim):
                     new += 1
-    print(f"\n✓ Ingesta completa: {new} claims nuevos")
+    logger.info("Ingesta completa: %d claims nuevos", new)
     return new
 
 # ──────────────────── REST API ───────────────────────────────────
@@ -464,6 +508,8 @@ if __name__ == "__main__":
     init_db()
 
     if args.scrape:
+        logging.basicConfig(level=logging.INFO,
+                            format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
         run_ingest()
     else:
         import uvicorn

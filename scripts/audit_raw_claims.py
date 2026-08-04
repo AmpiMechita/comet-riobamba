@@ -13,7 +13,7 @@ _proj_root = Path(__file__).resolve().parent.parent
 if str(_proj_root) not in sys.path:
     sys.path.insert(0, str(_proj_root))
 
-DB_PATH = _proj_root / "energy_intel.db"
+DB_PATH = _proj_root / "data" / "energy_intel.db"
 
 
 def main() -> None:

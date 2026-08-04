@@ -63,7 +63,7 @@ def _format_claims(claims: list[dict]) -> str:
 
 
 async def run_cycle() -> None:
-    kb = EnergyKnowledgeBase(Path("energy_intel.db"))
+    kb = EnergyKnowledgeBase(_proj_root / "data" / "energy_intel.db")
     claims = kb.get_recent_claims(limit=10)
     if not claims:
         print("No energy data found")

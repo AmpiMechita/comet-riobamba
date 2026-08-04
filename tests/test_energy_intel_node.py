@@ -4,6 +4,7 @@
 import os
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -71,3 +72,82 @@ def test_module_exports_run_ingest():
     import energy_intel_node
     assert hasattr(energy_intel_node, "run_ingest")
     assert callable(energy_intel_node.run_ingest)
+
+
+# ── Mejoras P1/P2: query refinada, keywords, metricas, USPTO ───────
+
+def test_default_arxiv_query_targets_applied_categories():
+    """La query por defecto debe restringir a categorias aplicadas + terminos de
+    energia (antes 'all:renewable energy AND cat:physics*' traia 80% ruido)."""
+    import energy_intel_node
+    q = energy_intel_node.DEFAULT_QUERY
+    assert "cat:physics.app-ph" in q
+    assert "cat:cond-mat.mtrl-sci" in q
+    assert "all:battery" in q
+    assert "all:\"solar cell\"" in q
+    assert "all:renewable energy AND cat:physics*" not in q
+
+
+def test_scrape_arxiv_uses_refined_default_query():
+    """scrape_arxiv() sin argumento usa la query refinada."""
+    import energy_intel_node
+    assert energy_intel_node.scrape_arxiv.__defaults__[0] == energy_intel_node.DEFAULT_QUERY
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("solid electrolyte sulfide-based battery", "solid-state-battery"),
+    ("prussian blue sodium battery cathode", "sodium-ion"),
+    ("alkaline water electrolysis for hydrogen", "green-hydrogen"),
+    ("anion exchange membrane electrolyzer", "green-hydrogen"),
+    ("tokamak fusion plasma stability", "fusion"),
+    ("agri-voltaic dual use solar farming", "agrivoltaics"),
+    ("thermophotovoltaic TPV waste heat recovery", "thermophotovoltaic"),
+    ("vanadium redox flow battery", "flow-battery"),
+])
+def test_classify_technology_real_corpus_vocabulary(text, expected):
+    """Keywords ampliadas: el vocabulario real de papers del corpus clasifica."""
+    import energy_intel_node
+    assert energy_intel_node.classify_technology(text) == expected
+
+
+@pytest.mark.parametrize("text,name,value,unit", [
+    ("energy density of 165 Wh kg-1", "energy_density", 165.0, "Wh/kg"),
+    ("165 Wh/kg with long cycling", "energy_density", 165.0, "Wh/kg"),
+    ("capacity of 1100 mAh g−1", "specific_capacity", 1100.0, "mAh/g"),
+    ("achieved efficiency of 28.9%", "efficiency", 28.9, "%"),
+    ("28.9% power conversion efficiency", "efficiency", 28.9, "%"),
+    ("retains 88% after 500 cycles", "capacity_retention", 88.0, "%"),
+    ("cost of 45 cents/kWh", "cost", 45.0, "cents/kWh"),
+    ("ran for 1200 cycles", "cycle_life", 1200.0, "cycles"),
+])
+def test_extract_metrics_real_corpus_patterns(text, name, value, unit):
+    """Patrones de metricas ampliados: unidades reales del corpus (Wh kg-1,
+    mAh g-1, 'efficiency of X%', cents/kWh, retention)."""
+    import energy_intel_node
+    m = energy_intel_node.extract_metrics(text)
+    assert m.get("metric_name") == name, f"esperaba {name}, got {m}"
+    assert m.get("metric_value") == value
+    assert m.get("metric_unit") == unit
+
+
+def test_extract_metrics_no_false_positive_on_generic_text():
+    """Texto sin unidades reconocidas no produce metrica (evita metricas inventadas)."""
+    import energy_intel_node
+    assert energy_intel_node.extract_metrics(
+        "the battery showed exceptional stability over long durations") == {}
+
+
+def test_uspto_skips_without_api_key():
+    """Sin USPTO_API_KEY el scraper no llama a la red y devuelve [] (la API
+    legacy migro al Open Data Portal; antes fallaba en silencio)."""
+    import energy_intel_node
+    import os
+    old = os.environ.get("USPTO_API_KEY")
+    os.environ.pop("USPTO_API_KEY", None)
+    try:
+        with patch("requests.post") as mock_post:
+            assert energy_intel_node.scrape_uspto() == []
+            mock_post.assert_not_called()
+    finally:
+        if old:
+            os.environ["USPTO_API_KEY"] = old

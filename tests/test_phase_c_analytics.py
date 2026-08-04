@@ -136,3 +136,52 @@ class TestPhaseCStrategyState:
         assert ts is not None
         parsed = datetime.fromisoformat(ts)
         assert parsed.tzinfo is not None
+
+
+class TestEnergyIntelCadence:
+
+    def test_energy_intel_disabled_by_config_skips_import(self, deps):
+        """Con energy_intel_enabled=False el hook no importa ni corre el ingest."""
+        analytics = PhaseCAnalytics(deps)
+        analytics.telegram = MagicMock()
+        analytics.telegram.enabled = True
+        with patch("phases.phase_c_analytics.behavior_cfg",
+                   {"energy_intel_enabled": False}) as mock_cfg, \
+             patch("services.energy_intel_telegram.run_energy_intel_with_alerts") as mock_run:
+            analytics._maybe_run_energy_intel()
+        mock_run.assert_not_called()
+
+    def test_energy_intel_skips_without_telegram(self, deps):
+        """Sin telegram habilitado, el hook no corre aunque el toggle este activo."""
+        analytics = PhaseCAnalytics(deps)
+        analytics.telegram = None
+        with patch("phases.phase_c_analytics.behavior_cfg",
+                   {"energy_intel_enabled": True}), \
+             patch("services.energy_intel_telegram.run_energy_intel_with_alerts") as mock_run:
+            analytics._maybe_run_energy_intel()
+        mock_run.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_energy_intel_runs_even_when_analytics_gated(self, deps):
+        """P3: el hook de Energy Intel corre ANTES del gate de analytics de 24h
+        (con su propio throttle de 60 min). Analytics gateado => EIN igual corre."""
+        analytics = PhaseCAnalytics(deps)
+        analytics.analytics_interval = 86400 * 365
+        analytics.telegram = MagicMock()
+        analytics.telegram.enabled = True
+        analytics._load_state = MagicMock(return_value={
+            "last_analytics_run": datetime.now().isoformat(),
+            "insights_applied": [],
+            "metrics_history": [],
+        })
+        with patch("phases.phase_c_analytics.behavior_cfg",
+                   {"energy_intel_enabled": True}), \
+             patch.object(analytics, "_maybe_run_energy_intel",
+                          wraps=analytics._maybe_run_energy_intel) as spy, \
+             patch("phases.phase_c_analytics.StrategyState") as MockSS, \
+             patch("services.energy_intel_telegram.should_run_energy_intel", return_value=False) as mock_throttle:
+            result = await analytics.execute()
+
+        assert result["analytics_run"] is False
+        spy.assert_called_once()
+        mock_throttle.assert_called_once()
