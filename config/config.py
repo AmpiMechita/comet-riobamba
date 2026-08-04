@@ -124,6 +124,30 @@ behavior_cfg = {
     },
 }
 
+# === Auto-applied config overlay (propuestas de mejora autoaplicadas) ===
+# El motor services/proposal_applier.py persiste data/auto_applied_config.json
+# cuando el agente autoaplica una propuesta de config aprobada por allowlist.
+# Se mergea AQUI al arranque (clamp + validacion de rango, solo allowlist).
+# Nota: NO importar services.* aquí (import circular con config en bootstrap).
+try:
+    from config.auto_appliable import ALLOWLIST as _AUTO_ALLOWLIST
+
+    _auto_overlay_path = BASE_DIR / "data" / "auto_applied_config.json"
+    if _auto_overlay_path.exists():
+        _auto_overlay = yaml.safe_load(_auto_overlay_path.read_text(encoding="utf-8")) or {}
+        for _param, _value in _auto_overlay.items():
+            if _param not in _AUTO_ALLOWLIST:
+                continue
+            _lo, _hi, _default = _AUTO_ALLOWLIST[_param]
+            try:
+                _val = int(_value)
+            except (ValueError, TypeError):
+                continue
+            behavior_cfg[_param] = max(_lo, min(_hi, _val))
+            logger.info("Auto-config overlay aplicado en arranque %s=%s", _param, _val)
+except Exception as _e:
+    logger.warning("Auto-config overlay no aplicado al arranque: %s", _e)
+
 # === Configuración de Contenido (Fase A) ===
 content_cfg = {
     "max_length": 280,

@@ -8,6 +8,7 @@ Extends the basic telegram_client with operator-facing intelligence:
 - Remote commands for monitoring and control
 """
 
+import html
 import json
 import logging
 from datetime import datetime, timedelta, timezone
@@ -336,7 +337,7 @@ def _cmd_top_posts() -> str:
         recent = posts[-5:]
         lines = ["📝 <b>Últimos 5 posts:</b>"]
         for p in reversed(recent):
-            topic = p.get("topic", "?")[:55]
+            topic = html.escape(p.get("topic", "?"))[:55]
             pub = p.get("published_at", "?")[:10]
             lines.append(f"  • [{pub}] {topic}")
         return "\n".join(lines)
@@ -356,7 +357,7 @@ def _cmd_top_claims() -> str:
         for c in top:
             lines.append(
                 f"  • [{c.get('reinforcement_count', 0)}x] "
-                f"{c.get('text', '?')[:65]}"
+                f"{html.escape(c.get('text', '?'))[:65]}"
             )
         return "\n".join(lines)
     except Exception as e:
@@ -370,9 +371,9 @@ def _cmd_next_topic() -> str:
         if evo:
             return (
                 f"🔮 <b>Próximo topic (evolution):</b>\n"
-                f"  Series: {evo.get('series_id', '?')}\n"
-                f"  Angle: {evo.get('angle', '?')}\n"
-                f"  Title: {evo.get('title', '?')[:80]}"
+                f"  Series: {html.escape(evo.get('series_id', '?'))}\n"
+                f"  Angle: {html.escape(evo.get('angle', '?'))}\n"
+                f"  Title: {html.escape(evo.get('title', '?'))[:80]}"
             )
         agenda_file = Path("data/research_agenda.json")
         if agenda_file.exists():
@@ -380,7 +381,7 @@ def _cmd_next_topic() -> str:
             pending = [t for t in data.get("pending_topics", []) if not t.get("covered")]
             if pending:
                 t = pending[0]
-                return f"🔮 <b>Próximo topic (agenda):</b>\n  {t.get('topic', '?')[:80]}"
+                return f"🔮 <b>Próximo topic (agenda):</b>\n  {html.escape(t.get('topic', '?'))[:80]}"
         return "🔮 No hay topics pendientes. Phase A generará uno aleatorio."
     except Exception as e:
         return f"Error: {e}"
@@ -398,7 +399,7 @@ def _cmd_quality() -> str:
             try:
                 r = json.loads(line)
                 lines.append(
-                    f"  • [{r.get('type', '?')[:12]}] "
+                    f"  • [{html.escape(r.get('type', '?'))[:12]}] "
                     f"composite={r.get('composite', 0):.2f}"
                 )
             except json.JSONDecodeError:
@@ -478,12 +479,12 @@ def _cmd_proposals() -> str:
         lines = ["🧠 <b>Últimas propuestas de mejora:</b>"]
         for e in reversed(recent):
             ts = e.get("timestamp", "?")[:19]
-            text = e.get("proposal", "")[:200]
-            lines.append(f"\n📌 <i>{ts}</i>")
+            text = html.escape(e.get("proposal", ""))[:200]
+            lines.append(f"\n📌 <i>{html.escape(ts)}</i>")
             lines.append(f"{text}")
         return "\n".join(lines)
     except Exception as e:
-        return f"Error: {e}"
+        return f"Error: {html.escape(str(e))}"
 
 
 def _cmd_ideas() -> str:
@@ -502,12 +503,12 @@ def _cmd_ideas() -> str:
         lines = ["💡 <b>Últimas ideas de proyectos I+D:</b>"]
         for e in reversed(recent):
             ts = e.get("timestamp", "?")[:19]
-            ideas = e.get("ideas", "")[:400]
-            lines.append(f"\n📌 <i>{ts}</i>")
+            ideas = html.escape(e.get("ideas", ""))[:400]
+            lines.append(f"\n📌 <i>{html.escape(ts)}</i>")
             lines.append(f"{ideas}")
         return "\n".join(lines)
     except Exception as e:
-        return f"Error: {e}"
+        return f"Error: {html.escape(str(e))}"
 
 
 def _cmd_learnings() -> str:
@@ -523,14 +524,14 @@ def _cmd_learnings() -> str:
         recent = claims[-5:]
         lines = ["📚 <b>Lo que aprendí hoy en Moltbook:</b>"]
         for c in reversed(recent):
-            text = (c.get("text") or c.get("claim_text") or "?")[:200]
+            text = html.escape((c.get("text") or c.get("claim_text") or "?"))[:200]
             cluster = c.get("cluster", "general")
             count = c.get("reinforcement_count", 1)
-            lines.append(f"\n🏷 [{cluster}] (x{count})")
+            lines.append(f"\n🏷 [{html.escape(cluster)}] (x{count})")
             lines.append(f"{text}")
         return "\n".join(lines)
     except Exception as e:
-        return f"Error: {e}"
+        return f"Error: {html.escape(str(e))}"
 
 
 def is_agent_paused() -> bool:

@@ -12,6 +12,7 @@ NO maneja lógica de comandos administrativos — esos se resuelven en
 services.telegram_control.handle_command(). Este módulo es solo transporte.
 """
 import asyncio
+import html
 import json
 import logging
 import os
@@ -45,7 +46,13 @@ class TelegramClient:
             url = f"{self.base_url}/{method}"
             response = requests.post(url, json=payload, timeout=30)
             if response.status_code == 200:
-                return response.json().get("ok", False)
+                ok = response.json().get("ok", False)
+                if not ok:
+                    logger.error("Telegram API returned ok=false for %s: %s",
+                                 method, response.text[:200])
+                return ok
+            logger.error("Telegram send %s failed: HTTP %s %s",
+                         method, response.status_code, response.text[:200])
             return False
         except Exception as e:
             logger.error(f"Telegram send error: {e}")
@@ -419,11 +426,11 @@ class TelegramClient:
         lines = ["📝 <b>Últimos Posts Publicados</b>\n"]
         for i, post in enumerate(reversed(recent), 1):
             post_id = post.get('post_id', 'N/A')
-            topic = post.get('topic', 'Sin tema')
+            topic = html.escape(post.get('topic', 'Sin tema'))
             date = post.get('published_at', '')[:10]
             lines.append(f"<b>{i}.</b> [{date}]")
             lines.append(f"📌 {topic}")
-            lines.append(f"🔗 <code>{post_id}</code>\n")
+            lines.append(f"🔗 <code>{html.escape(post_id)}</code>\n")
         
         lines.append("💡 Usa /comments &lt;post_id&gt; para ver comentarios")
         self.send_message("\n".join(lines))
@@ -450,9 +457,9 @@ class TelegramClient:
                     author = str(author_data)
                 
                 text = c.get('text') or c.get('content') or c.get('body', '')
-                text_preview = text[:150] + "..." if len(text) > 150 else text
+                text_preview = html.escape(text[:150]) + "..." if len(text) > 150 else html.escape(text)
                 
-                lines.append(f"👤 <b>{author}</b>:")
+                lines.append(f"👤 <b>{html.escape(str(author))}</b>:")
                 lines.append(f"<i>{text_preview}</i>\n")
             
             self.send_message("\n".join(lines))
@@ -566,9 +573,9 @@ class TelegramClient:
             lines = ["💡 <b>Proyectos I+D (últimos 3)</b>\n"]
             for e in reversed(recent):
                 ts = e.get("timestamp", "?")[:19]
-                text = e.get("ideas", "")[:400]
+                text = html.escape(e.get("ideas", ""))[:400]
                 cycle = e.get("cycle", "?")
-                lines.append(f"📌 <i>Ciclo {cycle} — {ts}</i>")
+                lines.append(f"📌 <i>Ciclo {html.escape(str(cycle))} — {ts}</i>")
                 lines.append(f"{text}\n")
 
             self.send_message("\n".join(lines))

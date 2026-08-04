@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Fase C: Analytics, métricas, auto-optimización y agenda de investigación."""
 import asyncio
+import html
 import logging
 import json
 import math
@@ -471,36 +472,75 @@ class PhaseCAnalytics:
                 "Analiza estas métricas de fallo de tu propio sistema, extraídas de "
                 "tus logs de telemetría (dual_scores.jsonl y cascade_telemetry.jsonl):\n\n"
                 f"{metrics_block}\n\n"
-                "Redacta una propuesta técnica concisa (máx 3 líneas) para que el "
-                "administrador modifique el código. Basáte SOLO en las métricas de "
-                "arriba, no inventes datos. Indica el archivo y el cambio concreto.\n"
-                "Ejemplo: 'Métrica: 15 fallos por longitud. Propuesta: Aumentar "
-                "max_len en constants.py'."
+                "Emite UNA propuesta de ajuste de CONFIGURACIÓN en JSON estricto, "
+                "sin texto alrededor, con este formato:\n"
+                '{"param": "<nombre_parametro>", "suggested": <valor_int>, '
+                '"reason": "<motivo en <=40 palabras>"}\n\n'
+                "Parámetros permitidos (elige SOLO uno de estos): "
+                "max_comments_per_day (0-50), max_feed_replies_per_day (0-20), "
+                "max_comment_replies_per_cycle (0-10), max_comments_per_post (0-10), "
+                "max_posts_per_day (1-10), phase_b_max_replies (1-5).\n"
+                "Basate SOLO en las métricas de arriba, no inventes datos. Si ninguna "
+                "métrica justifica un cambio de límite, emite {\"param\": \"\", "
+                "\"suggested\": 0, \"reason\": \"sin cambio justificado\"}."
             )
             try:
                 response = await model_cascade.generate(
                     prompt=proposal_prompt,
                     system_prompt=(
-                        "Eres un agente autónomo proponiendo mejoras a tu propio código "
-                        "basándote en datos de telemetría reales. No alucines métricas."
+                        "Eres un agente autónomo proponiendo ajustes de configuración "
+                        "a tu propio sistema basándote en datos de telemetría reales. "
+                        "Respondes SOLO con JSON válido, sin markdown ni texto extra. "
+                        "No alucines métricas."
                     ),
                     max_tokens=200,
-                    temperature=0.5,
+                    temperature=0.3,
                     tier="premium",
                     caller="phase_c_proposal",
                 )
                 response = (response or "").strip()
-                if response and len(response) > 10:
-                    from services.telegram_control import log_proposal
-                    proposal_text = (
-                        f"{response}\n\n"
-                        f"[Telemetría base: {' | '.join(findings['lines'])}]"
+                response = response.strip("`")
+                if response.startswith("json"):
+                    response = response[4:].strip()
+                try:
+                    proposal = json.loads(response)
+                except (json.JSONDecodeError, ValueError) as e:
+                    logger.warning(
+                        "Phase C: proposal no es JSON válido (%s): %s", e, response[:120]
                     )
-                    log_proposal(proposal_text)
-                    logger.info(
-                        "Phase C: telemetry-grounded proposal generated (%d chars, %d metrics)",
-                        len(response), len(findings["lines"]),
-                    )
+                    return
+                param = str(proposal.get("param", "")).strip()
+                if not param:
+                    logger.info("Phase C: LLM determinó que no hay cambio de config justificado")
+                    return
+                if len(proposal.get("reason", "")) <= 2:
+                    logger.info("Phase C: propuesta sin razón — descartada")
+                    return
+
+                from services.proposal_applier import apply_structured_proposal
+                result = apply_structured_proposal(proposal, behavior_cfg)
+
+                from services.telegram_control import log_proposal
+                status_emoji = {"applied": "✅", "rejected": "❌",
+                                "skipped_cooldown": "⏳", "skipped_noop": "➖"}
+                proposal_text = (
+                    f"{status_emoji.get(result['status'], '❓')} Auto-aplicación: "
+                    f"{result.get('status')}\n"
+                    f"Param: <code>{html.escape(param)}</code> → "
+                    f"{html.escape(str(result.get('applied', '?')))} "
+                    f"(era {html.escape(str(result.get('previous', '?')))})"
+                )
+                if proposal.get("reason"):
+                    proposal_text += f"\nMotivo: {html.escape(proposal['reason'])}"
+                proposal_text += (
+                    f"\n\n[Telemetría base: {' | '.join(findings['lines'])}]"
+                )
+                log_proposal(proposal_text)
+                logger.info(
+                    "Phase C: proposal %s — %s=%s (%s)",
+                    result["status"], param, result.get("applied"),
+                    proposal.get("reason", "")[:80],
+                )
             except Exception as e:
                 logger.debug("Phase C: proposal generation skipped (LLM unavailable): %s", e)
         except Exception as e:
@@ -626,6 +666,12 @@ class PhaseCAnalytics:
         # gate de analytics de 24h — antes quedaba dominado por ese gate y
         # solo corria ~1x/dia, perdiendo papers frescos de arXiv. ──
         self._maybe_run_energy_intel()
+
+        # ── R&D Lab: sintesis de ideas de proyectos I+D con throttle propio
+        # (cada 10 ciclos ≈ 50 min), ANTES del gate de analytics de 24h — si
+        # quedara dentro, solo correria ~1x/dia y ademas el gate de limites
+        # diarios la bloquearia la mayoria de los dias. ──
+        await self._maybe_synthesize_ideas()
 
         # Check if analytics should run (time-based gate)
         if not self._should_run_analytics(state):
@@ -851,9 +897,6 @@ class PhaseCAnalytics:
 
         # ── Auto-Evolution: generate a self-improvement proposal ──
         await self._maybe_generate_proposal(results, metrics)
-
-        # ── R&D Lab: synthesize project ideas from claims ──
-        await self._maybe_synthesize_ideas()
 
         return results
 
