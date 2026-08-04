@@ -4,7 +4,7 @@
 
 interaction_rules:
   min_comments_per_day: 8
-  max_comments_per_day: 15
+  max_comments_per_day: 50
   min_comments_per_post_published: 4
 
 target_agents:

@@ -164,7 +164,9 @@ class TelegramClient:
             return
 
         # ── Ignore stale / replayed messages from history ──
-        if self._is_stale_message(message):
+        # Never drop explicit slash-commands on staleness: the user typed them
+        # deliberately and expects a reply even if the loop was busy >60s.
+        if not text.startswith("/") and self._is_stale_message(message):
             return
 
         # ── Voice message handler (v5.0: Modo Asistente con Whisper) ──

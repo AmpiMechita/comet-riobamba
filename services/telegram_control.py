@@ -283,6 +283,8 @@ def handle_command(command: str, agent=None) -> str:
         return _cmd_resume()
     elif cmd == "/proposals":
         return _cmd_proposals()
+    elif cmd == "/proposal":
+        return _cmd_proposals()
     elif cmd == "/ideas":
         return _cmd_ideas()
     elif cmd == "/learnings":
