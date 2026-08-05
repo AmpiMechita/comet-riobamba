@@ -935,17 +935,23 @@ class ModelCascade:
                 # field is equivalent to the model default and keeps the call valid.
                 # This omission is Anthropic-specific — the OpenAI-compatible path
                 # (DeepSeek et al.) still sends temperature normally.
-                resp = client.messages.create(
-                    model=provider.model,
-                    max_tokens=int(max_tokens),
-                    system=system_text or None,
-                    messages=chat_messages,
+                create_kwargs: Dict[str, Any] = {
+                    "model": provider.model,
+                    "max_tokens": int(max_tokens),
+                    "messages": chat_messages,
                     # Sin esto, Sonnet 5 corre thinking adaptativo por default y se
                     # come el max_tokens chico de Fase B (120-180) -> content vacio.
                     # 'disabled' es aceptado por Sonnet 5 y Opus 4.8 (para Opus es
                     # no-op: ya corre sin thinking). Mismo patron que el path DeepSeek.
-                    thinking={"type": "disabled"},
-                )
+                    "thinking": {"type": "disabled"},
+                }
+                # `system` SOLO si hay system prompt: enviar system=None (o cadena
+                # vacía) es rechazado por la API con "system: Input should be a
+                # valid array" (lo rompía para llamadas sin system_prompt, p.ej.
+                # art_bridge.generate_haiku).
+                if system_text:
+                    create_kwargs["system"] = system_text
+                resp = client.messages.create(**create_kwargs)
                 self._record_anthropic_spend_from_response(resp)
                 inp, outp = self._extract_anthropic_usage(resp)
                 self._last_usage[provider.name] = {"input_tokens": inp, "output_tokens": outp}
