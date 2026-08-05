@@ -122,35 +122,66 @@ async def test_fallback_to_next_provider_on_failure(cascade):
 
 
 @pytest.mark.asyncio
-async def test_fallback_prefers_free_providers_over_paid(cascade):
-    """Si el tier pedido (pago) falla, el fallback prueba gratis antes que pago.
+async def test_fallback_prefers_deepseek_over_free(cascade):
+    """Si el tier pedido falla, el fallback prueba DeepSeek (crédito activo,
+    mejor calidad) antes que los gratis.
 
-    Reproduce el ciclo real del 22/7/2026: tier_fallback (DeepSeek) devolvio
-    HTTP 402 y el cascade degrado directo a tier_premium (Anthropic pago) sin
-    probar ninguno de los gratis, solo por orden de registro.
+    Reordenado 04/08/2026: con crédito en DeepSeek, el fallback prioriza
+    tier_fallback/tier_flash sobre los gratis (Cloudflare/Cerebras) — el
+    tiering de Fase A (hero Opus + volumen DeepSeek) no debe degradarse a
+    llama-3.3-70b en cada fallo de Anthropic.
     """
     _add_provider(cascade, "tier_premium", paid=True)   # registrado primero, como en _load_providers
     _add_provider(cascade, "tier_sonnet")
     _add_provider(cascade, "openrouter")
+    _add_provider(cascade, "cloudflare")
     _add_provider(cascade, "tier_fallback", paid=True)
+    _add_provider(cascade, "tier_flash", paid=True)
 
     attempted = []
 
     async def _call(provider, messages, max_tokens, temperature):
         attempted.append(provider.name)
-        if provider.name == "tier_fallback":
-            raise RuntimeError("HTTP 402 desde tier_fallback - Insufficient Balance")
+        if provider.name == "tier_premium":
+            raise RuntimeError("HTTP 400 desde tier_premium - credit balance too low")
         return "ok"
 
     with patch.object(cascade, "_is_circuit_open", return_value=False):
         with patch.object(cascade, "_call_with_retries", side_effect=_call):
-            result = await cascade.generate(prompt="hello", tier="fallback")
+            result = await cascade.generate(prompt="hello", tier="premium")
 
     assert result == "ok"
-    # 1ro el preferido (tier_fallback), 2do un GRATIS — no tier_premium.
-    assert attempted[0] == "tier_fallback"
-    assert attempted[1] == "tier_sonnet", f"orden real: {attempted}"
-    assert "tier_premium" not in attempted, f"no debia llegar al pago: {attempted}"
+    # 1ro el preferido (tier_premium), 2do DeepSeek — no un gratis.
+    assert attempted[0] == "tier_premium"
+    assert attempted[1] == "tier_fallback", f"orden real: {attempted}"
+    assert "cloudflare" not in attempted, f"no debia llegar a cloudflare: {attempted}"
+
+
+@pytest.mark.asyncio
+async def test_fallback_prefers_free_over_other_paid(cascade):
+    """Control: dentro del fallback, gratis van antes que otros pagos
+    (Anthropic premium/opus) — solo DeepSeek salta la fila de los gratis."""
+    _add_provider(cascade, "tier_premium", paid=True)
+    _add_provider(cascade, "tier_premium_opus", paid=True)
+    _add_provider(cascade, "tier_sonnet")
+    _add_provider(cascade, "openrouter")
+    _add_provider(cascade, "tier_flash", paid=True)
+
+    attempted = []
+
+    async def _call(provider, messages, max_tokens, temperature):
+        attempted.append(provider.name)
+        raise RuntimeError("fail all")
+
+    with patch.object(cascade, "_is_circuit_open", return_value=False):
+        with patch.object(cascade, "_call_with_retries", side_effect=_call):
+            with pytest.raises(RuntimeError, match="Todos los proveedores fallaron"):
+                await cascade.generate(prompt="hello", tier="sonnet")
+
+    # tier_sonnet es el preferido; DeepSeek primero, luego gratis, luego opus/premium
+    assert attempted[0] == "tier_sonnet"
+    assert attempted[1] == "tier_flash", f"orden real: {attempted}"
+    assert attempted.index("openrouter") < attempted.index("tier_premium_opus"), f"orden real: {attempted}"
 
 
 @pytest.mark.asyncio
@@ -343,7 +374,7 @@ async def test_success_logs_debug_telemetry(cascade, caplog):
     assert telemetry_line is not None, f"No DEBUG telemetry found in: {debug_msgs}"
     assert "latency=" in telemetry_line
     assert "success=true" in telemetry_line
-    assert "caller=unknown" in telemetry_line
+    assert "caller=test_model_cascade" in telemetry_line  # caller auto-inferido
 
 
 @pytest.mark.asyncio
@@ -387,7 +418,7 @@ async def test_telemetry_jsonl_written_with_correct_fields(cascade):
 
     assert len(records) == 1
     rec = records[0]
-    assert rec["caller"] == "unknown"
+    assert rec["caller"] == "test_model_cascade"  # caller auto-inferido del stack
     assert rec["provider"] == "test_prov"
     assert rec["tier"] == "default"
     assert isinstance(rec["latency_ms"], int)
@@ -511,8 +542,8 @@ async def test_health_rolling_window_drops_oldest(cascade):
 
 
 @pytest.mark.asyncio
-async def test_caller_field_defaults_to_unknown(cascade):
-    """h. caller defaults to 'unknown' when not passed."""
+async def test_caller_inferred_when_not_passed(cascade):
+    """caller se INFIERE del stack frame cuando no se pasa (antes 'unknown' fijo)."""
     records = []
 
     def capture_record(record):
@@ -528,7 +559,8 @@ async def test_caller_field_defaults_to_unknown(cascade):
         await cascade.generate(prompt="hello")
 
     assert len(records) == 1
-    assert records[0]["caller"] == "unknown"
+    # El stack real llega hasta este test → el caller inferido es el módulo del test
+    assert records[0]["caller"] == "test_model_cascade", f"caller real: {records[0]['caller']}"
 
 
 # ── Retry backoff ──────────────────────────────────────────────────

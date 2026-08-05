@@ -425,15 +425,20 @@ class ModelCascade:
             p for p in self.providers
             if p.name != provider_name and not p.explicit_only
         ]
-        # Gratis antes que pago en el fallback automatico (22/7/2026): si el
-        # tier pedido falla (p.ej. tier_fallback/DeepSeek sin credito), se
-        # prueban los proveedores gratis (Gemini/OpenRouter/Cloudflare/Cerebras)
-        # antes de degradar a uno pago (Anthropic). Orden relativo dentro de
-        # cada grupo se preserva (orden de registro).
-        fallback_pool = (
-            [p for p in fallback_pool if not p.paid]
-            + [p for p in fallback_pool if p.paid]
-        )
+        # Prioridad de fallback (04/08/2026): DeepSeek primero, luego gratis,
+        # luego otros pagos. Antes (22/7) "gratis antes que pago" porque DeepSeek
+        # no tenía crédito; con crédito activo DeepSeek (V4 Pro/Flash) tiene mejor
+        # calidad que los gratis (llama-3.3-70b de Cloudflare/Cerebras) por costo
+        # mínimo, y así el tiering de Fase A (hero Opus + volumen DeepSeek) no se
+        # degrada a Cloudflare en cada fallo de Anthropic. Orden estable dentro
+        # de cada grupo (orden de registro).
+        def _fallback_priority(p: ProviderConfig) -> int:
+            if p.name in ("tier_fallback", "tier_flash"):
+                return 0  # DeepSeek: pago barato con crédito activo, calidad superior
+            if not p.paid:
+                return 1  # gratis (Gemini/OpenRouter/Cloudflare/Cerebras)
+            return 2      # otros pagos (Anthropic premium/opus)
+        fallback_pool = sorted(fallback_pool, key=_fallback_priority)
         if preferred:
             ordered_providers = [preferred] + fallback_pool
         else:
@@ -1229,17 +1234,25 @@ class ModelCascade:
 
         Fallback ante llamadas que no pasan caller=: usa el archivo del
         llamador (ej. 'phases/phase_b/orchestrator.py' -> 'phase_b.orchestrator')
-        para el dashboard de gasto por tarea."""
+        para el dashboard de gasto por tarea.
+
+        OJO: usa walk manual del stack con tope de profundidad — la variante
+        iter(lambda: frame.f_back, None) quedaba en LOOP INFINITO (la lambda
+        captura `frame` una vez y nunca avanza), congelando cualquier llamada
+        sin caller= explícito."""
         try:
             import inspect
             frame = inspect.currentframe()
-            for f in iter(lambda: frame.f_back, None):
-                mod = f.f_globals.get("__name__", "")
+            depth = 0
+            while frame is not None and depth < 30:
+                mod = frame.f_globals.get("__name__", "")
                 if mod and not mod.startswith("services.model_cascade") and mod != "__main__":
                     parts = [p for p in mod.split(".") if p]
                     if len(parts) >= 2:
                         return ".".join(parts[-2:])
                     return mod
+                frame = frame.f_back
+                depth += 1
         except Exception:
             pass
         return "unknown"
