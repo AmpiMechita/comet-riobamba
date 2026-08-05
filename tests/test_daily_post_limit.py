@@ -362,7 +362,11 @@ async def test_phase_a_internal_gate_allows_when_under_limit():
             pac._TOPIC_HISTORY_FILE = _orig_th
             Path("data/test_topic_history_tmp.json").unlink(missing_ok=True)
 
-    assert "skipped" not in result, f"No debería saltar, resultado={result}"
+    # El gate interno diario NO debe bloquear (bajo el limite): el resultado
+    # puede etiquetar generation_failed/pacing (telemetria honesta del porque
+    # no se publico) pero nunca "daily_limit_reached" ni "weekly_limit_reached".
+    assert result.get("skipped") != "daily_limit_reached", f"Gate diario no debio bloquear: {result}"
+    assert result.get("skipped") != "weekly_limit_reached", f"Gate semanal no debio bloquear: {result}"
 
 
 # ── Tests: gate semanal (max_posts_per_week de editorial_policy) ──

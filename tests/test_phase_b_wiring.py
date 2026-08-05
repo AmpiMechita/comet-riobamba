@@ -488,7 +488,7 @@ def test_shadow_log_written_when_guardrail_hits(tmp_path):
     score_before, reasons_before = phase_b._score_reply_draft(reply, source)
     score, reasons = phase_b._score_reply_draft(
         reply, source,
-        log_context={"post_id": "p-test", "comment_id": "c-test"},
+        log_context={"post_id": "11111111-2222-4333-8444-555555555555", "comment_id": "c-1"},
     )
     assert score == score_before
     assert reasons == reasons_before
@@ -497,8 +497,8 @@ def test_shadow_log_written_when_guardrail_hits(tmp_path):
     lines = phase_b._shadow_quality_log_path.read_text("utf-8").splitlines()
     assert len(lines) >= 1
     record = _j.loads(lines[0])
-    assert record["post_id"] == "p-test"
-    assert record["comment_id"] == "c-test"
+    assert record["post_id"] == "11111111-2222-4333-8444-555555555555"
+    assert record["comment_id"] == "c-1"
     assert len(record["checks"]) >= 1
 
 

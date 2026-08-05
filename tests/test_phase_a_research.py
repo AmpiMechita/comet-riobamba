@@ -542,6 +542,7 @@ async def test_retry_sends_correction_in_second_attempt(monkeypatch, tmp_path):
         patch("services.persistence.load_agent_state", return_value={}),
         patch("services.own_post_store.count_posts_since", return_value=0),
         patch("phases.phase_a_content.choose_topic", return_value=("test topic", "agenda")),
+        patch("phases.phase_a_content.load_topic_matrix", return_value=None),
         patch("phases.phase_a_content._is_allowed_topic", return_value=True),
         patch("phases.phase_a_content._is_topic_recently_used", return_value=False),
         patch("phases.phase_a_content.build_prompts", return_value=("sys", "user prompt base")),

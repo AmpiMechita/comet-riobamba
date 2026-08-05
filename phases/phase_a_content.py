@@ -1398,6 +1398,26 @@ class PhaseAContentGeneration:
             pass
 
         published_count = len([p for p in posts if p.get("published")])
+        if published_count == 0 and posts:
+            # Etiqueta honesta del por que no se publico, para telemetria:
+            # antes el retorno no incluia "skipped" y core.agent.py emitia
+            # "no_content" incluso cuando el motivo era pacing o fallo de
+            # generacion (etiqueta que ocultaba la causa real).
+            errors = {p.get("error", "unknown") for p in posts}
+            if "pacing_blocked" in errors:
+                skip_reason = "pacing"
+            elif errors & {"model_error", "empty_output"}:
+                skip_reason = "generation_failed"
+            elif errors & {"low_quality:below_min_quality_score"} or any(
+                str(e).startswith("low_quality:") for e in errors
+            ):
+                skip_reason = "low_quality"
+            elif errors:
+                skip_reason = "generation_failed"
+            else:
+                skip_reason = "no_content"
+            return {"posts_published": 0, "drafts_generated": len(posts), "posts": posts,
+                    "success": False, "skipped": skip_reason}
         return {"posts_published": published_count, "drafts_generated": len(posts), "posts": posts, "success": published_count > 0}
 
 

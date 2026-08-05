@@ -1039,23 +1039,31 @@ class PhaseB:
                 if not self._reply_mentions_source_terms(reply_text, source_text):
                     shadow_hits.append("weak_source_anchor")
                 if shadow_hits:
-                    record = {
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "checks": shadow_hits,
-                        "reply_preview": reply_text[:300],
-                        "source_preview": source_text[:300],
-                    }
-                    if log_context.get("post_id"):
-                        record["post_id"] = str(log_context["post_id"])
-                    if log_context.get("comment_id"):
-                        record["comment_id"] = str(log_context["comment_id"])
-                    try:
-                        _sh = getattr(self, "_shadow_quality_log_path", None) or Path("data") / "shadow_quality_checks.jsonl"
-                        _sh.parent.mkdir(parents=True, exist_ok=True)
-                        with open(str(_sh), "a", encoding="utf-8") as _fh:
-                            _fh.write(json.dumps(record, ensure_ascii=False) + "\n")
-                    except Exception:
-                        pass  # never fail the real flow
+                    # No polucionar el shadow log con entradas de dry-run/test
+                    # (post-1, p-test, o IDs que parecen simulados) — las 1584
+                    # entradas de prueba enmascaraban las 76 reales.
+                    _pid = str(log_context.get("post_id") or "")
+                    if not _pid or _pid.startswith("p-test") or _pid.startswith("post-1") \
+                            or "test" in _pid.lower() or _pid.endswith("-simulated"):
+                        pass  # skip synthetic records
+                    else:
+                        record = {
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "checks": shadow_hits,
+                            "reply_preview": reply_text[:300],
+                            "source_preview": source_text[:300],
+                        }
+                        if log_context.get("post_id"):
+                            record["post_id"] = str(log_context["post_id"])
+                        if log_context.get("comment_id"):
+                            record["comment_id"] = str(log_context["comment_id"])
+                        try:
+                            _sh = getattr(self, "_shadow_quality_log_path", None) or Path("data") / "shadow_quality_checks.jsonl"
+                            _sh.parent.mkdir(parents=True, exist_ok=True)
+                            with open(str(_sh), "a", encoding="utf-8") as _fh:
+                                _fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+                        except Exception:
+                            pass  # never fail the real flow
             except Exception:
                 pass
 

@@ -675,6 +675,13 @@ class PhaseCAnalytics:
         # diarios la bloquearia la mayoria de los dias. ──
         await self._maybe_synthesize_ideas()
 
+        # ── Auto-Evolucion: propuestas de auto-mejora con throttle propio
+        # (cada 10 ciclos ≈ 50 min), ANTES del gate de analytics de 24h — si
+        # quedara dentro, solo correria ~1x/dia y el pipeline de auto-aplicacion
+        # quedaba inactivo (proposal_apply_log.jsonl nunca se creaba). El
+        # cooldown de 24h por parametro evita oscilaciones. ──
+        await self._maybe_generate_proposal_guarded()
+
         # ── Post-mortems reales del proyecto (estrategia 4.3) como topics.
         # Barato e idempotente (add_topic dedup por nombre) — se registran una
         # vez y la agenda los alimenta como topics anclados a evidencia
@@ -909,10 +916,22 @@ class PhaseCAnalytics:
 
         logger.info(f"Phase C complete: {len(insights)} insights, {results['optimizations_applied']} optimizations")
 
-        # ── Auto-Evolution: generate a self-improvement proposal ──
-        await self._maybe_generate_proposal(results, metrics)
-
         return results
+
+    async def _maybe_generate_proposal_guarded(self) -> None:
+        """Throttle propio (cada 10 ciclos) para la generacion de propuestas.
+
+        Corre ANTES del gate de analytics de 24h, igual que _maybe_synthesize_ideas:
+        la auto-aplicacion de config era el unico pipeline que quedaba dominado
+        por ese gate, asi que proposal_apply_log.jsonl nunca se creaba."""
+        try:
+            cycle = self.deps.cycle_count
+            if cycle % 10 != 0:
+                logger.debug("Phase C: proposal generation skipped (cycle=%d, next at multiple of 10)", cycle)
+                return
+            await self._maybe_generate_proposal({}, {})
+        except Exception as e:
+            logger.warning("Phase C: proposal generation throttled run failed: %s", e)
 
     async def _maybe_synthesize_ideas(self) -> None:
         """Every 10 cycles, read claims and synthesize project ideas."""
