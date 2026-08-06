@@ -50,7 +50,7 @@ def _estimate_cost_usd(provider_name: str, input_tokens: int, output_tokens: int
     in_price, out_price = prices
     return (input_tokens * in_price + output_tokens * out_price) / 1_000_000
 _ANTHROPIC_SPEND_FILE = os.path.join("data", "anthropic_spend_tracker.json")
-_ANTHROPIC_SPEND_LIMIT_DEFAULT = 5.00
+_ANTHROPIC_SPEND_LIMIT_DEFAULT = 2.00
 
 # ── Degraded-mode re-alert cooldown ──────────────────────────────
 # When the paid content cascade (tier_premium → tier_fallback) is fully down,
@@ -416,6 +416,19 @@ class ModelCascade:
         caller = kwargs.pop("caller", "unknown")
         if caller == "unknown":
             caller = self._infer_caller()
+
+        # FLASH-ONLY kill-switch (06/08/2026): con AGENT_FLASH_ONLY=1 toda
+        # generación pagada se fuerza a DeepSeek V4 Flash. Protege el saldo
+        # Anthropic (reservado para el asesor). Reversible: quitar el env.
+        if os.getenv("AGENT_FLASH_ONLY", "0") == "1" and tier in (
+            "premium", "premium_opus", "opus", "sonnet", "fallback", "haiku"
+        ):
+            if tier != "flash":
+                logger.info(
+                    "FLASH-ONLY: tier '%s' -> 'flash' (Anthropic/DeepSeek-Pro "
+                    "deshabilitados por presupuesto)", tier)
+            tier = "flash"
+
         provider_name = self.TIER_MAPPING.get(tier, "ollama_local")
         preferred = next((p for p in self.providers if p.name == provider_name and p.enabled), None)
         # explicit_only providers (e.g. cerebras for CAPTCHA) are excluded from the
@@ -896,7 +909,7 @@ class ModelCascade:
 
         A hard spend guard estimates cumulative cost (input/output tokens priced
         for claude-sonnet-5) persisted to data/anthropic_spend_tracker.json. Once
-        ANTHROPIC_SPEND_LIMIT_USD (default 4.50) is exceeded, this raises a
+        ANTHROPIC_SPEND_LIMIT_USD (default 2.00) is exceeded, this raises a
         ret/non-retryable RuntimeError so the cascade falls back to the next
         provider instead of crashing the cycle.
         """

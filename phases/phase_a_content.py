@@ -673,6 +673,9 @@ def _should_use_opus_hero() -> bool:
 
     Estado en data/hero_state.json: {"date":"YYYY-MM-DD","opus_done":bool}.
     Si el date != hoy (o el archivo falta/ilegible) -> opus_done=False (reset diario)."""
+    import os
+    if os.getenv("AGENT_FLASH_ONLY", "0") == "1":
+        return False
     try:
         data = json.loads(_HERO_STATE_FILE.read_text(encoding="utf-8"))
     except (FileNotFoundError, ValueError, OSError):
