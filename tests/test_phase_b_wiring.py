@@ -467,7 +467,8 @@ def test_reply_quality_score_penalizes_repeated_theme():
 
 def test_shadow_log_written_when_guardrail_hits(tmp_path):
     """_score_reply_draft with log_context writes shadow_quality_checks.jsonl
-    when a guardrail check fires, and the actual score is unchanged (50)."""
+    when a guardrail check fires; active penalties (ungrounded numbers) reduce
+    the score, but the shadow log is written regardless."""
     from phases.deps import PhaseBDeps
     from phases.phase_b import PhaseB
     import json as _j
@@ -492,7 +493,12 @@ def test_shadow_log_written_when_guardrail_hits(tmp_path):
     )
     assert score == score_before
     assert reasons == reasons_before
-    assert score == 50
+    # "a practical guardrail is to keep" → guardrail_template (-10) → base 50 = 40.
+    # "500 ms" NO dispara ungrounded_numeric_specificity porque el reply incluye
+    # "p99" (token de grounding): el número queda fundamentado por diseño.
+    assert score == 40
+    assert "templated_phrase" in reasons
+    assert "ungrounded_numeric_specificity" not in reasons
     assert phase_b._shadow_quality_log_path.exists(), "shadow log must exist"
     lines = phase_b._shadow_quality_log_path.read_text("utf-8").splitlines()
     assert len(lines) >= 1
@@ -500,6 +506,26 @@ def test_shadow_log_written_when_guardrail_hits(tmp_path):
     assert record["post_id"] == "11111111-2222-4333-8444-555555555555"
     assert record["comment_id"] == "c-1"
     assert len(record["checks"]) >= 1
+
+
+def test_ungrounded_numeric_penalty_applies():
+    """A reply with a bare number (no grounding token, source without metrics)
+    receives the ungrounded_numeric_specificity penalty (-30)."""
+    from phases.deps import PhaseBDeps
+    from phases.phase_b import PhaseB
+
+    deps = PhaseBDeps(
+        model_cascade=MagicMock(),
+        moltbook_client=MagicMock(),
+        behavior_cfg={"max_comments_per_post": 5, "max_comments_per_day": 10, "max_comment_replies_per_cycle": 3},
+        agent_name="test-agent",
+    )
+    phase_b = PhaseB(deps=deps)
+    source = "This post discusses deployment strategies for production systems."
+    reply = "A six-agent pipeline adds 200 ms of latency per hop in this design."
+    score, reasons = phase_b._score_reply_draft(reply, source)
+    assert "ungrounded_numeric_specificity" in reasons
+    assert score == 20  # 50 - 30
 
 
 def test_shadow_log_not_written_when_clean_reply(tmp_path):

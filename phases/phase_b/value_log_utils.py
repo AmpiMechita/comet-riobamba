@@ -35,7 +35,7 @@ async def _classify_and_log_value(
             post=post_text, comment=comment_text, reply=reply_text, follow_up=follow_up,
         )
         raw = await pb.llm.generate(
-            tier="premium",
+            tier="flash",
             prompt=user_prompt,
             system_prompt=(
                 "Always respond in English. This is an English-speaking platform.\n\n"

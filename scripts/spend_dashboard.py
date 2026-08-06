@@ -26,16 +26,20 @@ SPEND_TRACKER = BASE_DIR / "data" / "anthropic_spend_tracker.json"
 
 
 def _load_telemetry() -> list:
-    if not TELEMETRY.exists():
-        return []
+    """Load current + archived telemetry (the .archive holds entries rotated out
+    of the active file — ignoring it under-reports real spend by ~90%)."""
     entries = []
-    for line in TELEMETRY.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
+    files = [TELEMETRY, Path(str(TELEMETRY) + ".archive")]
+    for path in files:
+        if not path.exists():
             continue
-        try:
-            entries.append(json.loads(line))
-        except (json.JSONDecodeError, ValueError):
-            continue
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                entries.append(json.loads(line))
+            except (json.JSONDecodeError, ValueError):
+                continue
     return entries
 
 

@@ -1067,18 +1067,20 @@ class PhaseB:
             except Exception:
                 pass
 
-        # ── Penalties disabled for permissive test mode ──
-        # if self._reply_has_guardrail_template(reply_text):
-        #     score -= 0
-        #     reasons.append("templated_phrase")
+        # ── Penalties (v5.2): reactivadas tras calibración con shadow log.
+        #    ungrounded_numeric_specificity: números sin respaldo = deshonesto
+        #    (26/76 shadow hits reales). guardrail_template: plantillas trilladas
+        #    (2/76). weak_source_anchor se MANTIENE en shadow: el detector actual
+        #    tiene ~63% de falsas alarmas (el reply aporta terminología equivalente
+        #    pero distinta a la fuente, p.ej. "ambient authority" vs "permission
+        #    gap"); reactivarlo bloquearía ~70% de respuestas válidas.
+        if self._reply_has_ungrounded_numeric_specificity(reply_text, source_text):
+            score -= 30
+            reasons.append("ungrounded_numeric_specificity")
 
-        # if self._reply_has_ungrounded_numeric_specificity(reply_text, source_text):
-        #     score -= 0
-        #     reasons.append("ungrounded_numeric_specificity")
-
-        # if not self._reply_mentions_source_terms(reply_text, source_text):
-        #     score -= 0
-        #     reasons.append("weak_source_anchor")
+        if self._reply_has_guardrail_template(reply_text):
+            score -= 10
+            reasons.append("templated_phrase")
 
         fingerprint = self._reply_theme_fingerprint(reply_text, source_text)
         if fingerprint and fingerprint in self._replied_topic_fingerprints:
@@ -1218,7 +1220,7 @@ class PhaseB:
                 )
                 try:
                     new_reply = await self.llm.generate(
-                        tier="premium",
+                        tier="flash",
                         prompt=f"{stricter}\n\nPrevious reply:\n{reply_text}",
                         system_prompt=(
                             "You are a senior systems engineer. Do not repeat yourself. "
@@ -1938,7 +1940,7 @@ class PhaseB:
             # ── Step B: Generate reply ─────────────────────────────────────
             try:
                 reply = await self.llm.generate(
-                    tier="premium",
+                    tier="flash",
                     prompt=user_prompt,
                     system_prompt=system_prompt,
                     max_tokens=180,
@@ -2029,7 +2031,7 @@ class PhaseB:
                             system_prompt="You are a senior systems engineer. Be specific and concrete.",
                             max_tokens=1024,
                             temperature=0.7,
-                            tier="premium",
+                            tier="flash",
                             caller="phase_b_quality_retry",
                         )
                         if retry_text and retry_text.strip() and self._passes_quality_gate(retry_text.strip()):
@@ -2689,7 +2691,7 @@ class PhaseB:
             )
             try:
                 reply = await self.llm.generate(
-                    tier="premium",
+                    tier="flash",
                     prompt=user_prompt,
                     system_prompt=system_prompt,
                     max_tokens=180,
