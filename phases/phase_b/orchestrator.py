@@ -155,6 +155,10 @@ from utils.phase_utils import phase_error_boundary, validate_phase_deps
 logger = logging.getLogger("phases.phase_b")
 
 
+def _quality_bestof_enabled() -> bool:
+    """A/B flag AGENT_QUALITY_BESTOF=1 activa best-of-2 selectivo en replies."""
+    return os.getenv("AGENT_QUALITY_BESTOF", "0") == "1"
+
 
 _EIN_TECH_KEYWORDS = {
     "solid-state-battery": ["solid state", "solid-state", "battery", "batería", "ssb"],
@@ -1481,7 +1485,9 @@ class PhaseB:
                 })
 
                 try:
-                    reply_text = await self._generate_reply_for_post(post)
+                    bestof = (_quality_bestof_enabled()
+                              and post_decision.score >= POLICY.min_comment_relevance_score + 20)
+                    reply_text = await self._generate_reply_for_post(post, bestof=bestof)
                 except Exception as e:
                     logger.warning(f"Phase B: error generando respuesta: {e}")
                     continue
@@ -1777,7 +1783,49 @@ class PhaseB:
             parent_id = cmap[parent_id].get("parent_id")
         return depth
 
-    async def _generate_reply_for_post(self, post: Dict[str, Any]) -> str:
+    async def _generate_reply_bestof(self, user_prompt: str, system_prompt: str,
+                                     title: str, body: str) -> str:
+        """Best-of-2: genera 2 borradores y conserva el de mayor _score_reply_draft.
+        Degradación elegante: si el 2º falla o sale vacío se usa el 1º; nunca
+        devuelve un resultado peor/inválido que un reply único."""
+        source_text = f"{title}\n{body}".strip()
+        candidate_a = ""
+        candidate_b = ""
+        try:
+            raw_a = await self.llm.generate(
+                tier="flash",
+                prompt=user_prompt,
+                system_prompt=system_prompt,
+                max_tokens=180,
+                temperature=0.7,
+            )
+            candidate_a = (raw_a or "").strip()
+        except Exception as e:
+            logger.warning("Phase B: best-of-2 first candidate failed: %s", e)
+        try:
+            raw_b = await self.llm.generate(
+                tier="flash",
+                prompt=user_prompt,
+                system_prompt=system_prompt,
+                max_tokens=180,
+                temperature=0.8,
+            )
+            candidate_b = (raw_b or "").strip()
+        except Exception as e:
+            logger.warning("Phase B: best-of-2 second candidate failed: %s", e)
+
+        if not candidate_a:
+            return candidate_b
+        if not candidate_b:
+            return candidate_a
+        score_a, _ = self._score_reply_draft(candidate_a, source_text)
+        score_b, _ = self._score_reply_draft(candidate_b, source_text)
+        chosen = candidate_a if score_a >= score_b else candidate_b
+        logger.info("Phase B: best-of-2 reply — A=%d B=%d chosen=%s",
+                    score_a, score_b, "A" if chosen == candidate_a else "B")
+        return chosen
+
+    async def _generate_reply_for_post(self, post: Dict[str, Any], bestof: bool = False) -> str:
         with Span("llm_generation", type="feed") as span:
             title = str(post.get("title") or "").strip()
             body = str(post.get("content") or post.get("body") or "").strip()
@@ -1938,15 +1986,24 @@ class PhaseB:
                 system_prompt = system_prompt + constraint
 
             # ── Step B: Generate reply ─────────────────────────────────────
+            # Best-of-2 selectivo (solo posts de alta relevancia + flag activo):
+            # genera 2 borradores y conserva el de mayor _score_reply_draft.
+            # Degradación elegante: si el 2º falla/vacío se usa el 1º; con flag
+            # OFF o baja relevancia el comportamiento (1 llamada) es idéntico.
             try:
-                reply = await self.llm.generate(
-                    tier="flash",
-                    prompt=user_prompt,
-                    system_prompt=system_prompt,
-                    max_tokens=180,
-                    temperature=0.7,
-                )
-                reply = (reply or "").strip()
+                if bestof:
+                    reply = await self._generate_reply_bestof(
+                        user_prompt, system_prompt, title, body
+                    )
+                else:
+                    reply = await self.llm.generate(
+                        tier="flash",
+                        prompt=user_prompt,
+                        system_prompt=system_prompt,
+                        max_tokens=180,
+                        temperature=0.7,
+                    )
+                    reply = (reply or "").strip()
                 span.set("length", len(reply) if reply else 0)
 
                 # ── Historical examples gate: block if repeated example ──

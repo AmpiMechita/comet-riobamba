@@ -710,6 +710,117 @@ async def call_model(deps: PhaseADeps, system_prompt: str, user_prompt: str,
         )
     raise RuntimeError("ModelCascade no tiene metodo generate compatible")
 
+
+def _quality_bestof_enabled() -> bool:
+    """A/B flag AGENT_QUALITY_BESTOF=1 activa best-of-N + auto-crítica en Phase A."""
+    return os.getenv("AGENT_QUALITY_BESTOF", "0") == "1"
+
+
+def _quality_bestof_n() -> int:
+    try:
+        n = int(os.getenv("QUALITY_BESTOF_N", "3"))
+    except (TypeError, ValueError):
+        n = 3
+    return max(1, min(n, 5))
+
+
+def _parse_candidate_index(raw: Optional[str], count: int) -> Optional[int]:
+    """Extrae el primer entero 1..count del output del juez. None si no hay."""
+    if not raw:
+        return None
+    m = re.search(r"\b([1-9][0-9]*)\b", raw)
+    if not m:
+        return None
+    idx = int(m.group(1))
+    if 1 <= idx <= count:
+        return idx
+    return None
+
+
+async def _pick_best_post(deps: PhaseADeps, candidates: List[Dict[str, Any]],
+                          policy: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Juez flash sobre N candidatos válidos. Nunca devuelve peor que hoy:
+    si el juez falla o responde basura -> desempate por dual_score; si eso
+    también falla -> primer candidato."""
+    if len(candidates) <= 1:
+        return candidates[0]
+    mission = EDITORIAL_CONFIG["mission"]
+    principles = "\n".join(f"- {p}" for p in EDITORIAL_CONFIG["core_principles"])
+    numbered = "\n\n".join(
+        f"CANDIDATE {i}:\n{c['body']}" for i, c in enumerate(candidates, 1)
+    )
+    judge_system = (
+        "You are the editorial judge for a production reliability publication.\n"
+        f"Mission: {mission}\n\nCore principles:\n{principles}\n\n"
+        "Pick the single best post draft. Reply with ONLY the candidate number (1, 2, ...)."
+    )
+    judge_user = f"Choose the best of these posts:\n\n{numbered}\n\nBest candidate number:"
+    try:
+        raw = await call_model(deps, judge_system, judge_user, tier="flash")
+        idx = _parse_candidate_index(raw, len(candidates))
+    except Exception as e:
+        logger.warning("Phase A: best-of-N judge error (%s) -> fallback dual_score", e)
+        idx = None
+    if idx is not None:
+        logger.info("Phase A: best-of-N judge picked candidate %s/%s", idx, len(candidates))
+        return candidates[idx - 1]
+    best = max(candidates, key=lambda c: compute_dual_score(c["body"])["research_value_score"])
+    logger.warning("Phase A: best-of-N judge unusable -> dual_score tiebreak")
+    return best
+
+
+async def _critique_pass(deps: PhaseADeps, post: Dict[str, Any],
+                         policy: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Auto-crítica flash contra mission/core_principles. Degradación elegante:
+    si el rewrite es inválido, low-quality, repetido o PEOR (dual_score menor)
+    -> se descarta y se mantiene la versión pre-crítica."""
+    mission = EDITORIAL_CONFIG["mission"]
+    principles = "\n".join(f"- {p}" for p in EDITORIAL_CONFIG["core_principles"])
+    sys_prompt = (
+        "You are a sharp editorial critic for a production reliability publication.\n"
+        f"Mission: {mission}\n\nCore principles:\n{principles}\n\n"
+        "Critique the draft below against these principles and return an IMPROVED rewrite "
+        "in the exact same format: TITLE line, then body. Keep the arXiv citation if present."
+    )
+    user_prompt = f"TITLE: {post.get('title', '')}\n\n{post.get('body', '')}"
+    try:
+        raw = await call_model(deps, sys_prompt, user_prompt, tier="flash")
+        title, body = extract_title_and_body(raw)
+        title = _truncate_title(_normalize_moltbook_title(title), max_chars=100)
+        body = _normalize_moltbook_body(body)
+        if not body:
+            return post
+        new_text = _truncate_to_limit(body, EDITORIAL_CONFIG["max_length_chars"])
+        required_citation = _extract_arxiv_id(post.get("metadata", {}).get("topic", ""))
+        is_valid, reason = validate_post_text(new_text, required_citation=required_citation)
+        if not is_valid:
+            logger.info("Phase A: auto-critique invalid (%s) -> keeping pre-critique", reason)
+            return post
+        low_quality, lq_reason = _looks_low_quality(new_text, policy)
+        if low_quality:
+            logger.info("Phase A: auto-critique low_quality (%s) -> keeping pre-critique", lq_reason)
+            return post
+        if is_similar_to_recent(new_text):
+            logger.info("Phase A: auto-critique similar to recent -> keeping pre-critique")
+            return post
+        old_score = compute_dual_score(post["body"])["research_value_score"]
+        new_score = compute_dual_score(new_text)["research_value_score"]
+        if new_score < old_score:
+            logger.info("Phase A: auto-critique worse (%.2f < %.2f) -> keeping pre-critique",
+                        new_score, old_score)
+            return post
+        new_post = dict(post)
+        new_post["title"] = title
+        new_post["body"] = new_text
+        new_post["metadata"] = dict(post.get("metadata", {}))
+        new_post["metadata"]["auto_critiqued"] = True
+        logger.info("Phase A: auto-critique applied")
+        return new_post
+    except Exception as e:
+        logger.warning("Phase A: auto-critique failed (%s) -> keeping pre-critique", e)
+        return post
+
+
 SUBSTANTIVE_MIN_CHARS = 400
 _INTERROGATIVE_MARKERS = (
     "what", "how", "why", "when", "which", "where", "who", "do you", "does your",
@@ -1219,6 +1330,14 @@ class PhaseAContentGeneration:
             # actualiza para que el proximo intento sepa QUE corregir en vez
             # de repetir el mismo prompt a ciegas (cada retry paga una llamada).
             retry_correction = ""
+            # ── Best-of-N (A/B, flag AGENT_QUALITY_BESTOF=1) ────────────────
+            # Genera hasta N candidatos VALIDOS (misma validación que hoy) y
+            # un juez flash elige el mejor. Degradación elegante: con flag OFF
+            # (o sin candidatos extra) el comportamiento y el nº de llamadas
+            # son idénticos a los actuales. Nunca publica algo peor que hoy.
+            bestof_enabled = _quality_bestof_enabled()
+            bestof_n = _quality_bestof_n()
+            valid_candidates: List[Dict[str, Any]] = []
             # ── Enrutado hero/no-hero (tiering de generación) ──────────────
             # 1 post "hero" por día con Opus (calidad máxima); el resto con
             # DeepSeek V4-Flash (barato). Decisión UNA vez por post (no por retry).
@@ -1297,9 +1416,25 @@ class PhaseAContentGeneration:
                         generated_post = {"title": title, "body": post_text, "metadata": {"topic": topic, "validation_reason": low_quality_reason}, "attempts": attempt, "published": False, "error": f"low_quality:{low_quality_reason}"}
                     continue
                 _log_generation_attempt(topic, topic_source, attempt, max_attempts, "success")
-                generated_post = {"title": title, "body": post_text, "metadata": {"topic": topic, "generated_at": datetime.now(UTC).isoformat() + "Z", "attempts": attempt, "policy_tone": policy.get("style_policy", {}).get("tone", "natural_directo")}, "published": False}
-                break
-            
+                candidate_post = {"title": title, "body": post_text, "metadata": {"topic": topic, "generated_at": datetime.now(UTC).isoformat() + "Z", "attempts": attempt, "policy_tone": policy.get("style_policy", {}).get("tone", "natural_directo")}, "published": False}
+                if not bestof_enabled:
+                    generated_post = candidate_post
+                    break
+                # Best-of-N: acumular candidato válido y seguir generando hasta N.
+                valid_candidates.append(candidate_post)
+                retry_correction = ""  # candidatos independientes (sin corrección previa)
+                if len(valid_candidates) >= bestof_n:
+                    break
+
+            # ── Post-selección best-of-N + auto-crítica (solo con flag activo) ──
+            if bestof_enabled and valid_candidates:
+                if len(valid_candidates) == 1:
+                    generated_post = valid_candidates[0]
+                else:
+                    generated_post = await _pick_best_post(self.deps, valid_candidates, policy)
+                if generated_post and not generated_post.get("error"):
+                    generated_post = await _critique_pass(self.deps, generated_post, policy)
+
             if not generated_post or generated_post.get("error"):
                 logger.warning("Phase A: post descartado. %s", generated_post.get('error') if generated_post else 'Sin post')
                 if generated_post: posts.append(generated_post)
