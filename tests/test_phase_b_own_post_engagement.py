@@ -67,12 +67,14 @@ def _redirect_paths(tmp_path):
     import services.dedup_store as ds
     import services.research_agenda as ra
     import phases.phase_b as pb
+    import services.reply_cap as rcap
     orig_cs = cs.CONVERSATIONS_PATH
     orig_rep = pb._REPLIED_IDS_PATH
     orig_com = pb._COMMENTED_POSTS_PATH
     orig_agc = pb._AGENT_COMMENT_IDS_PATH
     orig_upv = pb._UPVOTED_POST_IDS_PATH
     orig_fol = pb._FOLLOWED_AGENTS_PATH
+    orig_rpp = rcap._REPLIES_PER_POST_PATH
     orig_dedup = ds.DedupStore._default_db_path
     orig_agenda = ra.AGENDA_PATH
     cs.CONVERSATIONS_PATH = tmp_path / "conversations.json"
@@ -81,6 +83,7 @@ def _redirect_paths(tmp_path):
     pb._AGENT_COMMENT_IDS_PATH = tmp_path / "agent_comment_ids.json"
     pb._UPVOTED_POST_IDS_PATH = tmp_path / "upvoted_post_ids.json"
     pb._FOLLOWED_AGENTS_PATH = tmp_path / "followed_agents.json"
+    rcap._REPLIES_PER_POST_PATH = tmp_path / "replies_per_post.json"
     ds.DedupStore._default_db_path = tmp_path / "comet_dedup.db"
     ra.AGENDA_PATH = tmp_path / "research_agenda.json"
 
@@ -99,6 +102,7 @@ def _redirect_paths(tmp_path):
     pb._AGENT_COMMENT_IDS_PATH = orig_agc
     pb._UPVOTED_POST_IDS_PATH = orig_upv
     pb._FOLLOWED_AGENTS_PATH = orig_fol
+    rcap._REPLIES_PER_POST_PATH = orig_rpp
     ds.DedupStore._default_db_path = orig_dedup
     ra.AGENDA_PATH = orig_agenda
 

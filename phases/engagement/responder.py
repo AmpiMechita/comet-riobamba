@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from core.write_policy import WriteRequest
+from services import reply_cap
 
 logger = logging.getLogger("phases.phase_c.responder")
 
@@ -235,10 +236,31 @@ Instrucciones:
 
     async def publish_reply(self, post_id: str, reply_text: str, post: Dict, comment: Dict) -> Optional[Dict]:
         try:
+            # ── Anti-dogpile: shared per-post cap (Phase B + Phase C budget) ──
+            if len(post_id) > 10:
+                current_count = reply_cap.get_replies_for_post(post_id)
+                cap = reply_cap.get_cap()
+                if current_count >= cap:
+                    logger.info(
+                        "anti-dogpile: skip post %s (%d/%d)",
+                        post_id, current_count, cap,
+                    )
+                    return None
+
             result = self.moltbook_client.create_comment(
                 post_id=post_id,
                 content=reply_text,
             )
+
+            # ── Anti-dogpile: count published replies (2xx, not spam) ──
+            status = result.get("status") if isinstance(result, dict) else None
+            if len(post_id) > 10 and isinstance(status, int) and 200 <= status < 300:
+                new_count = reply_cap.increment_replies_for_post(post_id)
+                logger.info(
+                    "anti-dogpile: post %s now at %d/%d",
+                    post_id, new_count, reply_cap.get_cap(),
+                )
+
             success = bool(result and result.success)
             error_text = None if not result else result.error
             reply_id = None if not result else (result.data.get("id") if isinstance(result.data, dict) else None)

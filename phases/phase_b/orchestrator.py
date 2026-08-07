@@ -136,6 +136,7 @@ from services.dual_scoring import log_dual_score
 from services.energy_knowledge_base import EnergyKnowledgeBase
 from services.moltbook_api_client import APIResponse
 from services.dedup_store import DedupStore
+from services import reply_cap
 from services.persistence import enqueue_outbox
 from services.claim_checker import extract_claim, check_claim
 from services.own_post_store import is_valid_post_id
@@ -433,6 +434,8 @@ _PERSONA_STYLE_PATH = BASE_DIR / "config/persona_style.json"
 _PERFORMANCE_SUMMARY_PATH = BASE_DIR / "data/performance_summary.json"
 _UPVOTED_POST_IDS_PATH = BASE_DIR / "data/upvoted_post_ids.json"
 _FOLLOWED_AGENTS_PATH = BASE_DIR / "data/followed_agents.json"
+# Re-export of the shared anti-dogpile counter path (authoritative: services/reply_cap)
+_REPLIES_PER_POST_PATH = reply_cap._REPLIES_PER_POST_PATH
 
 _FEED_STALL_STATE_FILE = Path("data/phase_b_feed_stall.json")
 
@@ -664,6 +667,9 @@ class PhaseB:
         self.max_feed_comments_per_post = behavior.get("max_feed_comments_per_post", 1)
         self.max_own_posts_per_cycle = behavior.get("phase_b_max_own_posts_per_cycle", 6)
         self.delay_between_comments = behavior.get("delay_between_comments", 8)
+        # ── Anti-dogpile: hard per-post reply cap (env-only, NOT auto-optimizable) ──
+        self.max_replies_per_post = reply_cap.get_cap()
+        self._replies_per_post_path: Path = reply_cap._REPLIES_PER_POST_PATH
         self._last_comment_per_thread: Dict[str, str] = {}
         self._dedup = DedupStore()
         self._dedup.cleanup(older_than_hours=24)
@@ -905,6 +911,17 @@ class PhaseB:
         existing = agent_comments.get(post_id, [])
         return len(existing)
 
+    def _get_replies_per_post(self, post_id: str) -> int:
+        """Monotonic anti-dogpile counter for a post (shared with Phase C)."""
+        path = getattr(self, "_replies_per_post_path", None) or reply_cap._REPLIES_PER_POST_PATH
+        return reply_cap.get_replies_for_post(post_id, path=path)
+
+    def _increment_replies_per_post(self, post_id: str) -> int:
+        """Increment and atomically persist the shared monotonic counter.
+        Never decremented — deleted comments still count toward the cap."""
+        path = getattr(self, "_replies_per_post_path", None) or reply_cap._REPLIES_PER_POST_PATH
+        return reply_cap.increment_replies_for_post(post_id, path=path)
+
     def _reconcile_deleted_agent_comments(self, post_id: str) -> None:
         """Prune recorded agent comment IDs that no longer exist on the platform
         (HTTP 404). Deleted comments would otherwise count toward the per-post
@@ -990,6 +1007,18 @@ class PhaseB:
                 )
                 return {"success": True, "id": "dry-run-simulated", "status": 201, "dry_run": True}
 
+            # ── Anti-dogpile: monotonic per-post cap (feed + own-post) ──
+            # Hard guardrail (env AGENT_MAX_REPLIES_PER_POST, default 3),
+            # independent of feed payload. Only for UUID post IDs.
+            if len(post_id) > 10:
+                current_count = self._get_replies_per_post(post_id)
+                if current_count >= self.max_replies_per_post:
+                    logger.info(
+                        "anti-dogpile: skip post %s (%d/%d)",
+                        post_id, current_count, self.max_replies_per_post,
+                    )
+                    return None
+
             # ── Mark historical examples as used before publishing ──
             mark_examples_used(content)
 
@@ -1015,6 +1044,14 @@ class PhaseB:
                     logger.warning("Phase B: Moltbook rechazó comentario (posible spam flag). status=%s error=%s. Deteniendo publicaciones en este ciclo.",
                                    status, error_text[:100])
                     return None
+
+                # ── Anti-dogpile: count published replies (2xx, not spam) ──
+                if len(post_id) > 10 and 200 <= status < 300:
+                    new_count = self._increment_replies_per_post(post_id)
+                    logger.info(
+                        "anti-dogpile: post %s now at %d/%d",
+                        post_id, new_count, self.max_replies_per_post,
+                    )
 
             return result
         except Exception as e:
