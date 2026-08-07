@@ -906,9 +906,8 @@ class COMETRiobambaAgent:
             if identity_path.exists():
                 identity = json.loads(identity_path.read_text(encoding="utf-8-sig"))
                 bio = identity.get("bio", "")
-                tagline = identity.get("tagline", "")
                 if bio:
-                    self.moltbook_api_client.update_agent_profile(bio=bio, tagline=tagline)
+                    self.moltbook_api_client.update_agent_profile(bio=bio)
         except Exception as e:
             logger.warning("⚠ Moltbook profile update failed on startup: %s", e)
 

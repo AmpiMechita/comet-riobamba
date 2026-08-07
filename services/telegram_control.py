@@ -192,7 +192,7 @@ def check_recent_quality_issues(window_minutes: int = 30) -> Optional[str]:
                     ts = datetime.fromisoformat(entry["timestamp"])
                     if ts < cutoff:
                         continue
-                    if entry.get("outcome") not in ("success", "off_niche"):
+                    if entry.get("outcome") not in ("success", "off_niche", "success_arxiv_injected"):
                         rejected_count += 1
                 except Exception:
                     continue

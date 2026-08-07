@@ -1373,29 +1373,30 @@ class PhaseAContentGeneration:
                 post_text = _truncate_to_limit(body, EDITORIAL_CONFIG["max_length_chars"])
                 required_citation = _extract_arxiv_id(topic)
                 is_valid, reason = validate_post_text(post_text, required_citation=required_citation)
+                if not is_valid and reason == "missing_arxiv_citation" and required_citation:
+                    # Tema anclado a arXiv: la cita faltante NO rechaza ni consume
+                    # reintentos (la cita se valida al final, asi que el candidato
+                    # ya paso todos los demas gates). Se inyecta la cita verificable
+                    # de forma deterministica y se acepta YA en el primer intento:
+                    # no se desperdician generaciones ni candidatos best-of-N.
+                    paper_title, _ = _paper_title_and_arxiv_id(topic)
+                    src_label = paper_title or topic
+                    source_line = f"Source: {src_label} (arXiv:{required_citation})"
+                    room = EDITORIAL_CONFIG["max_length_chars"] - len(source_line) - 2
+                    injected = (_truncate_to_limit(post_text, room) + "\n\n" + source_line).strip()
+                    injected_ok, _ = validate_post_text(injected, required_citation=required_citation)
+                    if injected_ok:
+                        _log_generation_attempt(topic, topic_source, attempt, max_attempts, "success_arxiv_injected")
+                        post_text = injected
+                        is_valid, reason = True, ""
+                    # Si la inyeccion no valida (body truncado demasiado corto),
+                    # cae al manejo generico de rechazo/reintento.
                 if not is_valid:
                     logger.warning("Phase A: contenido invalido (reason=%s), reintentar...", reason)
                     _log_generation_attempt(topic, topic_source, attempt, max_attempts, f"validation_failed:{reason}")
                     _log_rejected_body(topic, topic_source, attempt, f"validation_failed:{reason}", title, post_text)
                     retry_correction = _build_retry_correction(f"validation_failed:{reason}")
                     if attempt >= max_attempts:
-                        # Fallback de cita: el modelo no obedecio en N intentos.
-                        # En vez de descartar el post anclado, inyectamos la cita
-                        # verificable al final del body (el post ES sobre ese paper).
-                        if reason == "missing_arxiv_citation" and required_citation:
-                            paper_title, _ = _paper_title_and_arxiv_id(topic)
-                            src_label = paper_title or topic
-                            source_line = f"Source: {src_label} (arXiv:{required_citation})"
-                            room = EDITORIAL_CONFIG["max_length_chars"] - len(source_line) - 2
-                            base = _truncate_to_limit(post_text, room)
-                            injected = (base + "\n\n" + source_line).strip()
-                            injected_ok, injected_reason = validate_post_text(
-                                injected, required_citation=required_citation
-                            )
-                            if injected_ok:
-                                _log_generation_attempt(topic, topic_source, attempt, max_attempts, "success_arxiv_injected")
-                                generated_post = {"title": title, "body": injected, "metadata": {"topic": topic, "generated_at": datetime.now(UTC).isoformat() + "Z", "attempts": attempt, "policy_tone": policy.get("style_policy", {}).get("tone", "natural_directo")}, "published": False}
-                                break
                         generated_post = {"title": title, "body": post_text, "metadata": {"topic": topic, "validation_reason": reason}, "attempts": attempt, "published": False, "error": f"validation_failed:{reason}"}
                     continue
                 if is_similar_to_recent(post_text):

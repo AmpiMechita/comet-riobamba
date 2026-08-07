@@ -694,3 +694,74 @@ class TestArxivCitation:
         assert draft.get("error") is None
         assert "Source: The Shared Discovery Paradox (arXiv:2607.18045v1)" in draft["body"]
         assert "missing_arxiv_citation" not in str(draft.get("metadata", {}))
+
+    @pytest.mark.asyncio
+    async def test_arxiv_citation_injected_on_first_attempt_no_rejection(self, monkeypatch, tmp_path):
+        """Candidato valido sin cita + tema con arXiv id → se ACEPTA con la cita
+        inyectada en el PRIMER intento: una sola llamada al modelo (no reintenta),
+        no se registra rechazo (ni validation_failed ni rejected_posts)."""
+        from phases.phase_a_content import PhaseAContentGeneration
+        from phases.deps import PhaseADeps
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from datetime import datetime
+
+        attempts_log = tmp_path / "generation_attempts.jsonl"
+        monkeypatch.setattr("phases.phase_a_content._GENERATION_ATTEMPTS_LOG", attempts_log)
+        rejected_log = tmp_path / "rejected_posts.jsonl"
+        monkeypatch.setattr("phases.phase_a_content._REJECTED_POSTS_LOG", rejected_log)
+
+        deps = PhaseADeps(
+            model_cascade=AsyncMock(),
+            moltbook_client=MagicMock(),
+            behavior_cfg={"max_posts_per_day": 5},
+            posts_today=0,
+            get_posts_today=lambda: 0,
+        )
+        fake_now = datetime(2026, 7, 22, 12, 0, 0)
+        model_body = (
+            "The retrieval guardrail that actually holds\n\n"
+            "We spent three weeks tracing why our retry queue kept starving the "
+            "primary workers during peak load in production, and the answer turned "
+            "out to be a lock held far longer than anyone assumed. Once we moved "
+            "the bookkeeping out of the critical section, the starvation "
+            "disappeared and throughput recovered.\n\n"
+            "The lesson we keep relearning: measure the hot path before blaming "
+            "the scheduler, because intuition about contention is usually wrong. "
+            "A rolling divergence gate on the value head catches drift before "
+            "task success metrics crater, and it reuses telemetry you already "
+            "have on hand."
+        )
+        mock_call_model = AsyncMock(return_value=model_body)
+
+        with (
+            patch("phases.phase_a_content.datetime") as mock_dt,
+            patch("phases.phase_a_content.behavior_cfg",
+                  {"max_posts_per_day": 5, "phase_a_mode": "research", "whisper_mode": True}),
+            patch("services.persistence.load_agent_state", return_value={}),
+            patch("services.own_post_store.count_posts_since", return_value=0),
+            patch("phases.phase_a_content.choose_topic", return_value=(_ARXIV_TOPIC, "arxiv")),
+            patch("phases.phase_a_content.load_topic_matrix", return_value=None),
+            patch("phases.phase_a_content._is_allowed_topic", return_value=True),
+            patch("phases.phase_a_content._is_topic_recently_used", return_value=False),
+            patch("phases.phase_a_content.build_prompts", return_value=("sys", "user")),
+            patch("phases.phase_a_content.load_editorial_policy", return_value={}),
+            patch("phases.phase_a_content.is_similar_to_recent", return_value=False),
+            patch("phases.phase_a_content.call_model", new=mock_call_model),
+        ):
+            mock_dt.now.return_value = fake_now
+            mock_dt.fromisoformat.side_effect = lambda s: datetime.fromisoformat(s)
+            phase_a = PhaseAContentGeneration(deps=deps)
+            result = await phase_a.execute()
+
+        assert mock_call_model.call_count == 1, f"no reintenta: 1 llamada, hubo {mock_call_model.call_count}"
+        assert result["drafts_generated"] == 1
+        draft = result["posts"][0]
+        assert draft.get("error") is None
+        assert draft["metadata"]["attempts"] == 1
+        assert "Source: The Shared Discovery Paradox (arXiv:2607.18045v1)" in draft["body"]
+        assert "missing_arxiv_citation" not in str(draft.get("metadata", {}))
+        # no cuenta como rechazo: sin validation_failed y sin rejected_posts
+        log_text = attempts_log.read_text(encoding="utf-8") if attempts_log.exists() else ""
+        assert "validation_failed" not in log_text
+        assert "success_arxiv_injected" in log_text
+        assert not rejected_log.exists(), "no se registra rechazo para cita faltante en topic arXiv"

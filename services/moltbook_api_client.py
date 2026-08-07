@@ -795,16 +795,15 @@ class MoltbookAPIClient(PlatformClient):
     # Profile
     # ==========================
 
-    def update_agent_profile(self, bio: str, tagline: Optional[str] = None) -> bool:
+    def update_agent_profile(self, bio: str) -> bool:
         """PATCH /api/v1/agents/me — update the agent's bio on Moltbook.
         The platform stores the bio under `description` (confirmed via
         GET /agents/me); `bio` is kept for compatibility. `tagline` is
-        included when provided."""
+        NOT sent: the API rejects it (HTTP 400 'property tagline should
+        not exist')."""
         if not bio:
             return False
         payload: Dict[str, Any] = {"description": bio, "bio": bio}
-        if tagline is not None:
-            payload["tagline"] = tagline
         try:
             result = self._request("PATCH", "/agents/me", json_body=payload)
             success = 200 <= result["status"] < 300
