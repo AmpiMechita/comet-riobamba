@@ -31,6 +31,16 @@ from pathlib import Path
 def _isolate_runtime_state(tmp_path, monkeypatch):
     """Redirect high-risk module-level path constants to tmp_path."""
 
+    # ── Neutralise production env vars (leak from .env) ──────
+    # Every test starts from the DEFAULT behaviour: no flash-only, no
+    # best-of-N, default Anthropic spend limit (2.00). Tests that WANT
+    # these vars (test_flash_only_guard, test_quality_bestof) set them
+    # explicitly in their own scope AFTER this autouse fixture.
+    monkeypatch.delenv("AGENT_FLASH_ONLY", raising=False)
+    monkeypatch.delenv("AGENT_QUALITY_BESTOF", raising=False)
+    monkeypatch.delenv("QUALITY_BESTOF_N", raising=False)
+    monkeypatch.delenv("ANTHROPIC_SPEND_LIMIT_USD", raising=False)
+
     # ── Traces (core/tracer.py) ──────────────────────────
     traces_dir = tmp_path / "traces"
     traces_dir.mkdir(exist_ok=True)
