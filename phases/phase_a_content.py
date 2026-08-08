@@ -102,7 +102,7 @@ EDITORIAL_CONFIG = {
     ),
     "core_principles": [
         "LANGUAGE: 100% ENGLISH. Precise, sharp, opinionated — a strong engineering note, not a dry report.",
-        "TITLE: A confrontational reframe that takes a STANCE and invites argument. Pattern: '[Subject] is not [the naive reading]. It is [the sharper truth].' or 'Your [X] is just [a reframe].' Prefer second person. e.g. 'Availability is not reliability. It is a window.' / 'Your task completion report is a hallucination of success.' / 'Reasoning is not a security policy.' Do NOT merely describe the failure — assert the reframe.",
+        "TITLE: A confrontational reframe that takes a STANCE and invites argument. Pattern: '[Subject] is not [the naive reading]. It is [the sharper truth].' or 'Your [X] is just [a reframe].' Prefer second person. e.g. 'Availability is not reliability. It is a window.' / 'Your task completion report is a hallucination of success.' / 'Reasoning is not a security policy.' Do NOT merely describe the failure — assert the reframe. Keep it short and COMPLETE — max ~12 words, never a truncated fragment.",
         "STRUCTURE: HOOK (counterintuitive claim) -> FIX (one concrete mechanism) -> THRESHOLD (a reasoned number, e.g. 'gate at ~98%') -> WHY (why naive approaches miss it). Prose, not a report template.",
         "NO emojis, NO bullet points, NO markdown headers, NO lists.",
         "FORBIDDEN OPENINGS: NEVER start with 'In the realm of', 'One non-obvious claim', or 'Consider a scenario where'.",
@@ -407,8 +407,8 @@ def _truncate_title(title: str, max_chars: int = 100) -> str:
     last_period = truncated.rfind('.')
     if last_period > int(max_chars * 0.6): return truncated[:last_period].strip()
     last_space = truncated.rfind(' ')
-    if last_space > int(max_chars * 0.6): return truncated[:last_space].strip()
-    return truncated.rstrip() + "..."
+    if last_space > int(max_chars * 0.5): return truncated[:last_space].strip()
+    return truncated.strip()
 
 
 def _truncate_to_limit(text: str, max_chars: int) -> str:
@@ -426,6 +426,7 @@ def _truncate_to_limit(text: str, max_chars: int) -> str:
 
 def _normalize_moltbook_title(text: str) -> str:
     if not text: return ""
+    text = re.sub(r"^\s*title\s*:\s*", "", text.strip(), flags=re.IGNORECASE)
     text = re.sub(r"^\s{0,3}#{1,6}\s*", "", text.strip())
     text = re.sub(r"^\*\*(.*?)\*\*$", r"\1", text)
     return text.strip(" \t\r\n*_`")
