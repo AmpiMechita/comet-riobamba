@@ -1171,20 +1171,42 @@ class PhaseB:
             feed_results: List[Dict[str, Any]] = []
             own_results: List[Dict[str, Any]] = []
 
-            # Own-post replies first: consume the daily/cycle budget preferentially
+            # ── Feed budget reservation ─────────────────────────────
+            feed_budget_pct = int(self.deps.behavior_cfg.get("feed_budget_pct", 40))
+            feed_reserved = max(0, int(self.max_comments_per_day * feed_budget_pct / 100))
+            own_cap = max(0, self.max_comments_per_day - feed_reserved)
+
+            # Temporarily cap own-post budget to prevent starving feed
+            _orig_max = self.max_comments_per_day
+            own_before = self.get_comments_today()
+            self.max_comments_per_day = own_cap
+
+            # Own-post replies: capped to own_cap
             if self.deps.behavior_cfg.get("phase_b_own_post_replies", True):
                 own_results = await self._execute_own_post_replies()
 
+            own_consumed = max(0, self.get_comments_today() - own_before)
             own_count = len(own_results)
             remaining_cycle = max(0, self.max_replies_per_cycle - own_count)
 
-            # Feed replies only with remaining budget
+            # Restore full cap for feed replies
+            self.max_comments_per_day = _orig_max
+            feed_available = max(0, self.max_comments_per_day - self.get_comments_today())
+
+            logger.info(
+                "Phase B: budget — own=%s/%s (consumed=%s), feed=%s/%s (available=%s), feed_pct=%s%%",
+                self.get_comments_today(), own_cap, own_consumed,
+                self.get_comments_today() - own_before, feed_reserved, feed_available,
+                feed_budget_pct,
+            )
+
+            # Feed replies with reserved budget
             if self.deps.behavior_cfg.get("phase_b_feed_replies", True):
                 if self.get_comments_today() < self.max_comments_per_day and remaining_cycle > 0:
                     feed_results = await self._execute_feed_replies(remaining_cycle_slots=remaining_cycle)
                 else:
                     logger.info(
-                        "Phase B: skip feed replies — budget consumed by own-post replies "
+                        "Phase B: skip feed replies — budget consumed "
                         "(daily=%s/%s, remaining_cycle=%s).",
                         self.get_comments_today(), self.max_comments_per_day, remaining_cycle,
                     )

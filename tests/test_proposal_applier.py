@@ -23,14 +23,14 @@ def _isolate_paths(monkeypatch, tmp_path):
 
 def test_apply_valid_proposal_mutates_cfg_and_persists():
     import services.proposal_applier as pa
-    cfg = {"max_comments_per_day": 15}
+    cfg = {"max_consecutive_post_failures": 3}
     r = pa.apply_structured_proposal(
-        {"param": "max_comments_per_day", "suggested": 25, "reason": "demanda"},
+        {"param": "max_consecutive_post_failures", "suggested": 7, "reason": "demanda"},
         cfg,
     )
     assert r["status"] == "applied"
-    assert cfg["max_comments_per_day"] == 25
-    assert pa.load_overlay()["max_comments_per_day"] == 25
+    assert cfg["max_consecutive_post_failures"] == 7
+    assert pa.load_overlay()["max_consecutive_post_failures"] == 7
 
 
 def test_reject_param_not_in_allowlist():
@@ -45,16 +45,16 @@ def test_reject_param_not_in_allowlist():
 
 def test_clamp_value_to_allowlist_bounds():
     import services.proposal_applier as pa
-    cfg = {"max_comments_per_day": 15}
+    cfg = {"max_consecutive_post_failures": 3}
     r = pa.apply_structured_proposal(
-        {"param": "max_comments_per_day", "suggested": 999, "reason": "subir"}, cfg
+        {"param": "max_consecutive_post_failures", "suggested": 999, "reason": "subir"}, cfg
     )
     assert r["status"] == "applied"
-    assert r["applied"] == 80  # max de allowlist
+    assert r["applied"] == 10  # max de allowlist
     r2 = pa.apply_structured_proposal(
-        {"param": "max_comments_per_day", "suggested": -5, "reason": "bajar"}, cfg
+        {"param": "max_consecutive_post_failures", "suggested": -5, "reason": "bajar"}, cfg
     )
-    assert r2["applied"] == 0  # min de allowlist
+    assert r2["applied"] == 1  # min de allowlist
 
 
 def test_invalid_value_rejected():
@@ -69,16 +69,16 @@ def test_invalid_value_rejected():
 def test_cooldown_blocks_repeated_change(monkeypatch):
     import services.proposal_applier as pa
     monkeypatch.setattr(pa, "COOLDOWN_SECONDS", 86400)
-    cfg = {"max_comments_per_day": 15}
+    cfg = {"max_consecutive_post_failures": 3}
     r1 = pa.apply_structured_proposal(
-        {"param": "max_comments_per_day", "suggested": 25, "reason": "a"}, cfg
+        {"param": "max_consecutive_post_failures", "suggested": 7, "reason": "a"}, cfg
     )
     assert r1["status"] == "applied"
     r2 = pa.apply_structured_proposal(
-        {"param": "max_comments_per_day", "suggested": 30, "reason": "b"}, cfg
+        {"param": "max_consecutive_post_failures", "suggested": 8, "reason": "b"}, cfg
     )
     assert r2["status"] == "skipped_cooldown"
-    assert cfg["max_comments_per_day"] == 25
+    assert cfg["max_consecutive_post_failures"] == 7
 
 
 def test_merge_overlay_on_startup():
@@ -86,10 +86,10 @@ def test_merge_overlay_on_startup():
     config.config se replica aqui (clamp + solo allowlist)."""
     import services.proposal_applier as pa
     pa.apply_structured_proposal(
-        {"param": "max_feed_replies_per_day", "suggested": 7, "reason": "ok"}, {}
+        {"param": "max_comments_per_post", "suggested": 7, "reason": "ok"}, {}
     )
     overlay = pa.load_overlay()
-    assert overlay.get("max_feed_replies_per_day") == 7
+    assert overlay.get("max_comments_per_post") == 7
 
 
 def test_overlay_skips_unknown_params_on_merge(tmp_path):
@@ -97,20 +97,20 @@ def test_overlay_skips_unknown_params_on_merge(tmp_path):
     import services.proposal_applier as pa
     from config.auto_appliable import ALLOWLIST
     (tmp_path / "auto_applied_config.json").write_text(
-        json.dumps({"nonsense_param": 5, "max_comments_per_day": 42}), encoding="utf-8"
+        json.dumps({"nonsense_param": 5, "max_consecutive_post_failures": 42}), encoding="utf-8"
     )
     assert "nonsense_param" not in ALLOWLIST
-    assert "max_comments_per_day" in ALLOWLIST
-    assert ALLOWLIST["max_comments_per_day"][1] == 80  # clamp a 80
+    assert "max_consecutive_post_failures" in ALLOWLIST
+    assert ALLOWLIST["max_consecutive_post_failures"][1] == 10  # clamp a 10
 
 
 def test_apply_log_is_auditable(tmp_path):
     import services.proposal_applier as pa
     pa.apply_structured_proposal(
-        {"param": "max_comments_per_day", "suggested": 25, "reason": "razon"}, {}
+        {"param": "max_consecutive_post_failures", "suggested": 7, "reason": "razon"}, {}
     )
     entries = pa._read_apply_log()
     assert len(entries) == 1
-    assert entries[0]["param"] == "max_comments_per_day"
+    assert entries[0]["param"] == "max_consecutive_post_failures"
     assert entries[0]["status"] == "applied"
     assert entries[0]["reason"] == "razon"
