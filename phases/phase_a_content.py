@@ -42,6 +42,7 @@ from services.persistence import (
     store_post_hash,
     load_topic_engagement,
 )
+from phases.phase_b.scoring import text_has_fabricated_measurement
 
 logger = logging.getLogger("phases.phase_a_content")
 
@@ -403,6 +404,7 @@ def validate_post_text(text: str, required_citation: Optional[str] = None) -> Tu
     first_line = text.split('\n')[0].strip()
     if FILLER_STARTS.match(first_line): return False, "contains_filler_opening"
     if text.count("\n\n") < 1: return False, "single_paragraph"
+    if text_has_fabricated_measurement(text): return False, "fabricated_measurement"
     if required_citation:
         # La cita verificable debe estar en el body (tolerando el sufijo de
         # version: '2607.18045' == '2607.18045v1'). Sin ancla, no hay evidencia.

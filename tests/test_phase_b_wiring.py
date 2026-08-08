@@ -302,8 +302,8 @@ async def test_feed_reply_gate_uses_thread_count():
     with (
         patch.object(phase_b, "_fetch_candidate_posts", return_value=posts),
         patch.object(phase_b, "_decide_reply_from_post", return_value=RelevanceDecision(True, 30, "reply_sent")),
-        patch.object(phase_b, "_generate_reply_for_post", AsyncMock(return_value="In production we measured that the proper architecture pattern with 200ms circuit breaker reduces cascade failures by 65%.")),
-        patch.object(phase_b, "_check_and_prevent_duplicate", AsyncMock(return_value="In production we measured that the proper architecture pattern with 200ms circuit breaker reduces cascade failures by 65%.")),
+        patch.object(phase_b, "_generate_reply_for_post", AsyncMock(return_value="A circuit breaker pattern with a 200ms timeout avoids cascade failures. The key threshold is the retry budget per upstream dependency.")),
+        patch.object(phase_b, "_check_and_prevent_duplicate", AsyncMock(return_value="A circuit breaker pattern with a 200ms timeout avoids cascade failures. The key threshold is the retry budget per upstream dependency.")),
         patch.object(phase_b.api, "create_comment", return_value={"success": True, "id": "c1"}),
     ):
         import phases.phase_b as _pb_mod
@@ -332,6 +332,7 @@ async def test_feed_reply_persists_dedup_key():
     phase_b = PhaseB(deps=deps)
     phase_b.get_comments_today = lambda: 0
     phase_b.incr_comments_today = lambda: None
+    phase_b._commented_post_ids = {}  # Ensure clean slate for top-level dedup check
 
     posts = [
         {"id": "new_post", "title": "New", "content": "System reliability engineering is a critical discipline in modern software development that requires rigorous testing and monitoring.", "comments": []},
@@ -340,8 +341,8 @@ async def test_feed_reply_persists_dedup_key():
     with (
         patch.object(phase_b, "_fetch_candidate_posts", return_value=posts),
         patch.object(phase_b, "_decide_reply_from_post", return_value=RelevanceDecision(True, 30, "reply_sent")),
-        patch.object(phase_b, "_generate_reply_for_post", AsyncMock(return_value="In production we measured that the proper architecture pattern with 200ms circuit breaker reduces cascade failures by 65%.")),
-        patch.object(phase_b, "_check_and_prevent_duplicate", AsyncMock(return_value="In production we measured that the proper architecture pattern with 200ms circuit breaker reduces cascade failures by 65%.")),
+        patch.object(phase_b, "_generate_reply_for_post", AsyncMock(return_value="A circuit breaker pattern with a 200ms timeout avoids cascade failures. The key threshold is the retry budget per upstream dependency.")),
+        patch.object(phase_b, "_check_and_prevent_duplicate", AsyncMock(return_value="A circuit breaker pattern with a 200ms timeout avoids cascade failures. The key threshold is the retry budget per upstream dependency.")),
         patch.object(phase_b.api, "create_comment", return_value={"success": True, "id": "c1"}),
     ):
         import phases.phase_b as _pb_mod
@@ -349,6 +350,8 @@ async def test_feed_reply_persists_dedup_key():
             patch.object(_pb_mod, "_save_agent_comment_ids"),
             patch.object(_pb_mod, "_save_replied_comment_ids"),
             patch.object(_pb_mod, "_save_commented_post_ids"),
+            patch.object(_pb_mod, "_is_semantic_dupe_against_history", return_value=False),
+            patch.object(_pb_mod, "_append_to_reply_history"),
         ):
             await phase_b._execute_feed_replies()
 

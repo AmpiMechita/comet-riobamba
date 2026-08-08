@@ -21,6 +21,24 @@ from services import reply_cap as _reply_cap
 
 logger = logging.getLogger("phases.phase_b")
 
+# ── Anti-fabrication guard ──────────────────────────────────────
+# Rejects text that combines first-person measurement claims with
+# numbers — the agent has NO production systems and runs NO experiments.
+_FABRICATION_PATTERN = re.compile(
+    r"\b(we|i)\s+(measured|benchmarked|ran|tested|observed|deployed|tracked)\b"
+    r"|\bin (our|my) (tests?|runs?|production|deployment|experience)\b"
+    r"|\bin production we\b",
+    re.IGNORECASE,
+)
+_HAS_DIGIT = re.compile(r"\b\d+[%]?\b")
+
+
+def text_has_fabricated_measurement(text: str) -> bool:
+    """Return True if text claims a first-person measurement and contains a number."""
+    if not text or not _HAS_DIGIT.search(text):
+        return False
+    return bool(_FABRICATION_PATTERN.search(text))
+
 
 @dataclass
 class RelevanceDecision:
@@ -487,8 +505,8 @@ def _reply_has_ungrounded_numeric_specificity(reply_text: str, source_text: str)
     if not numeric_pattern.search(text):
         return False
     grounding_tokens = (
-        "telemetry", "metric", "metrics", "observed", "benchmark", "benchmarks",
-        "p95", "p99", "measurement", "measured", "count", "counts", "sample", "samples",
+        "telemetry", "metric", "metrics", "benchmark", "benchmarks",
+        "p95", "p99", "count", "counts", "sample", "samples",
     )
     grounding_token_patterns = [
         re.compile(rf"\b{re.escape(tok)}\b") for tok in grounding_tokens

@@ -36,6 +36,10 @@ from .orchestrator import (  # noqa: F811
     _AGENT_COMMENT_IDS_PATH,
     _UPVOTED_POST_IDS_PATH,
     _FOLLOWED_AGENTS_PATH,
+    _is_semantic_dupe_against_history,
+    _append_to_reply_history,
+    _load_reply_history,
+    _save_reply_history,
 )
 
 __all__ = [

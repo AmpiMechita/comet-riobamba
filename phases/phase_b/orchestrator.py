@@ -67,7 +67,7 @@ from .constants import (
     MAX_CONVERSATION_DEPTH,
     _OWN_POST_REPLY_SCORE_LIMIT,
 )
-from .scoring import RelevanceDecision, _get_feed_min_score
+from .scoring import RelevanceDecision, _get_feed_min_score, text_has_fabricated_measurement
 from . import constants as _constants_mod
 
 
@@ -403,6 +403,45 @@ def is_semantic_duplicate_reply(candidate: str, previous: str, threshold: float 
     tfidf = TfidfVectorizer().fit_transform([candidate, previous])
     sim = cosine_similarity(tfidf[0:1], tfidf[1:2])[0][0]
     return sim >= threshold
+
+
+# ── Cross-cycle reply history (anti-duplicate) ─────────────────
+_REPLY_HISTORY_PATH = BASE_DIR / "data" / "reply_history.json"
+_REPLY_HISTORY_MAX = 50
+
+
+def _load_reply_history() -> List[str]:
+    try:
+        if _REPLY_HISTORY_PATH.exists():
+            data = json.loads(_REPLY_HISTORY_PATH.read_text(encoding="utf-8"))
+            return data.get("replies", []) if isinstance(data, dict) else []
+    except Exception:
+        pass
+    return []
+
+
+def _save_reply_history(replies: List[str]) -> None:
+    try:
+        _REPLY_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _REPLY_HISTORY_PATH.write_text(
+            json.dumps({"replies": replies[-_REPLY_HISTORY_MAX:]}, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def _append_to_reply_history(text: str) -> None:
+    history = _load_reply_history()
+    history.append(text)
+    _save_reply_history(history)
+
+
+def _is_semantic_dupe_against_history(candidate: str, threshold: float = 0.80) -> bool:
+    for prev in _load_reply_history():
+        if is_semantic_duplicate_reply(candidate, prev, threshold=threshold):
+            return True
+    return False
 
 
 def _safe_truncate(text: str, max_chars: int = 500) -> str:
@@ -1557,6 +1596,46 @@ class PhaseB:
 
                 reply_text = (reply_text or "").strip()
                 if not reply_text:
+                    logger.warning("Phase B: respuesta vacía generada.")
+                    continue
+
+                # ── Anti-fabrication guard: reject first-person measurement claims ──
+                if text_has_fabricated_measurement(reply_text):
+                    logger.warning(
+                        "Phase B: REPLY REJECTED — fabricated measurement in post_id=%s: %s",
+                        post_id, reply_text[:120],
+                    )
+                    send_event("phase_b_reply_skip", {
+                        "post_id": post_id,
+                        "reason": "fabricated_measurement",
+                        "score": post_decision.score,
+                    })
+                    continue
+
+                # ── Top-level dedup: one comment per post in feed ──
+                if post_id in self._commented_post_ids:
+                    logger.info(
+                        "Phase B: skip feed post %s — already top-level commented.",
+                        post_id,
+                    )
+                    continue
+
+                # ── Cross-cycle semantic duplicate check ──
+                try:
+                    if _is_semantic_dupe_against_history(reply_text):
+                        logger.info(
+                            "Phase B: REPLY REJECTED — semantic duplicate against cross-cycle history "
+                            "in post_id=%s",
+                            post_id,
+                        )
+                        send_event("phase_b_reply_skip", {
+                            "post_id": post_id,
+                            "reason": "cross_cycle_duplicate",
+                            "score": post_decision.score,
+                        })
+                        continue
+                except Exception:
+                    pass
                     continue
 
                 reply_text = clean_llm_output(reply_text)
@@ -1652,6 +1731,7 @@ class PhaseB:
                             self._agent_comment_ids[post_id] = []
                         self._agent_comment_ids[post_id].append(str(comment_id))
                         self._dedup.sync_agent_comment_ids(self._agent_comment_ids)
+                        _append_to_reply_history(reply_text)
 
                     # Add topic to research agenda if frontier potential detected
                     if post_decision.score >= POLICY.min_comment_relevance_score + 20:
@@ -1936,22 +2016,26 @@ class PhaseB:
             )
 
             system_prompt = (
-                "You are a senior systems engineer who publishes original research.\n\n"
+                "You are a senior systems engineer who reasons about distributed systems and agent architectures.\n"
+                "You have NO production deployment and run NO experiments.\n"
+                "NEVER write 'we measured', 'in our tests', 'in production we saw', "
+                "or any first-person measurement claim.\n"
+                "Reason about mechanisms, invariants, thresholds, and design patterns instead.\n\n"
                 "RESPONSE FORMAT (mandatory structure):\n"
                 "1. ANCHOR: Quote or reference one specific claim from the post (1 sentence).\n"
-                "2. EVIDENCE: State what you measured, observed, or built that relates (1-2 sentences).\n"
-                "   Use phrases like: 'In production we measured...', 'We observed that...', "
-                "'The data shows...', 'When we deployed...'\n"
+                "2. ANALYSIS: Analyze the underlying mechanism, system property, or architectural principle "
+                "(1-2 sentences). Use reasoning from systems theory, distributed systems, or software architecture.\n"
                 "3. FRAMEWORK: Propose a pattern, architecture change, or design principle (1-2 sentences).\n"
-                "   Use phrases like: 'I propose...', 'The pattern that works is...', "
-                "'A framework for this is...', 'The architecture should...'\n"
+                "   Use phrases like: 'The pattern that works is...', 'A framework for this is...', "
+                "'The architecture should...'\n"
                 "4. EDGE CASE (optional): Name one failure mode or counter-example (1 sentence).\n\n"
                 "HARD CONSTRAINTS:\n"
                 "- Do NOT use emojis, hashtags, links, or markdown.\n"
                 "- Do NOT be promotional or agreeable. Add friction, not praise.\n"
-                "- Do NOT start with 'Great point' or 'I agree'. Start with your evidence.\n"
-                "- Every reply MUST contain at least one concrete number, metric, or threshold.\n"
+                "- Do NOT start with 'Great point' or 'I agree'. Start with the mechanism.\n"
+                "- Every reply MUST contain at least one concrete threshold, failure mode, or design pattern.\n"
                 "- Every reply MUST propose or name a pattern/framework/architecture explicitly.\n"
+                "- DO NOT fabricate measurements. You have NO production data.\n"
                 "- Maximum 4 sentences. Density over length.\n\n"
                 f"{lang_instruction}\n\n"
                 f"{COMMENT_STYLE_INSTRUCTIONS}"
