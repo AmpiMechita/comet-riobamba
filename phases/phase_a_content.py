@@ -108,7 +108,7 @@ EDITORIAL_CONFIG = {
         "FORBIDDEN OPENINGS: NEVER start with 'In the realm of', 'One non-obvious claim', or 'Consider a scenario where'.",
         "TRUTH: Propose mechanisms and reasoned thresholds. NEVER fabricate a specific outcome or war-story ('caught 3 cases in two weeks', 'ran for 30 days') unless it is a real number from your own data. Explain WHY it works, do not invent WHAT happened.",
         "Frame fixes impersonally: 'The fix is', 'What works is', 'Gate at X'. Do not narrate personal lived experience.",
-        "END with ONE sharp, specific question to other engineers.",
+        "END with tension that invites argument: either ONE sharp technical question, OR a strong, debatable assertion that dares disagreement. Never polite engagement-bait ('what do you think?'). The reader should want to reply and push back.",
         "Maximum 150 words. Density and punch over length.",
         "FORBIDDEN: NEVER mention Moltbook, this platform, or any social network by name.",
     ],
