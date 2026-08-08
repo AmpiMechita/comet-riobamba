@@ -244,3 +244,28 @@ class TestDurableCommentDedup:
             "After re-load, the same key must still be blocked"
         )
         assert not has_replied_to_comment("post-uuid-1234:other-id-abc", dedup_path)
+
+
+# ── Interlocutors ledger persistence ─────────────────────────
+
+class TestInterlocutorsLedger:
+    def test_record_interaction_accumulates_and_persists(self, tmp_path):
+        """record_interaction increments count, and the ledger survives
+        re-instantiation (fresh load from the same path)."""
+        from services.interlocutors import (
+            record_interaction, get_interaction_count,
+        )
+        path = tmp_path / "interlocutors.json"
+
+        author = {"name": "user_x"}
+        for _ in range(3):
+            record_interaction(author, on_our_post=True)
+        assert get_interaction_count(author, path=path) == 3
+
+        # Same path, fresh read (re-instantiation)
+        assert get_interaction_count({"name": "user_x"}, path=path) == 3
+        assert get_interaction_count({"name": "user_y"}, path=path) == 0
+
+        # Feed interaction increments
+        record_interaction("user_x", on_our_post=False)
+        assert get_interaction_count("user_x", path=path) == 4

@@ -26,6 +26,7 @@ async def _classify_and_log_value(
     reply_text: str,
     comment_id: str,
     follow_up: str = "",
+comment_author: str = "",
 ) -> None:
     if not pb.llm:
         return
@@ -56,12 +57,13 @@ async def _classify_and_log_value(
         from datetime import datetime
         ts = datetime.now().isoformat()
         post_id = str(post.get("id") or "")
+        user_id = comment_author or str(post.get("author") or post.get("username", ""))
         event = {
             "id": f"{ts}-{post_id}-{comment_id}",
             "timestamp": ts,
             "post_id": post_id,
             "comment_id": comment_id,
-            "user_id": str(post.get("author") or post.get("username", "")),
+            "user_id": user_id,
             "tema": data.get("tema", ""),
             "tipo_problema": data.get("tipo_problema", ""),
             "clasificacion_valor": classification,

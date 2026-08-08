@@ -12,6 +12,7 @@ from phases.engagement.classifier import Classifier
 from phases.engagement.responder import Responder
 from phases.engagement.tracker import Tracker
 from services import reply_cap
+from services import interlocutors
 from utils.phase_utils import phase_error_boundary, validate_phase_deps
 
 logger = logging.getLogger("phases.phase_c.engagement")
@@ -152,7 +153,9 @@ class PhaseCEngagement:
                 # ── Triage: skip comments that don't deserve a reply ──
                 from phases.phase_b.scoring import _triage_comment_value
                 skip_triage, triage_reason = _triage_comment_value(
-                    comment_text, tech_keywords=_TRIAGE_TECH,
+                    comment_text,
+                    tech_keywords=_TRIAGE_TECH,
+                    author=comment.get("author"),
                 )
                 if skip_triage:
                     logger.info(
@@ -160,6 +163,11 @@ class PhaseCEngagement:
                         triage_reason, comment_id,
                     )
                     continue
+                # ── Ledger: registrar observación del comentario dirigido a nosotros ──
+                is_on_our_post = source_type == "own_post"
+                interlocutors.record_interaction(
+                    comment.get("author"), on_our_post=is_on_our_post,
+                )
                 comment_type = self.classifier.classify_comment(comment_text)
                 priority = self.classifier.priority_score(comment_type, comment_text)
                 logger.info(
@@ -239,6 +247,10 @@ class PhaseCEngagement:
 
                 if success:
                     reply_cap.mark_replied_to_comment(f"{post_id}:{comment_id}")
+                    # ── Ledger: respuesta (segundo registro del comentario) ──
+                    interlocutors.record_interaction(
+                        comment.get("author"), on_our_post=True,
+                    )
                     replies_per_post[post_id] += 1
                     self.deps.write_policy.log_write(req, str(reply_id or post_id))
                     replies_this_cycle += 1

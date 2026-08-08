@@ -1519,6 +1519,11 @@ class PhaseB:
                     "score": post_decision.score,
                     "snippet": post_body[:60],
                 })
+                # ── Ledger: observación del feed post ──
+                from services import interlocutors
+                interlocutors.record_interaction(
+                    post.get("author"), on_our_post=False,
+                )
 
                 try:
                     bestof = (_quality_bestof_enabled()
@@ -1580,6 +1585,9 @@ class PhaseB:
                         post_id,
                         comment_id,
                     )
+                    interlocutors.record_interaction(
+                        post.get("author"), on_our_post=False,
+                    )
                     self.incr_comments_today()
                     results.append({
                         "post_id": post_id,
@@ -1598,6 +1606,9 @@ class PhaseB:
                         post_id,
                         str(post.get("title") or "")[:40],
                     )
+                    interlocutors.record_interaction(
+                        post.get("author"), on_our_post=False,
+                    )
                     feed_comment_count += 1
                     cycle_comment_count += 1
                     self.incr_comments_today()
@@ -1613,7 +1624,8 @@ class PhaseB:
 
                     if comment_id:
                         post_body = str(post.get("content") or post.get("body") or "").strip()
-                        await self._classify_and_log_value(post, post_body, reply_text, str(comment_id))
+                        await self._classify_and_log_value(post, post_body, reply_text, str(comment_id),
+                                                         comment_author=str(post.get("author", "")))
                         if post_id not in self._agent_comment_ids:
                             self._agent_comment_ids[post_id] = []
                         self._agent_comment_ids[post_id].append(str(comment_id))
@@ -2148,9 +2160,10 @@ class PhaseB:
         reply_text: str,
         comment_id: str,
         follow_up: str = "",
+        comment_author: str = "",
     ) -> None:
         from .value_log_utils import _classify_and_log_value
-        await _classify_and_log_value(self, post, comment_text, reply_text, comment_id, follow_up)
+        await _classify_and_log_value(self, post, comment_text, reply_text, comment_id, follow_up, comment_author=comment_author)
 
     # ── Own post replies (antes phase_b_responses.py) ─────────────
 
@@ -2403,17 +2416,11 @@ class PhaseB:
                 str(post_id) in own_post_ids
                 or (parent_id is not None and str(parent_id) in own_post_ids)
             )
-            # ── Triage: descartar comentarios que NO merecen respuesta ──
-            from .scoring import _triage_comment_value
-            skip_triage, triage_reason = _triage_comment_value(
-                comment_text, tech_keywords=self._TECH_KEYWORDS,
+            # ── Ledger: observación del comentario dirigido a nosotros ──
+            from services import interlocutors
+            interlocutors.record_interaction(
+                comment.get("author"), on_our_post=True,
             )
-            if skip_triage:
-                logger.info(
-                    "triage: skip low-value comment (%s) comment_id=%s",
-                    triage_reason, comment_id,
-                )
-                continue
             decision = self._decide_reply(
                 comment,
                 limit_ok=replied_count < self.max_comments_per_post,
@@ -2606,6 +2613,11 @@ class PhaseB:
                 self._replied_comment_ids.add(dedup_key)
                 self._dedup.mark_replied(dedup_key)
                 reply_cap.mark_replied_to_comment(f"{post_id}:{comment_id}")
+                # ── Ledger: respuesta (segundo registro del comentario) ──
+                from services import interlocutors as _il
+                _il.record_interaction(
+                    author, on_our_post=True,
+                )
                 self.incr_comments_today()
                 send_event("phase_b_reply_success", {
                     "post_id": post_id,
@@ -2620,6 +2632,7 @@ class PhaseB:
                 await self._classify_and_log_value(
                     {"id": post_id, "title": "", "content": own_post_text},
                     comment_text, reply_text, str(comment_id),
+                    comment_author=author,
                 )
                 logger.info(
                     "Phase B: replied to comment %s on post %s",

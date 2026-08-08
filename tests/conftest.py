@@ -113,6 +113,12 @@ def _isolate_runtime_state(tmp_path, monkeypatch):
         tmp_path / "published_posts.json",
     )
 
+    # ── Interlocutors ledger (services/interlocutors.py) ──
+    monkeypatch.setattr(
+        "services.interlocutors._INTERLOCUTORS_PATH",
+        tmp_path / "interlocutors.json",
+    )
+
     # ── Durable per-comment dedup (services/reply_cap.py) ──
     monkeypatch.setattr(
         "services.reply_cap._REPLIED_COMMENT_IDS_PATH",

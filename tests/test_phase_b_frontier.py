@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 from phases.phase_b import PhaseB, RelevanceDecision
 from phases.deps import PhaseBDeps
 from config.agent_policy import POLICY
-from phases.phase_b.scoring import _triage_comment_value, _compute_visibility_bonus
+from phases.phase_b.scoring import _triage_comment_value, _compute_visibility_bonus, _compute_relationship_bonus
 
 
 def _make_pb():
@@ -189,3 +189,68 @@ class TestCommentTriage:
             tech_keywords=frozenset({"agent"}),
         )
         assert not skip, "Length above 80 chars should prevent triage"
+
+
+# ── Interlocutor relationship priority ───────────────────────
+
+class TestRelationshipBonus:
+    def test_bonus_tiers(self):
+        bonus = _compute_relationship_bonus
+        assert bonus(None) == 0
+        assert bonus("unknown_user") == 0
+
+    def test_bonus_from_ledger(self, monkeypatch, tmp_path):
+        """Integration: record interactions then verify bonus via actual count."""
+        from services import interlocutors
+        path = tmp_path / "interlocutors.json"
+        monkeypatch.setattr("services.interlocutors._INTERLOCUTORS_PATH", path)
+        # also patch scoring's import which reads at call time
+        monkeypatch.setattr("phases.phase_b.scoring", None, raising=False)
+
+        author = {"name": "test_user_42"}
+        for _ in range(3):
+            interlocutors.record_interaction(author, on_our_post=True)
+        assert _compute_relationship_bonus("test_user_42") == 5
+
+        for _ in range(7):
+            interlocutors.record_interaction(author, on_our_post=True)
+        assert _compute_relationship_bonus("test_user_42") == 10
+
+
+class TestRelationshipTriage:
+    def test_recurrent_short_on_niche_not_skipped(self, monkeypatch, tmp_path):
+        """count>=3 + short on-niche comment → triage does NOT skip.
+        (Length bypass applies only for known interlocutors.)"""
+        from services import interlocutors
+        path = tmp_path / "interlocutors.json"
+        monkeypatch.setattr("services.interlocutors._INTERLOCUTORS_PATH", path)
+
+        author = "bob_the_builder"
+        for _ in range(3):
+            interlocutors.record_interaction(author, on_our_post=True)
+
+        skip, reason = _triage_comment_value(
+            "Short on-niche debug question about agent loops?",
+            tech_keywords=frozenset({"agent", "debug", "loop"}),
+            author=author,
+        )
+        assert not skip, f"Expected pass but got skip reason={reason}"
+
+    def test_recurrent_off_niche_still_skipped(self, monkeypatch, tmp_path):
+        """count>=3 but off-niche: triage STILL skips (relationship
+        does not buy a pass for irrelevant content)."""
+        from services import interlocutors
+        path = tmp_path / "interlocutors.json"
+        monkeypatch.setattr("services.interlocutors._INTERLOCUTORS_PATH", path)
+
+        author = "alice"
+        for _ in range(3):
+            interlocutors.record_interaction(author, on_our_post=True)
+
+        skip, reason = _triage_comment_value(
+            "nice bro",
+            tech_keywords=frozenset({"agent"}),
+            author=author,
+        )
+        assert skip
+        assert reason == "low_value_triage"

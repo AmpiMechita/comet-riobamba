@@ -125,11 +125,19 @@ def _compute_relevance_score(
     return max(0, min(score, 100))
 
 
-def _triage_comment_value(comment_text: str, *, tech_keywords: frozenset = frozenset()):
+def _triage_comment_value(
+    comment_text: str,
+    *,
+    tech_keywords: frozenset = frozenset(),
+    author=None,
+):
     """Pre-filter: descarta comentarios que NO merecen respuesta,
     independientemente de si el agente podría reencuadrarlos.
     Solo bloquea cuando TODAS las señales son negativas:
     demasiado corto, sin pregunta ni crítica, Y off-niche.
+    Excepción: interlocutores recurrentes (count >= 3) NO son
+    descartados por longitud — la relación compra esfuerzo pero
+    NO compra un pase a off-niche.
     Returns (skip: bool, reason: str)."""
     if not comment_text or not isinstance(comment_text, str):
         return True, "empty_or_invalid"
@@ -149,6 +157,21 @@ def _triage_comment_value(comment_text: str, *, tech_keywords: frozenset = froze
     tech_count = sum(1 for kw in (tech_keywords or frozenset()) if kw in text_lower)
     off_niche = tech_count == 0
 
+    # ── Bypass: interlocutor recurrente no se descarta por longitud ──
+    # (la relación compra esfuerzo, no relevancia temática)
+    if author is not None and too_short:
+        try:
+            from services import interlocutors as _interlocutors
+            count = _interlocutors.get_interaction_count(author)
+        except Exception:
+            count = 0
+        if count >= 3:
+            # Si además es on-niche, no se descarta.
+            # Si es off-niche, sí (la relación no compra off-niche).
+            if not off_niche:
+                return False, ""
+            # off_niche: cae al check normal
+
     if too_short and no_signal and off_niche:
         return True, "low_value_triage"
 
@@ -156,6 +179,60 @@ def _triage_comment_value(comment_text: str, *, tech_keywords: frozenset = froze
 
 
 def _compute_visibility_bonus(post: Optional[Dict[str, Any]]) -> int:
+    """Extract upvotes and comment_count from the post dict and return a
+    tiered visibility bonus (+0, +5, +10, or +15). Never negative."""
+    if not isinstance(post, dict):
+        return 0
+
+    upvotes = None
+    for k in ("score", "upvotes", "upvote_count", "points"):
+        v = post.get(k)
+        if isinstance(v, (int, float)):
+            upvotes = int(v)
+            break
+
+    comment_count = None
+    for k in ("comment_count", "comments_count"):
+        v = post.get(k)
+        if isinstance(v, int):
+            comment_count = v
+            break
+    if comment_count is None and isinstance(post.get("comments"), list):
+        comment_count = len(post["comments"])
+
+    if comment_count is None:
+        comment_count = 0
+    if upvotes is None:
+        upvotes = 0
+
+    if comment_count >= 100 or upvotes >= 50:
+        return 15
+    if comment_count >= 25 or upvotes >= 25:
+        return 10
+    if comment_count >= 5 or upvotes >= 5:
+        return 5
+    return 0
+
+
+def _compute_relationship_bonus(author) -> int:
+    """Bonus escalonado por historial de interlocutor (cross-session).
+
+    +5 si count >= 3, +10 si count >= 10.
+    Aplica SOLO después del umbral de relevancia (nunca rescata
+    off-niche: la relación compra prioridad, no relevancia).
+    Fail-open (count=0 si hay error)."""
+    if not author:
+        return 0
+    try:
+        from services import interlocutors as _interlocutors
+        count = _interlocutors.get_interaction_count(author)
+    except Exception:
+        return 0
+    if count >= 10:
+        return 10
+    if count >= 3:
+        return 5
+    return 0
     """Extract upvotes and comment_count from the post dict and return a
     tiered visibility bonus (+0, +5, +10, or +15). Never negative."""
     if not isinstance(post, dict):
@@ -230,10 +307,24 @@ def _decide_reply(
         bypass_applied = True
 
     if bypass_applied:
-        author = pb._get_author_name(comment)
-        logger.info("Phase B: Bypass de relevancia aplicado a %s por alta densidad tecnica / own-post reply.", author)
+        author_name = pb._get_author_name(comment)
+        logger.info("Phase B: Bypass de relevancia aplicado a %s por alta densidad tecnica / own-post reply.", author_name)
         if score >= 30:
+            # ── Relationship bonus: prioriza ranking entre los que ya califican ──
+            comment_author = comment.get("author") if isinstance(comment, dict) else None
+            if comment_author is not None:
+                rel = _compute_relationship_bonus(comment_author)
+                if rel:
+                    score = min(score + rel, 100)
             return RelevanceDecision(True, score, "reply_sent")
+
+    # ── Relationship bonus: solo si el score base ya pasa el umbral ──
+    # mismo patrón que visibility: nunca rescata off-niche.
+    comment_author = comment.get("author") if isinstance(comment, dict) else None
+    if score >= POLICY.min_comment_relevance_score and comment_author is not None:
+        rel = _compute_relationship_bonus(comment_author)
+        if rel:
+            score = min(score + rel, 100)
 
     if score >= POLICY.min_comment_relevance_score + 20:
         return RelevanceDecision(True, score, "reply_sent")
@@ -305,6 +396,11 @@ def _decide_reply_from_post(
         bonus = _compute_visibility_bonus(post)
         if bonus:
             score += bonus
+        # Relationship bonus (autor recurrente): prioriza interlocutores
+        # conocidos. También aplicado tras el umbral base, mismo patrón.
+        rel = _compute_relationship_bonus(post.get("author"))
+        if rel:
+            score += rel
 
     reason = "reply_sent" if should else "reply_skipped_low_relevance"
     return RelevanceDecision(should, score, reason)
