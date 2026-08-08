@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 from phases.phase_b import PhaseB, RelevanceDecision
 from phases.deps import PhaseBDeps
 from config.agent_policy import POLICY
+from phases.phase_b.scoring import _triage_comment_value, _compute_visibility_bonus
 
 
 def _make_pb():
@@ -102,3 +103,89 @@ class TestFrontierPotential:
         assert "guardrail" in system_prompt
         assert "failure mode" in system_prompt
         assert "research question" in system_prompt
+
+
+# ── Visibility targeting ──────────────────────────────────────
+
+class TestVisibilityBonus:
+    def test_hot_post_scores_higher_than_dead_post(self):
+        """Hot on-niche post (many comments/upvotes) scores MORE than dead
+        on-niche post; both pass on-niche threshold."""
+        body = (
+            "How do you handle agent pipeline failures when LLM API returns "
+            "429 errors with cascading retries in production?"
+        )
+        hot_post = {
+            "score": 30,
+            "comment_count": 50,
+        }
+        dead_post = {"upvotes": 0, "comment_count": 0}
+
+        hot_decision = PhaseB._decide_reply_from_post(body, post=hot_post)
+        dead_decision = PhaseB._decide_reply_from_post(body, post=dead_post)
+
+        assert hot_decision.should_reply
+        assert dead_decision.should_reply
+        assert hot_decision.score > dead_decision.score, (
+            f"hot score {hot_decision.score} should be > dead score {dead_decision.score}"
+        )
+
+    def test_off_niche_post_with_massive_visibility_still_rejected(self):
+        """Off-niche post with 3000 comments and 500 upvotes is STILL rejected
+        (visibility bonus never rescues non-relevant posts)."""
+        body = "Check out my new product at this link!"
+        viral_post = {
+            "score": 500,
+            "comment_count": 3000,
+        }
+        decision = PhaseB._decide_reply_from_post(body, post=viral_post)
+        assert not decision.should_reply, (
+            f"Off-niche post must not pass even with massive visibility. "
+            f"score={decision.score} reason={decision.reason}"
+        )
+
+    def test_bonus_zero_when_no_visibility_data(self):
+        """Post dict with no upvotes/comment keys → bonus 0."""
+        assert _compute_visibility_bonus({"other": "data"}) == 0
+        assert _compute_visibility_bonus(None) == 0
+        assert _compute_visibility_bonus({"score": 2, "comments": [{}]}) == 0
+
+
+# ── Comment triage ───────────────────────────────────────────
+
+class TestCommentTriage:
+    def test_short_comment_without_question_skipped(self):
+        skip, reason = _triage_comment_value(
+            "nice post", tech_keywords=frozenset({"agent"})
+        )
+        assert skip
+        assert reason == "low_value_triage"
+
+    def test_comment_with_question_passes(self):
+        skip, reason = _triage_comment_value(
+            "How do you handle pipeline failures under heavy production load "
+            "with a circuit breaker pattern and fallback orchestration?",
+            tech_keywords=frozenset({"agent", "circuit breaker", "pipeline"}),
+        )
+        assert not skip
+
+    def test_off_niche_with_question_still_passes(self):
+        """Even if off-niche, a question is a valid engagement signal and
+        should NOT be triage-blocked — the scoring layer decides."""
+        skip, reason = _triage_comment_value(
+            "What is your favorite pizza topping? I am really curious about "
+            "this because I want to order something different from my usual "
+            "pepperoni choice tonight with my friends.",
+            tech_keywords=frozenset({"agent"}),
+        )
+        assert not skip, "Question signal should prevent triage"
+
+    def test_long_comment_without_question_or_critique_passes(self):
+        """Length alone is a signal of engagement effort — triage lets it
+        through to be scored by _decide_reply."""
+        skip, reason = _triage_comment_value(
+            "I have been reading your posts for a while and I think they are "
+            "very interesting. Keep up the great work and thanks for sharing.",
+            tech_keywords=frozenset({"agent"}),
+        )
+        assert not skip, "Length above 80 chars should prevent triage"

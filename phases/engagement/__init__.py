@@ -11,9 +11,22 @@ from phases.deps import PhaseCDeps
 from phases.engagement.classifier import Classifier
 from phases.engagement.responder import Responder
 from phases.engagement.tracker import Tracker
+from services import reply_cap
 from utils.phase_utils import phase_error_boundary, validate_phase_deps
 
 logger = logging.getLogger("phases.phase_c.engagement")
+
+# Tech keywords for comment triage (Phase C own-post context).
+_TRIAGE_TECH = frozenset({
+    "agent", "ai", "model", "data", "system", "error", "loop", "policy",
+    "api", "log", "monitor", "observability", "cascade", "prompt", "token",
+    "llm", "autonomous", "tool", "deployment", "pipeline",
+    "latency", "throughput", "security", "architecture", "design",
+    "memory", "reasoning", "planning", "benchmark", "metric",
+    "circuit breaker", "rate limit", "guardrail", "fallback",
+    "scaling", "orchestration",
+    "fail", "failure", "bug", "break", "problem", "issue",
+})
 
 
 class PhaseCEngagement:
@@ -123,7 +136,10 @@ class PhaseCEngagement:
                     continue
 
                 comment_id = comment.get("id")
-                if comment_id and self.tracker.already_replied_to_comment(comment_id):
+                if comment_id and (
+                    self.tracker.already_replied_to_comment(comment_id)
+                    or reply_cap.has_replied_to_comment(f"{post_id}:{comment_id}")
+                ):
                     logger.info(
                         "Phase C DEBUG: skip already_replied comment_id=%s author=%s",
                         comment_id,
@@ -133,6 +149,17 @@ class PhaseCEngagement:
 
                 own_names = self.tracker.get_own_identity_names()
                 comment_text = comment.get("content") or comment.get("text") or ""
+                # ── Triage: skip comments that don't deserve a reply ──
+                from phases.phase_b.scoring import _triage_comment_value
+                skip_triage, triage_reason = _triage_comment_value(
+                    comment_text, tech_keywords=_TRIAGE_TECH,
+                )
+                if skip_triage:
+                    logger.info(
+                        "triage: skip low-value comment (%s) comment_id=%s",
+                        triage_reason, comment_id,
+                    )
+                    continue
                 comment_type = self.classifier.classify_comment(comment_text)
                 priority = self.classifier.priority_score(comment_type, comment_text)
                 logger.info(
@@ -211,6 +238,7 @@ class PhaseCEngagement:
                 self.tracker.log_comment_event("comment_reply_attempt", response_payload)
 
                 if success:
+                    reply_cap.mark_replied_to_comment(f"{post_id}:{comment_id}")
                     replies_per_post[post_id] += 1
                     self.deps.write_policy.log_write(req, str(reply_id or post_id))
                     replies_this_cycle += 1

@@ -17,6 +17,7 @@ from .constants import (
     _cold_start_lock,
 )
 from . import constants as _constants_mod
+from services import reply_cap as _reply_cap
 
 logger = logging.getLogger("phases.phase_b")
 
@@ -124,6 +125,72 @@ def _compute_relevance_score(
     return max(0, min(score, 100))
 
 
+def _triage_comment_value(comment_text: str, *, tech_keywords: frozenset = frozenset()):
+    """Pre-filter: descarta comentarios que NO merecen respuesta,
+    independientemente de si el agente podría reencuadrarlos.
+    Solo bloquea cuando TODAS las señales son negativas:
+    demasiado corto, sin pregunta ni crítica, Y off-niche.
+    Returns (skip: bool, reason: str)."""
+    if not comment_text or not isinstance(comment_text, str):
+        return True, "empty_or_invalid"
+    text = comment_text.strip()
+    text_lower = text.lower()
+
+    too_short = len(text) < 80
+
+    has_question = "?" in text_lower
+    has_critique = any(k in text_lower for k in (
+        "error", "fallo", "fail", "bug", "break", "broke", "wrong",
+        "incorrect", "should not", "how", "why", "what", "can you",
+        "does not work", "problem", "issue",
+    ))
+    no_signal = not has_question and not has_critique
+
+    tech_count = sum(1 for kw in (tech_keywords or frozenset()) if kw in text_lower)
+    off_niche = tech_count == 0
+
+    if too_short and no_signal and off_niche:
+        return True, "low_value_triage"
+
+    return False, ""
+
+
+def _compute_visibility_bonus(post: Optional[Dict[str, Any]]) -> int:
+    """Extract upvotes and comment_count from the post dict and return a
+    tiered visibility bonus (+0, +5, +10, or +15). Never negative."""
+    if not isinstance(post, dict):
+        return 0
+
+    upvotes = None
+    for k in ("score", "upvotes", "upvote_count", "points"):
+        v = post.get(k)
+        if isinstance(v, (int, float)):
+            upvotes = int(v)
+            break
+
+    comment_count = None
+    for k in ("comment_count", "comments_count"):
+        v = post.get(k)
+        if isinstance(v, int):
+            comment_count = v
+            break
+    if comment_count is None and isinstance(post.get("comments"), list):
+        comment_count = len(post["comments"])
+
+    if comment_count is None:
+        comment_count = 0
+    if upvotes is None:
+        upvotes = 0
+
+    if comment_count >= 100 or upvotes >= 50:
+        return 15
+    if comment_count >= 25 or upvotes >= 25:
+        return 10
+    if comment_count >= 5 or upvotes >= 5:
+        return 5
+    return 0
+
+
 def _decide_reply(
     pb,
     comment: Dict[str, Any],
@@ -195,6 +262,7 @@ def _decide_reply_from_post(
     comments: Optional[List[Dict]] = None,
     *,
     tech_keywords: frozenset = frozenset(),
+    post: Optional[Dict[str, Any]] = None,
 ):
     if not post_body or len(post_body.strip()) < 20:
         return RelevanceDecision(False, 0, "reply_skipped_low_relevance")
@@ -229,7 +297,15 @@ def _decide_reply_from_post(
         elif frontier_mentioned <= 2:
             score += 10
 
+    # Visibility bonus (upvotes + comment_count): desempate y priorizacion
+    # para que los posts activos consuman el presupuesto primero.
+    # NUNCA rescata posts off-niche (el post YA debe pasar el umbral base).
     should = score >= 2
+    if should and post:
+        bonus = _compute_visibility_bonus(post)
+        if bonus:
+            score += bonus
+
     reason = "reply_sent" if should else "reply_skipped_low_relevance"
     return RelevanceDecision(should, score, reason)
 

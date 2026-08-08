@@ -112,3 +112,9 @@ def _isolate_runtime_state(tmp_path, monkeypatch):
         "services.roadmap.PUBLISHED_LOG_PATH",
         tmp_path / "published_posts.json",
     )
+
+    # ── Durable per-comment dedup (services/reply_cap.py) ──
+    monkeypatch.setattr(
+        "services.reply_cap._REPLIED_COMMENT_IDS_PATH",
+        tmp_path / "replied_comment_ids_durable.json",
+    )

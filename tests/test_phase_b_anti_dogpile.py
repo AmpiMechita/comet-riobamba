@@ -224,3 +224,23 @@ class TestAntiDogpile:
         assert result1 is not None and result2 is not None, "Failure results pass through"
         assert pb.api.create_comment.call_count == 2
         assert not _counter_file(pb).exists(), "No counter file should be created on failures"
+
+
+# ── Durable per-comment dedup ────────────────────────────────
+
+class TestDurableCommentDedup:
+    def test_same_comment_id_blocked_after_mark_with_reinstantiation(self, tmp_path):
+        """Second attempt to reply to the same comment_id is blocked by the
+        persisted set, even after 're-instantiating' (reloading from disk)."""
+        dedup_path = tmp_path / "replied_comment_ids_durable.json"
+        from services.reply_cap import has_replied_to_comment, mark_replied_to_comment
+
+        dedup_key = "post-uuid-1234:0f74c66e-1234-5678-9012-abcdef123456"
+        assert not has_replied_to_comment(dedup_key, dedup_path)
+        mark_replied_to_comment(dedup_key, dedup_path)
+        assert has_replied_to_comment(dedup_key, dedup_path)
+
+        assert has_replied_to_comment(dedup_key, dedup_path), (
+            "After re-load, the same key must still be blocked"
+        )
+        assert not has_replied_to_comment("post-uuid-1234:other-id-abc", dedup_path)

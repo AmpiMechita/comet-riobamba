@@ -1,21 +1,26 @@
 # -*- coding: utf-8 -*-
-"""Authoritative monotonic per-post reply counter (anti-dogpile).
+"""Authoritative monotonic per-post reply counter (anti-dogpile) and durable
+per-comment reply dedup (cross-session, never reply to the same comment twice).
 
 Shared by Phase B (phases/phase_b/orchestrator.py) and Phase C
 (phases/engagement/responder.py) so every reply to a post draws from the
-same budget, regardless of phase.
+same budget, regardless of phase; and no comment_id receives more than one
+reply, even across days or restarts.
 
-Data: data/replies_per_post.json = {post_id: count}. The path is read
-dynamically on every call so tests can reassign it. Writes are atomic
-(temp file + os.replace). The cap (AGENT_MAX_REPLIES_PER_POST, default 3)
-is a hard guardrail: NOT in the auto-optimizer allowlist.
+Data:
+  data/replies_per_post.json         = {post_id: count}
+  data/replied_comment_ids_durable.json = {comment_id: 1, ...}
+Paths are read dynamically on every call so tests can reassign them.
+Writes are atomic (temp file + os.replace).
+The cap (AGENT_MAX_REPLIES_PER_POST, default 3) is a hard guardrail:
+NOT in the auto-optimizer allowlist.
 """
 
 import json
 import logging
 import os
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Set
 
 logger = logging.getLogger("services.reply_cap")
 
@@ -23,6 +28,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Read dynamically on every call so tests can reassign it.
 _REPLIES_PER_POST_PATH = BASE_DIR / "data" / "replies_per_post.json"
+_REPLIED_COMMENT_IDS_PATH = BASE_DIR / "data" / "replied_comment_ids_durable.json"
 
 
 def get_cap() -> int:
@@ -87,3 +93,61 @@ def increment_replies_for_post(post_id: str, path: Optional[Path] = None) -> int
     except Exception as e:
         logger.warning("reply_cap: increment failed for %s: %s", post_id, e)
         return -1
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Durable per-comment dedup (cross-session)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _load_comment_ids(path: Optional[Path] = None) -> Set[str]:
+    path = path or _REPLIED_COMMENT_IDS_PATH
+    if not path.exists():
+        return set()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return set(str(k) for k in data.keys())
+    except Exception:
+        logger.warning("reply_cap: no se pudo cargar replied_comment_ids_durable")
+    return set()
+
+
+def _save_comment_ids(ids: Set[str], path: Optional[Path] = None) -> None:
+    path = path or _REPLIED_COMMENT_IDS_PATH
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload: Dict[str, int] = {str(cid): 1 for cid in ids}
+        tmp_path = path.with_name(path.name + ".tmp")
+        tmp_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        os.replace(tmp_path, path)
+    except Exception as e:
+        logger.warning("reply_cap: no se pudo guardar replied_comment_ids: %s", e)
+
+
+def has_replied_to_comment(comment_id: str, path: Optional[Path] = None) -> bool:
+    """True if this comment_id has already received a reply. Fail-open."""
+    if not comment_id:
+        return False
+    try:
+        return str(comment_id) in _load_comment_ids(path)
+    except Exception as e:
+        logger.debug("reply_cap: dedup check failed for %s: %s", comment_id, e)
+        return False
+
+
+def mark_replied_to_comment(comment_id: str, path: Optional[Path] = None) -> bool:
+    """Persistently mark a comment_id as replied. Atomic write. Never unmarked."""
+    if not comment_id:
+        return False
+    try:
+        ids = _load_comment_ids(path)
+        ids.add(str(comment_id))
+        _save_comment_ids(ids, path)
+        return True
+    except Exception as e:
+        logger.warning("reply_cap: dedup mark failed for %s: %s", comment_id, e)
+        return False

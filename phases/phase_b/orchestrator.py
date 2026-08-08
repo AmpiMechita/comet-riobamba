@@ -747,9 +747,9 @@ class PhaseB:
         return _decide_reply(PhaseB, comment, limit_ok, is_own_post_reply, tech_keywords=PhaseB._TECH_KEYWORDS)
 
     @staticmethod
-    def _decide_reply_from_post(post_body: str, comments: Optional[List[Dict]] = None) -> RelevanceDecision:
+    def _decide_reply_from_post(post_body: str, comments: Optional[List[Dict]] = None, *, post: Optional[Dict] = None) -> RelevanceDecision:
         from .scoring import _decide_reply_from_post
-        return _decide_reply_from_post(post_body, comments, tech_keywords=PhaseB._TECH_KEYWORDS)
+        return _decide_reply_from_post(post_body, comments, tech_keywords=PhaseB._TECH_KEYWORDS, post=post)
 
     @staticmethod
     def _has_explicit_addressing(text: str) -> bool:
@@ -1375,8 +1375,7 @@ class PhaseB:
             for post in filtered_posts:
                 post_body = (post.get("content") or post.get("body") or post.get("text") or post.get("title") or "").strip()
                 post_comments = post.get("comments") or []
-                post_decision = self._decide_reply_from_post(post_body, comments=post_comments)
-                post_decision = self._allow_feed_repeat_reply(post, post_decision)
+                post_decision = self._decide_reply_from_post(post_body, comments=post_comments, post=post)
                 if not post_decision.should_reply:
                     pid = post.get("id") or post.get("post_id") or "?"
                     logger.info(
@@ -1502,7 +1501,7 @@ class PhaseB:
                         logger.info("Phase B: skip feed post %s — hard cap (%d/%d).", post_id, _feed_count, _feed_cap)
                         continue
 
-                post_decision = self._decide_reply_from_post(post_body, comments=post_comments)
+                post_decision = self._decide_reply_from_post(post_body, comments=post_comments, post=post)
                 if not post_decision.should_reply:
                     self._maybe_upvote(post_id, self._classify_topic_value(post_body, comments=post_comments))
                     send_event("phase_b_reply_skip", {
@@ -2404,6 +2403,17 @@ class PhaseB:
                 str(post_id) in own_post_ids
                 or (parent_id is not None and str(parent_id) in own_post_ids)
             )
+            # ── Triage: descartar comentarios que NO merecen respuesta ──
+            from .scoring import _triage_comment_value
+            skip_triage, triage_reason = _triage_comment_value(
+                comment_text, tech_keywords=self._TECH_KEYWORDS,
+            )
+            if skip_triage:
+                logger.info(
+                    "triage: skip low-value comment (%s) comment_id=%s",
+                    triage_reason, comment_id,
+                )
+                continue
             decision = self._decide_reply(
                 comment,
                 limit_ok=replied_count < self.max_comments_per_post,
@@ -2512,6 +2522,11 @@ class PhaseB:
         """Generate and post a reply to a comment on our own post. Returns result dict or None on failure."""
         with Span("write_comment", post_id=str(post_id)) as span:
             comment_lower = comment_text.lower()
+            # ── Durable cross-session dedup: never reply to the same comment_id twice ──
+            if reply_cap.has_replied_to_comment(f"{post_id}:{comment_id}"):
+                logger.info("Phase B: skip reply to comment %s on post %s (durable dedup).", comment_id, post_id)
+                span.set("success", False)
+                return None
             concession_keywords = [
                 "makes sense", "good point", "i agree", "you're right",
                 "fair enough", "that is true", "you are right",
@@ -2590,6 +2605,7 @@ class PhaseB:
             if success:
                 self._replied_comment_ids.add(dedup_key)
                 self._dedup.mark_replied(dedup_key)
+                reply_cap.mark_replied_to_comment(f"{post_id}:{comment_id}")
                 self.incr_comments_today()
                 send_event("phase_b_reply_success", {
                     "post_id": post_id,
@@ -2641,6 +2657,7 @@ class PhaseB:
             if 200 <= status < 300:
                 self._replied_comment_ids.add(dedup_key)
                 self._dedup.mark_replied(dedup_key)
+                reply_cap.mark_replied_to_comment(f"{post_id}:{comment_id}")
                 logger.warning(
                     "Phase B: reply to comment %s on post %s returned HTTP %s "
                     "with unverified state (id=%s); comment is on the server, "
