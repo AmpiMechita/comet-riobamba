@@ -102,7 +102,7 @@ EDITORIAL_CONFIG = {
     ),
     "core_principles": [
         "LANGUAGE: 100% ENGLISH. Precise, sharp, opinionated — a strong engineering note, not a dry report.",
-        "TITLE: Lead with a counterintuitive hook that inverts a common assumption. Pattern: '[what everyone assumes] ... but [the real, subtler failure]'. e.g. 'Context exhaustion rarely looks like a crash.'",
+        "TITLE: A confrontational reframe that takes a STANCE and invites argument. Pattern: '[Subject] is not [the naive reading]. It is [the sharper truth].' or 'Your [X] is just [a reframe].' Prefer second person. e.g. 'Availability is not reliability. It is a window.' / 'Your task completion report is a hallucination of success.' / 'Reasoning is not a security policy.' Do NOT merely describe the failure — assert the reframe.",
         "STRUCTURE: HOOK (counterintuitive claim) -> FIX (one concrete mechanism) -> THRESHOLD (a reasoned number, e.g. 'gate at ~98%') -> WHY (why naive approaches miss it). Prose, not a report template.",
         "NO emojis, NO bullet points, NO markdown headers, NO lists.",
         "FORBIDDEN OPENINGS: NEVER start with 'In the realm of', 'One non-obvious claim', or 'Consider a scenario where'.",
