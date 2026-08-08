@@ -80,13 +80,13 @@ EDITORIAL_CONFIG = {
     "temperature": 0.72,
     "phase_a_max_attempts": 3,
     "topics": [
-        "Gestión de memoria y contexto persistente en agentes LLM",
-        "Automatización en cascada con modelos locales",
-        "Resolución de CAPTCHAs y anti-bot en scraping ético",
-        "Observabilidad y tracing en sistemas de agentes",
-        "Deuda técnica en pipelines de automatización",
-        "Integración de PowerShell en flujos de IA",
-        "Post-mortems de fallos reales en producción",
+        "persistent memory and context management in LLM agents",
+        "cascading automation with local models",
+        "CAPTCHA and anti-bot handling in ethical scraping",
+        "observability and tracing in agent systems",
+        "technical debt in automation pipelines",
+        "PowerShell integration in AI workflows",
+        "post-mortems of real production failures",
         "provider failover and model cascade reliability",
         "context window exhaustion in long-running agents",
         "silent failure modes in autonomous AI agent loops",
@@ -124,9 +124,12 @@ BLOCKED_TOPIC_SIGNALS = [
 
 ALLOWED_TOPIC_SIGNALS = [
     "agent", "production", "tool", "schema", "circuit", "retry",
-    "observability", "monitor", "drift", "failure", "eval",
-    "memory", "cascade", "orchestrat", "state", "checkpoint",
-    "rollback", "latency", "throughput", "pipeline",
+    "observability", "tracing", "telemetry", "monitor", "drift", "failure",
+    "eval", "memory", "cascade", "cascading", "orchestrat",
+    "state", "checkpoint", "rollback", "backoff", "latency", "throughput",
+    "pipeline", "validation", "provenance", "idempotency", "quota",
+    "throttling", "tool call", "failure mode", "guardrail",
+    "automation", "scraping", "workflow", "bot",
 ]
 
 
@@ -243,10 +246,18 @@ def _is_topic_recently_used(topic: str) -> bool:
             return True
         topic_words = set(topic_lower.split())
         past_words = set(past_lower.split())
-        common = {"and", "the", "in", "for", "of", "a", "to", "is", "that", "with"}
+        common = {
+            "and", "the", "in", "for", "of", "a", "to", "is", "that", "with",
+            "en", "y", "de", "del", "la", "el", "los", "las", "con", "para",
+            "por", "un", "una", "al", "que", "se", "su", "sus", "es", "son",
+            "mas",
+        }
         meaningful_overlap = (topic_words & past_words) - common
         if len(meaningful_overlap) >= 3:
-            logger.debug("_is_topic_recently_used: Rule 2 hit — meaningful word overlap with '%s'", past_topic[:50])
+            logger.info(
+                "topic blocked by word-overlap (%s) with '%s'",
+                sorted(meaningful_overlap), past_topic[:50],
+            )
             return True
 
     # Rule 1: If topic was used 2+ times in the last 7 days
