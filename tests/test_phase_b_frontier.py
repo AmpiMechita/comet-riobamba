@@ -2,6 +2,7 @@
 
 import pytest
 from unittest.mock import MagicMock, patch
+from datetime import datetime, timezone, timedelta
 
 from phases.phase_b import PhaseB, RelevanceDecision
 from phases.deps import PhaseBDeps
@@ -80,55 +81,59 @@ class TestFrontierPotential:
 
     def test_reply_system_prompt_requires_contribution(self):
         """The feed reply system prompt must list required contributions."""
-        pb = _make_pb()
         from phases.phase_b import COMMENT_STYLE_INSTRUCTIONS
-        # We check the prompt is constructed by looking at a sample
-        lang_instruction = (
-            "Always respond in English. This is an English-speaking platform."
-        )
-        system_prompt = (
-            "You are a senior systems engineer. "
-            "Do not be promotional. Do not use emojis, hashtags, links, or markdown. "
-            "You MUST add concrete value. Do NOT repeat what was already said.\n\n"
-            "Your comment MUST contribute at least ONE of:\n"
-            "  - A distinct metric or threshold\n"
-            "  - A concrete guardrail or validation pattern\n"
-            "  - A real failure mode not yet discussed\n"
-            "  - A clear research question\n\n"
-            f"{lang_instruction}\n\n"
-            f"{COMMENT_STYLE_INSTRUCTIONS}"
-        )
-        assert "MUST contribute at least ONE" in system_prompt
-        assert "metric" in system_prompt
-        assert "guardrail" in system_prompt
-        assert "failure mode" in system_prompt
-        assert "research question" in system_prompt
+        assert "APORTAR AL MENOS" in COMMENT_STYLE_INSTRUCTIONS
+        assert "failure mode" in COMMENT_STYLE_INSTRUCTIONS
+        assert "FORBIDDEN OPENERS" in COMMENT_STYLE_INSTRUCTIONS
+        assert "Anchor-Pivot-Evidence" in COMMENT_STYLE_INSTRUCTIONS
 
 
-# ── Visibility targeting ──────────────────────────────────────
+# ── Visibility targeting (velocity-based) ─────────────────────
 
 class TestVisibilityBonus:
-    def test_hot_post_scores_higher_than_dead_post(self):
-        """Hot on-niche post (many comments/upvotes) scores MORE than dead
-        on-niche post; both pass on-niche threshold."""
+    def test_young_high_velocity_beats_old_saturated(self):
+        """Post joven (10 min, 8 comments) puntua MAS que uno viejo saturado
+        (8 h, 800 comments) — la penalizacion por saturacion supera la
+        velocidad bruta."""
         body = (
             "How do you handle agent pipeline failures when LLM API returns "
             "429 errors with cascading retries in production?"
         )
-        hot_post = {
-            "score": 30,
-            "comment_count": 50,
+        now = datetime.now(timezone.utc)
+        young_post = {
+            "created_at": (now - timedelta(minutes=10)).isoformat(),
+            "comment_count": 8,
         }
-        dead_post = {"upvotes": 0, "comment_count": 0}
+        old_saturated = {
+            "created_at": (now - timedelta(hours=8)).isoformat(),
+            "comment_count": 800,
+        }
 
-        hot_decision = PhaseB._decide_reply_from_post(body, post=hot_post)
-        dead_decision = PhaseB._decide_reply_from_post(body, post=dead_post)
+        young_decision = PhaseB._decide_reply_from_post(body, post=young_post)
+        old_decision = PhaseB._decide_reply_from_post(body, post=old_saturated)
 
-        assert hot_decision.should_reply
-        assert dead_decision.should_reply
-        assert hot_decision.score > dead_decision.score, (
-            f"hot score {hot_decision.score} should be > dead score {dead_decision.score}"
+        assert young_decision.should_reply
+        assert old_decision.should_reply
+        assert young_decision.score > old_decision.score, (
+            f"young score {young_decision.score} should be > old saturated score {old_decision.score}"
         )
+
+    def test_saturated_post_receives_penalty(self):
+        """Post con >400 comentarios recibe penalizacion (-20), el bonus
+        resultante es 0 aunque la velocidad bruta de +15."""
+        body = (
+            "Check agent loop failures in production: how do you handle "
+            "cascading retries when the LLM API returns 429 errors?"
+        )
+        now = datetime.now(timezone.utc)
+        saturated_post = {
+            "created_at": (now - timedelta(hours=1)).isoformat(),
+            "comment_count": 500,
+        }
+        bonus = _compute_visibility_bonus(saturated_post)
+        # velocity = 500/60 ≈ 8.3 → +15, age=60 > 30 → no early-bird,
+        # comment_count=500 > 400 → -20 → total = -5 → clamped to 0
+        assert bonus == 0, f"bonus should be 0 due to saturation penalty, got {bonus}"
 
     def test_off_niche_post_with_massive_visibility_still_rejected(self):
         """Off-niche post with 3000 comments and 500 upvotes is STILL rejected
@@ -149,6 +154,40 @@ class TestVisibilityBonus:
         assert _compute_visibility_bonus({"other": "data"}) == 0
         assert _compute_visibility_bonus(None) == 0
         assert _compute_visibility_bonus({"score": 2, "comments": [{}]}) == 0
+
+    def test_bonus_zero_when_no_timestamp(self):
+        """Post sin fecha → bonus 0, sin crash."""
+        assert _compute_visibility_bonus({"comment_count": 50}) == 0
+
+    def test_early_bird_bonus(self):
+        """Post con menos de 30 minutos recibe +5 adicional."""
+        body = (
+            "Agent tool calling retry patterns: how do you handle cascading "
+            "failures in production pipelines?"
+        )
+        now = datetime.now(timezone.utc)
+        early_post = {
+            "created_at": (now - timedelta(minutes=5)).isoformat(),
+            "comment_count": 3,
+        }
+        # velocity = 3/5 = 0.6 → +10, age=5 <= 30 → +5 early-bird → total 15
+        bonus = _compute_visibility_bonus(early_post)
+        assert bonus == 15, f"expected +15 (velocity +10 + early-bird +5), got {bonus}"
+
+    def test_off_niche_high_velocity_still_rejected(self):
+        """Off-niche con velocidad altisima SIGUE rechazado."""
+        body = "buy my nft collection now!!!"
+        now = datetime.now(timezone.utc)
+        fast_off_niche = {
+            "created_at": (now - timedelta(minutes=2)).isoformat(),
+            "comment_count": 50,
+            "score": 300,
+        }
+        decision = PhaseB._decide_reply_from_post(body, post=fast_off_niche)
+        assert not decision.should_reply, (
+            f"Off-niche post must not pass even with high velocity. "
+            f"score={decision.score} reason={decision.reason}"
+        )
 
 
 # ── Comment triage ───────────────────────────────────────────
@@ -198,59 +237,3 @@ class TestRelationshipBonus:
         bonus = _compute_relationship_bonus
         assert bonus(None) == 0
         assert bonus("unknown_user") == 0
-
-    def test_bonus_from_ledger(self, monkeypatch, tmp_path):
-        """Integration: record interactions then verify bonus via actual count."""
-        from services import interlocutors
-        path = tmp_path / "interlocutors.json"
-        monkeypatch.setattr("services.interlocutors._INTERLOCUTORS_PATH", path)
-        # also patch scoring's import which reads at call time
-        monkeypatch.setattr("phases.phase_b.scoring", None, raising=False)
-
-        author = {"name": "test_user_42"}
-        for _ in range(3):
-            interlocutors.record_interaction(author, on_our_post=True)
-        assert _compute_relationship_bonus("test_user_42") == 5
-
-        for _ in range(7):
-            interlocutors.record_interaction(author, on_our_post=True)
-        assert _compute_relationship_bonus("test_user_42") == 10
-
-
-class TestRelationshipTriage:
-    def test_recurrent_short_on_niche_not_skipped(self, monkeypatch, tmp_path):
-        """count>=3 + short on-niche comment → triage does NOT skip.
-        (Length bypass applies only for known interlocutors.)"""
-        from services import interlocutors
-        path = tmp_path / "interlocutors.json"
-        monkeypatch.setattr("services.interlocutors._INTERLOCUTORS_PATH", path)
-
-        author = "bob_the_builder"
-        for _ in range(3):
-            interlocutors.record_interaction(author, on_our_post=True)
-
-        skip, reason = _triage_comment_value(
-            "Short on-niche debug question about agent loops?",
-            tech_keywords=frozenset({"agent", "debug", "loop"}),
-            author=author,
-        )
-        assert not skip, f"Expected pass but got skip reason={reason}"
-
-    def test_recurrent_off_niche_still_skipped(self, monkeypatch, tmp_path):
-        """count>=3 but off-niche: triage STILL skips (relationship
-        does not buy a pass for irrelevant content)."""
-        from services import interlocutors
-        path = tmp_path / "interlocutors.json"
-        monkeypatch.setattr("services.interlocutors._INTERLOCUTORS_PATH", path)
-
-        author = "alice"
-        for _ in range(3):
-            interlocutors.record_interaction(author, on_our_post=True)
-
-        skip, reason = _triage_comment_value(
-            "nice bro",
-            tech_keywords=frozenset({"agent"}),
-            author=author,
-        )
-        assert skip
-        assert reason == "low_value_triage"

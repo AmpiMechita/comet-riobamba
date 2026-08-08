@@ -1727,27 +1727,52 @@ class PhaseB:
         return n in a or a in n
 
     def _fetch_candidate_posts(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """Fetch feed candidates from both 'hot' and 'new' sort orders,
+        deduplicate by post_id, and apply age/submolt filters."""
         try:
-            resp: APIResponse = self.api.get_feed(limit=limit, sort="hot")
-            if not getattr(resp, "success", False):
-                logger.warning(
-                    "Phase B: get_feed falló status=%s error=%s",
-                    getattr(resp, "status", None) or getattr(resp, "status_code", None),
-                    getattr(resp, "error", None),
-                )
-                return []
+            all_posts: Dict[str, Dict[str, Any]] = {}
+            sources: Dict[str, int] = {}
 
-            data = getattr(resp, "data", None)
-            if isinstance(data, dict):
-                posts = data.get("posts", [])
-            elif isinstance(data, list):
-                posts = data
-            else:
-                posts = []
+            for sort_order in ("hot", "new"):
+                resp: APIResponse = self.api.get_feed(limit=limit, sort=sort_order)
+                if not getattr(resp, "success", False):
+                    logger.warning(
+                        "Phase B: get_feed sort=%s falló status=%s error=%s",
+                        sort_order,
+                        getattr(resp, "status", None) or getattr(resp, "status_code", None),
+                        getattr(resp, "error", None),
+                    )
+                    sources[sort_order] = 0
+                    continue
 
-            if not isinstance(posts, list):
-                logger.warning("Phase B: estructura inesperada en get_feed.")
-                return []
+                data = getattr(resp, "data", None)
+                if isinstance(data, dict):
+                    posts_list = data.get("posts", [])
+                elif isinstance(data, list):
+                    posts_list = data
+                else:
+                    posts_list = []
+
+                if not isinstance(posts_list, list):
+                    logger.warning("Phase B: estructura inesperada en get_feed sort=%s.", sort_order)
+                    posts_list = []
+
+                added = 0
+                for p in posts_list:
+                    if not isinstance(p, dict):
+                        continue
+                    pid = p.get("id") or p.get("post_id") or ""
+                    if pid and pid not in all_posts:
+                        all_posts[pid] = p
+                        added += 1
+                sources[sort_order] = added
+
+            logger.info(
+                "Phase B: feed sources — hot=%s, new=%s, unique_total=%s",
+                sources.get("hot", 0), sources.get("new", 0), len(all_posts),
+            )
+
+            posts = list(all_posts.values())
 
             filtered: List[Dict[str, Any]] = []
             blocked_count = 0

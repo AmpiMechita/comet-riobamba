@@ -179,39 +179,79 @@ def _triage_comment_value(
 
 
 def _compute_visibility_bonus(post: Optional[Dict[str, Any]]) -> int:
-    """Extract upvotes and comment_count from the post dict and return a
-    tiered visibility bonus (+0, +5, +10, or +15). Never negative."""
+    """Bonus por velocidad de engagement + penalizacion por saturacion.
+
+    - Detecta la edad del post via 'created_at', 'published_at', 'createdAt',
+      'timestamp' (ISO 8601). Si no hay fecha → bonus 0 (fail-safe).
+    - velocity = comment_count / max(age_minutes, 1)
+    - Bonus: +15 si velocity >= 1.0, +10 si >= 0.3, +5 si >= 0.1
+    - Early-bird: +5 adicional si age_minutes <= 30
+    - Penalizacion por saturacion:
+        -10 si comment_count > 150
+        -20 si comment_count > 400
+    - El total se clamp a >= 0 para no romper el umbral de relevancia.
+    - Se aplica SOLO tras pasar el umbral on-niche (el caller lo garantiza).
+    """
     if not isinstance(post, dict):
         return 0
 
-    upvotes = None
-    for k in ("score", "upvotes", "upvote_count", "points"):
-        v = post.get(k)
-        if isinstance(v, (int, float)):
-            upvotes = int(v)
-            break
+    comment_count = _extract_comment_count(post)
 
-    comment_count = None
+    age_minutes = _extract_age_minutes(post)
+    if age_minutes is None:
+        return 0
+
+    bonus = 0
+
+    velocity = comment_count / max(age_minutes, 1)
+    if velocity >= 1.0:
+        bonus += 15
+    elif velocity >= 0.3:
+        bonus += 10
+    elif velocity >= 0.1:
+        bonus += 5
+
+    if age_minutes <= 30:
+        bonus += 5
+
+    if comment_count > 400:
+        bonus -= 20
+    elif comment_count > 150:
+        bonus -= 10
+
+    return max(0, bonus)
+
+
+def _extract_comment_count(post: Dict[str, Any]) -> int:
     for k in ("comment_count", "comments_count"):
         v = post.get(k)
-        if isinstance(v, int):
-            comment_count = v
-            break
-    if comment_count is None and isinstance(post.get("comments"), list):
-        comment_count = len(post["comments"])
-
-    if comment_count is None:
-        comment_count = 0
-    if upvotes is None:
-        upvotes = 0
-
-    if comment_count >= 100 or upvotes >= 50:
-        return 15
-    if comment_count >= 25 or upvotes >= 25:
-        return 10
-    if comment_count >= 5 or upvotes >= 5:
-        return 5
+        if isinstance(v, (int, float)):
+            return int(v)
+    if isinstance(post.get("comments"), list):
+        return len(post["comments"])
+    if isinstance(post.get("commentCount"), (int, float)):
+        return int(post["commentCount"])
     return 0
+
+
+def _extract_age_minutes(post: Dict[str, Any]) -> Optional[float]:
+    from datetime import datetime, timezone
+    ts_raw = None
+    for key in ("created_at", "published_at", "createdAt", "timestamp"):
+        ts_raw = post.get(key)
+        if ts_raw:
+            break
+    if not ts_raw:
+        return None
+    try:
+        ts_str = str(ts_raw).replace("Z", "+00:00")
+        post_dt = datetime.fromisoformat(ts_str)
+        if post_dt.tzinfo is None:
+            post_dt = post_dt.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        return max(0.0, (now - post_dt).total_seconds() / 60.0)
+    except Exception:
+        return None
 
 
 def _compute_relationship_bonus(author) -> int:
