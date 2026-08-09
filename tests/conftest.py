@@ -124,3 +124,12 @@ def _isolate_runtime_state(tmp_path, monkeypatch):
         "services.reply_cap._REPLIED_COMMENT_IDS_PATH",
         tmp_path / "replied_comment_ids_durable.json",
     )
+
+    # ── Cross-cycle reply history (phases/phase_b/orchestrator.py) ──
+    # Aísla data/reply_history.json por test: el path de feed-reply escribe
+    # aquí al publicar, y sin redirect contamina el archivo real (haciendo
+    # que el check anti-dupe cross-ciclo bloquee mocks en corridas siguientes).
+    monkeypatch.setattr(
+        "phases.phase_b.orchestrator._REPLY_HISTORY_PATH",
+        tmp_path / "reply_history.json",
+    )

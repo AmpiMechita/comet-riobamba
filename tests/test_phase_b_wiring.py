@@ -306,8 +306,15 @@ async def test_feed_reply_gate_uses_thread_count():
         patch.object(phase_b, "_check_and_prevent_duplicate", AsyncMock(return_value="A circuit breaker pattern with a 200ms timeout avoids cascade failures. The key threshold is the retry budget per upstream dependency.")),
         patch.object(phase_b.api, "create_comment", return_value={"success": True, "id": "c1"}),
     ):
-        import phases.phase_b as _pb_mod
-        with patch.object(_pb_mod, "_save_commented_post_ids"):
+        import phases.phase_b.orchestrator as _orch
+        # Patch on the orchestrator module — that is where PhaseB methods
+        # resolve these bare names. Isolate reply-history from disk so the
+        # test is deterministic and does not pollute data/reply_history.json.
+        with (
+            patch.object(_orch, "_save_commented_post_ids"),
+            patch.object(_orch, "_is_semantic_dupe_against_history", return_value=False),
+            patch.object(_orch, "_append_to_reply_history"),
+        ):
             results = await phase_b._execute_feed_replies()
 
     assert len(results) == 1
@@ -345,13 +352,15 @@ async def test_feed_reply_persists_dedup_key():
         patch.object(phase_b, "_check_and_prevent_duplicate", AsyncMock(return_value="A circuit breaker pattern with a 200ms timeout avoids cascade failures. The key threshold is the retry budget per upstream dependency.")),
         patch.object(phase_b.api, "create_comment", return_value={"success": True, "id": "c1"}),
     ):
-        import phases.phase_b as _pb_mod
+        import phases.phase_b.orchestrator as _orch
+        # Patch on the orchestrator module — PhaseB methods resolve these
+        # bare names in the orchestrator namespace, not the package.
         with (
-            patch.object(_pb_mod, "_save_agent_comment_ids"),
-            patch.object(_pb_mod, "_save_replied_comment_ids"),
-            patch.object(_pb_mod, "_save_commented_post_ids"),
-            patch.object(_pb_mod, "_is_semantic_dupe_against_history", return_value=False),
-            patch.object(_pb_mod, "_append_to_reply_history"),
+            patch.object(_orch, "_save_agent_comment_ids"),
+            patch.object(_orch, "_save_replied_comment_ids"),
+            patch.object(_orch, "_save_commented_post_ids"),
+            patch.object(_orch, "_is_semantic_dupe_against_history", return_value=False),
+            patch.object(_orch, "_append_to_reply_history"),
         ):
             await phase_b._execute_feed_replies()
 
