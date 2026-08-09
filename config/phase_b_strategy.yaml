@@ -83,6 +83,8 @@ submolt_strategy:
     - m/technology
     - m/agentstack
     - m/ai
+    - m/agents        # nicho exacto del agente (3.413 miembros)
+    - m/builds
   distribution_targets:
     m_general: 40
     m_infrastructure: 25

@@ -125,6 +125,22 @@ def _isolate_runtime_state(tmp_path, monkeypatch):
         tmp_path / "replied_comment_ids_durable.json",
     )
 
+    # ── DedupStore SQLite (services/dedup_store.py) — GLOBAL isolation ──
+    # Causa raíz de la contaminación del store real: cualquier test que
+    # construyera PhaseB() (→ DedupStore()) sin un fixture puntual escribía en
+    # el data/comet_dedup.db REAL, dejando claves de test (p1, new_post) que
+    # rompen el matching de parent_id del seguimiento de hilos. Redirigimos el
+    # path por defecto a tmp para TODOS los tests. Además vaciamos
+    # _JSON_NAMESPACES para que la migración inicial no siembre los data/*.json
+    # reales dentro del store de test (el db en tmp arranca vacío → count=0).
+    # Los fixtures por-archivo que ya reasignan estos valores siguen ganando
+    # (corren después de este autouse) y su restore no filtra.
+    monkeypatch.setattr(
+        "services.dedup_store.DedupStore._default_db_path",
+        tmp_path / "comet_dedup.db",
+    )
+    monkeypatch.setattr("services.dedup_store._JSON_NAMESPACES", [])
+
     # ── Cross-cycle reply history (phases/phase_b/orchestrator.py) ──
     # Aísla data/reply_history.json por test: el path de feed-reply escribe
     # aquí al publicar, y sin redirect contamina el archivo real (haciendo

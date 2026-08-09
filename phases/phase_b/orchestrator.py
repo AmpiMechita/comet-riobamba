@@ -252,8 +252,26 @@ def _detect_cluster(text: str) -> str:
 
 
 
+def _strip_submolt_prefix(name: Any) -> str:
+    """Normaliza un nombre de submolt a su forma canónica sin prefijo.
+
+    Quita UN prefijo 'm/' inicial de forma correcta (prefix strip real).
+    Importante: NO usar str.lstrip('m/'), que opera por conjunto de caracteres
+    y mutila nombres como 'm/memory' → 'emory' o 'm/mvcc' → 'vcc'.
+    """
+    n = str(name).strip().lower()
+    return n[2:] if n.startswith("m/") else n
+
+
 def _load_allowed_submolts() -> frozenset:
-    """Load allowed submolts from phase_b_strategy.yaml, with fallback defaults."""
+    """Load allowed submolts from phase_b_strategy.yaml, with fallback defaults.
+
+    Devuelve un frozenset de nombres CANÓNICOS sin prefijo 'm/', deduplicado.
+    Antes se guardaban ambas variantes (con y sin 'm/') del mismo submolt, lo
+    que ensuciaba los logs del gate con entradas repetidas
+    (['agentstack','agentstack','ai','ai',...]). Ahora hay una sola forma por
+    submolt; el matching normaliza el submolt entrante con _strip_submolt_prefix.
+    """
     try:
         strategy_file = BASE_DIR / "config" / "phase_b_strategy.yaml"
         if strategy_file.exists():
@@ -261,42 +279,22 @@ def _load_allowed_submolts() -> frozenset:
             strategy = yaml.safe_load(strategy_file.read_text(encoding="utf-8")) or {}
             allowed = strategy.get("submolt_strategy", {}).get("allowed_submolts", [])
             if allowed:
-                result = set()
-                for s in allowed:
-                    clean = str(s).strip().lower()
-                    result.add(clean)
-                    if clean.startswith("m/"):
-                        result.add(clean[2:])
-                    else:
-                        result.add(f"m/{clean}")
+                result = frozenset(
+                    _strip_submolt_prefix(s) for s in allowed if str(s).strip()
+                )
                 logger.debug("_load_allowed_submolts: loaded from YAML: %s", sorted(result))
-                return frozenset(result)
+                return result
     except Exception as e:
         logger.warning("_load_allowed_submolts: failed to load from YAML: %s", e)
-    # v5.0 fallback: ensure m/openclaw-explorers is included
-    default = {
-        "agents", "m/agents",
-        "general", "m/general",
-        "ai", "m/ai",
-        "agentstack", "m/agentstack",
-        "security", "m/security",
-        "aisafety", "m/aisafety",
-        "technology", "m/technology",
-        "infrastructure", "m/infrastructure",
-        "openclaw-explorers", "m/openclaw-explorers",
-        "tooling", "m/tooling",
-        "memory", "m/memory",
-        "builds", "m/builds",
-        "buildlogs", "m/buildlogs",
-        "todayilearned", "m/todayilearned",
-        "aithoughts", "m/aithoughts",
-        "agentskills", "m/agentskills",
-        "trading", "m/trading",
-        "crypto", "m/crypto",
-        "agentfinance", "m/agentfinance",
-        "agenteconomy", "m/agenteconomy",
-    }
-    return frozenset(default)
+    # Fallback canónico (YAML no disponible): una sola forma por submolt,
+    # incluye m/openclaw-explorers, m/agents y m/builds.
+    default = frozenset({
+        "agents", "general", "ai", "agentstack", "security", "aisafety",
+        "technology", "infrastructure", "openclaw-explorers", "tooling",
+        "memory", "builds", "buildlogs", "todayilearned", "aithoughts",
+        "agentskills", "trading", "crypto", "agentfinance", "agenteconomy",
+    })
+    return default
 
 
 ALLOWED_SUBMOLTS = _load_allowed_submolts()
@@ -2205,10 +2203,10 @@ class PhaseB:
                     continue
                 # v5.0: Allowlist gate — only keep posts from allowed submolts (when submolt present)
                 if sub_name:
-                    sub_clean = sub_name.lstrip("m/")
-                    if ALLOWED_SUBMOLTS and sub_clean not in {s.lstrip("m/") for s in ALLOWED_SUBMOLTS}:
+                    sub_clean = _strip_submolt_prefix(sub_name)
+                    if ALLOWED_SUBMOLTS and sub_clean not in ALLOWED_SUBMOLTS:
                         allowlist_blocked_count += 1
-                        logger.info("Phase B: post %s REJECTED (submolt='%s' not in allowlist=%s)", p.get("id"), sub_name, sorted(s.lstrip('m/') for s in ALLOWED_SUBMOLTS))
+                        logger.info("Phase B: post %s REJECTED (submolt='%s' not in allowlist=%s)", p.get("id"), sub_name, sorted(ALLOWED_SUBMOLTS))
                         continue
                 filtered.append(p)
 

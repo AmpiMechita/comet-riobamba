@@ -8,6 +8,7 @@ JSON files are NOT deleted — read-only compatibility preserved.
 
 import json
 import logging
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -15,6 +16,18 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set
 
 logger = logging.getLogger("services.dedup_store")
+
+# Valid Moltbook post_id = UUID. The post-keyed namespaces (agent_comment,
+# commented_post) must never persist synthetic/test keys like 'p1' or
+# 'new_post': they pollute parent_id matching used by thread follow-ups.
+_POST_ID_UUID_RE = re.compile(
+    r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+    re.IGNORECASE,
+)
+
+
+def _is_valid_post_key(key) -> bool:
+    return isinstance(key, str) and bool(_POST_ID_UUID_RE.match(key))
 
 _JSON_NAMESPACES: List[tuple] = [
     # (namespace, json_path, format_type)
@@ -256,13 +269,15 @@ class DedupStore:
         self._remove("commented_post", post_id)
 
     def sync_commented_post_ids(self, ids: Dict[str, str]) -> None:
+        # Filtra claves con post_id inválido (no-UUID) para que datos de test
+        # como 'new_post' no vuelvan a persistirse en el store real.
         with self._get_conn() as conn:
             conn.execute(
                 "DELETE FROM dedup_store WHERE namespace='commented_post'"
             )
             conn.executemany(
                 "INSERT INTO dedup_store (namespace, key, value) VALUES ('commented_post', ?, ?)",
-                [(k, v) for k, v in ids.items()],
+                [(k, v) for k, v in ids.items() if _is_valid_post_key(k)],
             )
 
     # ── Agent own comment IDs ────────────────────────────────
@@ -290,13 +305,15 @@ class DedupStore:
             return result
 
     def sync_agent_comment_ids(self, data: Dict[str, list]) -> None:
+        # Filtra claves con post_id inválido (no-UUID): datos de test como 'p1'
+        # ensucian el matching de parent_id del seguimiento de hilos.
         with self._get_conn() as conn:
             conn.execute(
                 "DELETE FROM dedup_store WHERE namespace='agent_comment'"
             )
             conn.executemany(
                 "INSERT INTO dedup_store (namespace, key, value) VALUES ('agent_comment', ?, ?)",
-                [(k, json.dumps(v, ensure_ascii=False)) for k, v in data.items()],
+                [(k, json.dumps(v, ensure_ascii=False)) for k, v in data.items() if _is_valid_post_key(k)],
             )
 
     # ── Thread authors ───────────────────────────────────────
