@@ -29,6 +29,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Read dynamically on every call so tests can reassign it.
 _REPLIES_PER_POST_PATH = BASE_DIR / "data" / "replies_per_post.json"
 _REPLIED_COMMENT_IDS_PATH = BASE_DIR / "data" / "replied_comment_ids_durable.json"
+# Threaded follow-ups per post (conversación viva). Separate budget from the
+# anti-dogpile top-level counter above: a live threaded conversation is NOT a
+# dogpile, so it draws from its own cap (AGENT_MAX_FOLLOWUPS_PER_POST).
+_FOLLOWUPS_PER_POST_PATH = BASE_DIR / "data" / "followups_per_post.json"
 
 
 def get_cap() -> int:
@@ -92,6 +96,43 @@ def increment_replies_for_post(post_id: str, path: Optional[Path] = None) -> int
         return counts[key]
     except Exception as e:
         logger.warning("reply_cap: increment failed for %s: %s", post_id, e)
+        return -1
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Threaded follow-up counter (per-post, separate from anti-dogpile)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def get_followups_cap() -> int:
+    """Per-post cap on threaded follow-ups (env-only, NOT auto-optimizable)."""
+    try:
+        return int(os.getenv("AGENT_MAX_FOLLOWUPS_PER_POST", "3"))
+    except (TypeError, ValueError):
+        return 3
+
+
+def get_followups_for_post(post_id: str, path: Optional[Path] = None) -> int:
+    """Follow-up counter value for a post (0 when missing). Fail-open."""
+    path = path or _FOLLOWUPS_PER_POST_PATH
+    try:
+        return _load(path).get(str(post_id), 0)
+    except Exception as e:
+        logger.debug("reply_cap: followups read failed for %s: %s", post_id, e)
+        return 0
+
+
+def increment_followups_for_post(post_id: str, path: Optional[Path] = None) -> int:
+    """Increment and atomically persist the follow-up counter. Never decremented."""
+    path = path or _FOLLOWUPS_PER_POST_PATH
+    try:
+        counts = _load(path)
+        key = str(post_id)
+        counts[key] = counts.get(key, 0) + 1
+        _save(counts, path)
+        return counts[key]
+    except Exception as e:
+        logger.warning("reply_cap: followups increment failed for %s: %s", post_id, e)
         return -1
 
 

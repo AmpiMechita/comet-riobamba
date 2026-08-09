@@ -67,7 +67,7 @@ from .constants import (
     MAX_CONVERSATION_DEPTH,
     _OWN_POST_REPLY_SCORE_LIMIT,
 )
-from .scoring import RelevanceDecision, _get_feed_min_score, text_has_fabricated_measurement
+from .scoring import RelevanceDecision, _get_feed_min_score, text_has_fabricated_measurement, _triage_comment_value
 from . import constants as _constants_mod
 
 
@@ -709,6 +709,9 @@ class PhaseB:
         # ── Anti-dogpile: hard per-post reply cap (env-only, NOT auto-optimizable) ──
         self.max_replies_per_post = reply_cap.get_cap()
         self._replies_per_post_path: Path = reply_cap._REPLIES_PER_POST_PATH
+        # ── Threaded follow-ups: per-post cap independiente del anti-dogpile ──
+        self.max_followups_per_post = reply_cap.get_followups_cap()
+        self._followups_per_post_path: Path = reply_cap._FOLLOWUPS_PER_POST_PATH
         self._last_comment_per_thread: Dict[str, str] = {}
         self._dedup = DedupStore()
         self._dedup.cleanup(older_than_hours=24)
@@ -961,6 +964,17 @@ class PhaseB:
         path = getattr(self, "_replies_per_post_path", None) or reply_cap._REPLIES_PER_POST_PATH
         return reply_cap.increment_replies_for_post(post_id, path=path)
 
+    def _get_followups_count(self, post_id: str) -> int:
+        """Monotonic per-post threaded follow-up counter (separate budget from
+        the anti-dogpile top-level counter)."""
+        path = getattr(self, "_followups_per_post_path", None) or reply_cap._FOLLOWUPS_PER_POST_PATH
+        return reply_cap.get_followups_for_post(post_id, path=path)
+
+    def _increment_followups_count(self, post_id: str) -> int:
+        """Increment and atomically persist the per-post follow-up counter."""
+        path = getattr(self, "_followups_per_post_path", None) or reply_cap._FOLLOWUPS_PER_POST_PATH
+        return reply_cap.increment_followups_for_post(post_id, path=path)
+
     def _reconcile_deleted_agent_comments(self, post_id: str) -> None:
         """Prune recorded agent comment IDs that no longer exist on the platform
         (HTTP 404). Deleted comments would otherwise count toward the per-post
@@ -997,8 +1011,16 @@ class PhaseB:
 
 
 
-    def _safe_publish_comment(self, post_id: str, content: str, parent_comment_id: Optional[str] = None) -> Optional[Dict]:
-        """Publish a comment with safety checks. Returns result dict or None if blocked."""
+    def _safe_publish_comment(self, post_id: str, content: str, parent_comment_id: Optional[str] = None,
+                              is_followup: bool = False) -> Optional[Dict]:
+        """Publish a comment with safety checks. Returns result dict or None if blocked.
+
+        is_followup=True marca una respuesta enhebrada dentro de una conversación
+        viva (respuesta a una respuesta a NUESTRO comentario). Estos NO cuentan
+        para el contador anti-dogpile por post (que existe para frenar el apilado
+        de comentarios top-level), ni son bloqueados por su cap: sostener una
+        conversación no es un dogpile. Su límite propio es
+        AGENT_MAX_FOLLOWUPS_PER_POST, controlado por el caller."""
         # v5.1: Quality gate — length (50-500) + banned openers only
         if not self._passes_quality_gate(content):
             text_len = len(content.strip())
@@ -1049,7 +1071,8 @@ class PhaseB:
             # ── Anti-dogpile: monotonic per-post cap (feed + own-post) ──
             # Hard guardrail (env AGENT_MAX_REPLIES_PER_POST, default 3),
             # independent of feed payload. Only for UUID post IDs.
-            if len(post_id) > 10:
+            # Follow-ups enhebrados están exentos: conversar no es apilar.
+            if len(post_id) > 10 and not is_followup:
                 current_count = self._get_replies_per_post(post_id)
                 if current_count >= self.max_replies_per_post:
                     logger.info(
@@ -1085,7 +1108,8 @@ class PhaseB:
                     return None
 
                 # ── Anti-dogpile: count published replies (2xx, not spam) ──
-                if len(post_id) > 10 and 200 <= status < 300:
+                # Follow-ups enhebrados no consumen este contador (tienen el suyo).
+                if len(post_id) > 10 and 200 <= status < 300 and not is_followup:
                     new_count = self._increment_replies_per_post(post_id)
                     logger.info(
                         "anti-dogpile: post %s now at %d/%d",
@@ -1239,7 +1263,22 @@ class PhaseB:
                 feed_budget_pct,
             )
 
-            # Feed replies with reserved budget
+            # ── Prioridad: continuar > empezar ──────────────────────
+            # Sostener una conversación viva (respuesta dentro de un hilo
+            # enhebrado) vale más que un comentario frío en un hilo nuevo.
+            # Por eso los follow-ups corren ANTES que los feed replies y
+            # consumen del MISMO presupuesto de feed.
+            followup_results: List[Dict[str, Any]] = []
+            if self.deps.behavior_cfg.get("phase_b_feed_replies", True):
+                if self.get_comments_today() < self.max_comments_per_day and remaining_cycle > 0:
+                    followup_results = await self._execute_thread_followups(
+                        remaining_cycle_slots=remaining_cycle,
+                    )
+
+            followup_count = len(followup_results)
+            remaining_cycle = max(0, remaining_cycle - followup_count)
+
+            # Feed replies with reserved budget (lo que quede tras follow-ups)
             if self.deps.behavior_cfg.get("phase_b_feed_replies", True):
                 if self.get_comments_today() < self.max_comments_per_day and remaining_cycle > 0:
                     feed_results = await self._execute_feed_replies(remaining_cycle_slots=remaining_cycle)
@@ -1251,27 +1290,31 @@ class PhaseB:
                     )
 
             feed_count = len(feed_results)
-            total = own_count + feed_count
+            total = own_count + followup_count + feed_count
             self._stats["upvotes"] = self._upvotes_this_cycle
             self._stats["follows"] = self._follows_this_cycle
             semantic_count = self._stats.get("semantic_candidates", 0)
             logger.info(
-                "Phase B: cycle summary — own-post replies=%s, feed replies=%s, "
-                "upvotes=%s, follows=%s, semantic_candidates=%s, claim-check failures=%s, total=%s",
-                own_count, feed_count, self._upvotes_this_cycle,
+                "Phase B: cycle summary — own-post replies=%s, thread follow-ups=%s, "
+                "feed replies=%s, upvotes=%s, follows=%s, semantic_candidates=%s, "
+                "claim-check failures=%s, total=%s",
+                own_count, followup_count, feed_count, self._upvotes_this_cycle,
                 self._follows_this_cycle, semantic_count, self._stats.get("claim_check_failed", 0), total,
             )
             span.set("feed_replies", feed_count)
             span.set("own_replies", own_count)
+            span.set("thread_followups", followup_count)
             return {
                 "success": total > 0,
                 "replies_published": total,
                 "debate_continuations": 0,
+                "thread_followups": followup_count,
                 "claim_check_failures": self._stats.get("claim_check_failed", 0),
                 "upvotes": self._upvotes_this_cycle,
                 "follows": self._follows_this_cycle,
                 "semantic_candidates": semantic_count,
                 "feed_replies": feed_results,
+                "thread_followup_replies": followup_results,
                 "own_post_replies": own_results,
             }
 
@@ -1367,6 +1410,279 @@ class PhaseB:
         return reply_text
 
     # ── Feed replies (antes phase_b_replies.py) ───────────────────
+
+    async def _execute_thread_followups(self, remaining_cycle_slots: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Sostener conversaciones vivas: responder a las respuestas que otros
+        dieron a NUESTROS comentarios en posts ajenos (feed).
+
+        El agente comenta en el feed y nunca vuelve; si alguien responde a su
+        comentario, la conversación muere. Este camino cierra ese hueco.
+
+        Distinción clave:
+          - apilar comentarios TOP-LEVEL en un post = DOGPILE (malo) → anti-dogpile
+          - sostener un hilo enhebrado = CONVERSACIÓN (buena) → esta función
+
+        Se revisitan solo los posts comentados en las últimas 48 h (los más
+        viejos ya están muertos). Cada respuesta se publica ENHEBRADA
+        (parent_comment_id = comentario que nos respondió), con dedup durable,
+        triage de calidad + bonus de interlocutor, límite de profundidad
+        (MAX_CONVERSATION_DEPTH) y cap propio (AGENT_MAX_FOLLOWUPS_PER_POST).
+        Consume del mismo presupuesto de feed que _execute_feed_replies."""
+        with Span("thread_followups") as span:
+            if not self.llm:
+                logger.warning("Phase B: model_cascade no disponible; se omiten thread follow-ups.")
+                span.set("posted", 0)
+                return []
+
+            results: List[Dict[str, Any]] = []
+            posts_revisited = 0
+
+            effective_cycle_limit = (
+                remaining_cycle_slots if remaining_cycle_slots is not None
+                else self.max_replies_per_cycle
+            )
+            cycle_count = 0
+
+            # ── Solo posts ajenos comentados en las últimas 48 h ──
+            cutoff = datetime.now() - timedelta(hours=48)
+            recent_post_ids: List[str] = []
+            for pid, ts in self._commented_post_ids.items():
+                if not isinstance(pid, str):
+                    continue
+                try:
+                    ts_dt = datetime.fromisoformat(ts) if isinstance(ts, str) else None
+                except (ValueError, TypeError):
+                    ts_dt = None
+                if ts_dt is not None and ts_dt >= cutoff:
+                    recent_post_ids.append(pid)
+
+            if not recent_post_ids:
+                logger.info("Phase B: sin posts revisitables para follow-ups (ninguno en 48 h).")
+                span.set("posted", 0)
+                return []
+
+            from services import interlocutors
+
+            for post_id in recent_post_ids:
+                if self.get_comments_today() >= self.max_comments_per_day:
+                    logger.info(
+                        "Phase B: skip follow-ups — daily limit (%s/%s).",
+                        self.get_comments_today(), self.max_comments_per_day,
+                    )
+                    break
+                if cycle_count >= effective_cycle_limit:
+                    logger.info(
+                        "Phase B: skip follow-ups — cycle limit (%s/%s).",
+                        cycle_count, effective_cycle_limit,
+                    )
+                    break
+
+                our_comment_ids = self._agent_comment_ids.get(post_id, [])
+                if not our_comment_ids:
+                    continue
+
+                # ── Cap propio de follow-ups por post (independiente del anti-dogpile) ──
+                followups_done = self._get_followups_count(post_id)
+                if followups_done >= self.max_followups_per_post:
+                    logger.info(
+                        "Phase B: skip follow-ups en post %s — cap propio (%d/%d).",
+                        post_id, followups_done, self.max_followups_per_post,
+                    )
+                    continue
+
+                try:
+                    comments = self.api.fetch_post_comments(post_id)
+                except Exception as e:
+                    logger.warning("Phase B: error fetching comments (follow-up) post %s: %s", post_id, e)
+                    continue
+                if not comments:
+                    continue
+
+                our_id_set = {str(cid) for cid in our_comment_ids}
+                # Respuestas A NUESTROS comentarios (parent_id apunta a uno nuestro),
+                # excluyendo las nuestras propias.
+                replies_to_us = [
+                    c for c in comments
+                    if isinstance(c, dict)
+                    and str(c.get("parent_id") or "") in our_id_set
+                    and not self._is_own_author(self._get_author_name(c))
+                ]
+                if not replies_to_us:
+                    continue
+
+                post_touched = False
+                for reply_comment in replies_to_us:
+                    if self.get_comments_today() >= self.max_comments_per_day:
+                        break
+                    if cycle_count >= effective_cycle_limit:
+                        break
+                    if followups_done >= self.max_followups_per_post:
+                        logger.info(
+                            "Phase B: post %s alcanzó cap de follow-ups (%d/%d).",
+                            post_id, followups_done, self.max_followups_per_post,
+                        )
+                        break
+
+                    reply_id = reply_comment.get("id") or reply_comment.get("comment_id")
+                    if not reply_id:
+                        continue
+                    reply_text = (reply_comment.get("content") or reply_comment.get("text") or "").strip()
+                    if not reply_text:
+                        continue
+                    reply_author = self._get_author_name(reply_comment) or "usuario"
+
+                    # ── Dedup durable: nunca responder dos veces el mismo comentario ──
+                    if reply_cap.has_replied_to_comment(f"{post_id}:{reply_id}"):
+                        logger.info(
+                            "Phase B: skip follow-up a comentario %s en post %s (durable dedup).",
+                            reply_id, post_id,
+                        )
+                        continue
+
+                    # ── Guard de profundidad: no seguir más allá de MAX_CONVERSATION_DEPTH ──
+                    depth = self._compute_thread_depth(reply_comment, comments)
+                    if depth >= MAX_CONVERSATION_DEPTH:
+                        logger.info(
+                            "Phase B: skip follow-up — profundidad %s >= max %s (post %s, comment %s).",
+                            depth, MAX_CONVERSATION_DEPTH, post_id, reply_id,
+                        )
+                        continue
+
+                    # ── Triage de calidad + bonus de interlocutor ──
+                    skip_triage, triage_reason = _triage_comment_value(
+                        reply_text,
+                        tech_keywords=self._TECH_KEYWORDS,
+                        author=reply_comment.get("author"),
+                    )
+                    if skip_triage:
+                        logger.info(
+                            "Phase B: skip follow-up a comentario %s (triage: %s).",
+                            reply_id, triage_reason,
+                        )
+                        continue
+
+                    # ── Ledger: observación de la respuesta a nuestro comentario ──
+                    interlocutors.record_interaction(
+                        reply_comment.get("author"), on_our_post=False,
+                    )
+
+                    # ── Generar respuesta enhebrada (con historial del hilo) ──
+                    thread_history = self._build_thread_history(reply_comment, comments)
+                    try:
+                        followup_text = await self._generate_own_post_reply(
+                            reply_author, reply_text, thread_history,
+                        )
+                    except Exception as e:
+                        logger.warning("Phase B: error generando follow-up: %s", e)
+                        continue
+
+                    followup_text = (followup_text or "").strip()
+                    if not followup_text:
+                        continue
+                    followup_text = clean_llm_output(followup_text)
+
+                    if text_has_fabricated_measurement(followup_text):
+                        logger.warning(
+                            "Phase B: FOLLOW-UP REJECTED — fabricated measurement post_id=%s: %s",
+                            post_id, followup_text[:120],
+                        )
+                        continue
+
+                    followup_text = await self._check_and_prevent_duplicate(post_id, followup_text)
+                    if followup_text is None:
+                        continue
+                    if len(followup_text.strip()) < 40 or is_likely_truncated(followup_text):
+                        logger.info(
+                            "Phase B: skip follow-up — too short or truncated (len=%d).",
+                            len(followup_text.strip()),
+                        )
+                        continue
+
+                    # ── Publicar ENHEBRADO: parent = comentario que nos respondió ──
+                    resp = self._safe_publish_comment(
+                        post_id=str(post_id),
+                        content=followup_text,
+                        parent_comment_id=str(reply_id),
+                        is_followup=True,
+                    )
+                    if resp is None:
+                        continue
+
+                    if isinstance(resp, dict):
+                        success = bool(resp.get("success"))
+                        status = resp.get("status") or resp.get("status_code")
+                        followup_comment_id = resp.get("id")
+                        raw = resp.get("raw") if isinstance(resp.get("raw"), dict) else {}
+                        if not followup_comment_id and isinstance(raw.get("comment"), dict):
+                            followup_comment_id = raw["comment"].get("id")
+                    else:
+                        success = bool(getattr(resp, "success", False))
+                        status = getattr(resp, "status", None) or getattr(resp, "status_code", None)
+                        followup_comment_id = getattr(resp, "id", None)
+
+                    if not success:
+                        logger.warning(
+                            "Phase B: follow-up falló post_id=%s parent=%s status=%s.",
+                            post_id, reply_id, status,
+                        )
+                        enqueue_outbox("comment", {
+                            "post_id": post_id, "content": followup_text,
+                            "parent_comment_id": str(reply_id),
+                        })
+                        continue
+
+                    # ── Éxito: dedup durable, contador propio, ledger, presupuesto ──
+                    reply_cap.mark_replied_to_comment(f"{post_id}:{reply_id}")
+                    interlocutors.record_interaction(
+                        reply_comment.get("author"), on_our_post=False,
+                    )
+                    self.incr_comments_today()
+                    followups_done = self._increment_followups_count(post_id)
+                    cycle_count += 1
+                    post_touched = True
+
+                    try:
+                        update_today_metrics(comments_published=1)
+                    except Exception as e:
+                        logger.warning("SelfEval: error registrando comments_published=1: %s", e)
+
+                    if followup_comment_id:
+                        if post_id not in self._agent_comment_ids:
+                            self._agent_comment_ids[post_id] = []
+                        self._agent_comment_ids[post_id].append(str(followup_comment_id))
+                        self._dedup.sync_agent_comment_ids(self._agent_comment_ids)
+                        _append_to_reply_history(followup_text)
+
+                    send_event("phase_b_reply_success", {
+                        "post_id": post_id,
+                        "comment_id": followup_comment_id,
+                        "parent_comment_id": str(reply_id),
+                        "kind": "thread_followup",
+                    })
+                    logger.info(
+                        "Phase B: thread follow-up publicado post_id=%s parent=%s (%d/%d).",
+                        post_id, reply_id, followups_done, self.max_followups_per_post,
+                    )
+
+                    results.append({
+                        "post_id": post_id,
+                        "comment_id": followup_comment_id,
+                        "parent_comment_id": str(reply_id),
+                        "content": followup_text,
+                        "success": True,
+                        "kind": "thread_followup",
+                    })
+                    await asyncio.sleep(self.delay_between_comments)
+
+                if post_touched:
+                    posts_revisited += 1
+
+            logger.info(
+                "Phase B: thread follow-ups=%s (posts revisitados=%s)",
+                len(results), posts_revisited,
+            )
+            span.set("posted", len(results))
+            return results
 
     async def _execute_feed_replies(self, remaining_cycle_slots: Optional[int] = None) -> List[Dict[str, Any]]:
         with Span("feed_replies") as span:
