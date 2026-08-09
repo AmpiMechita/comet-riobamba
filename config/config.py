@@ -61,7 +61,7 @@ def _validate_bounded_int(
 
 # === Configuración de Comportamiento ===
 behavior_cfg = {
-    "max_posts_per_day": _validate_bounded_int("AGENT_MAX_POSTS_PER_DAY", _POLICY.max_posts_per_day),
+    "max_posts_per_day": _validate_bounded_int("AGENT_MAX_POSTS_PER_DAY", _POLICY.max_posts_per_day, max_val=12),
     "value_review_interval_days": int(os.getenv("AGENT_VALUE_REVIEW_INTERVAL_DAYS", _POLICY.value_review_interval_days)),
     "max_comments_per_post": _validate_bounded_int("AGENT_MAX_COMMENTS_PER_POST", _POLICY.max_comments_per_post, min_val=0, max_val=10),
     "max_comments_per_day": _validate_bounded_int("AGENT_MAX_COMMENTS_PER_DAY", _POLICY.max_comments_per_day, min_val=0, max_val=80),
