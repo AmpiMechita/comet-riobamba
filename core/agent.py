@@ -735,6 +735,14 @@ class COMETRiobambaAgent:
 
         try:
             a_results: Dict[str, Any] = {}
+
+            # ── Launch Phase B in background while Phase A generates ──
+            phase_b_task = None
+            if behavior_cfg.get("phase_b_enabled") and not behavior_cfg.get("whisper_mode"):
+                send_event("phase_b_scan_start", {"cycle": self.cycle_count})
+                logger.info("Phase B: launched in background while Phase A generates")
+                phase_b_task = asyncio.create_task(self._run_phase_b())
+
             if not phase_a_blocked:
                 logger.info("Outbox: reintentando posts pendientes antes de Fase A...")
                 outbox_published = self._retry_outbox()
@@ -750,7 +758,6 @@ class COMETRiobambaAgent:
                     monitor = SelfMonitor(Path.cwd())
                     diagnosis = monitor.run_diagnosis()
                     self._phase_a_deps.self_diagnosis = diagnosis
-                    # ── Persist diagnosis to JSONL for health reporting ──
                     try:
                         diag_path = Path("data/self_diagnosis.jsonl")
                         diag_path.parent.mkdir(parents=True, exist_ok=True)
@@ -797,10 +804,14 @@ class COMETRiobambaAgent:
                     send_event("phase_a_publish_skip", {"reason": "no_content", "cycle": self.cycle_count})
 
             if behavior_cfg.get("phase_b_enabled") and not behavior_cfg.get("whisper_mode"):
-                logger.info("\nFASE B: Respuestas a Comunidad")
-                send_event("phase_b_scan_start", {"cycle": self.cycle_count})
-                b_results = await self._run_phase_b()
-                results["phase_b"] = b_results
+                if phase_b_task is not None:
+                    b_results = await phase_b_task
+                    results["phase_b"] = b_results
+                else:
+                    # Fallback: Phase B wasn't launched (whisper mode)
+                    logger.info("\nFASE B: Respuestas a Comunidad")
+                    b_results = await self._run_phase_b()
+                    results["phase_b"] = b_results
 
                 if isinstance(b_results, dict) and b_results.get("replies_published"):
                     self._safe_record_action(
