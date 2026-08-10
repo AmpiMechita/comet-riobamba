@@ -39,6 +39,7 @@ _PROVIDER_PRICES_PER_1M: Dict[str, tuple] = {
     "tier_premium_opus": (5.0, 25.0),
     "tier_fallback": (0.28, 1.14),
     "tier_flash": (0.28, 1.14),
+    "tier_quality": (0.30, 1.20),
 }
 
 
@@ -114,6 +115,7 @@ class ModelCascade:
         "premium_opus": "tier_premium_opus",  # Anthropic claude-opus-4-8 (Fase A generation only)
         "fallback": "tier_fallback",   # DeepSeek V4 Pro (paid content fallback)
         "flash": "tier_flash",         # DeepSeek V4 Flash (generación barata Fase A no-hero)
+        "quality": "tier_quality",     # MiniMax M3 via OpenRouter (watchlist replies)
         "sonnet": "tier_sonnet",
         "openrouter": "openrouter",
         "cerebras": "cerebras",
@@ -223,6 +225,25 @@ class ModelCascade:
                     max_retries=self.default_retries,
                     cooldown_seconds=self.default_cooldown,
                     failure_threshold=self.default_failure_threshold,
+                )
+            )
+
+        # ── tier_quality: MiniMax M3 via OpenRouter (watchlist replies) ──
+        # Same URL/key as openrouter but explicit_only=True (never fallback auto).
+        # Only registered if openrouter is available (needs API key + URL).
+        if creds.tier_openrouter is not None and _openrouter_enabled:
+            self.providers.append(
+                ProviderConfig(
+                    name="tier_quality",
+                    url=creds.tier_openrouter.url,
+                    model=os.getenv("QUALITY_MODEL", "minimax/minimax-m3"),
+                    api_key=creds.tier_openrouter.api_key,
+                    timeout=creds.tier_openrouter.timeout_seconds,
+                    max_retries=self.default_retries,
+                    cooldown_seconds=self.default_cooldown,
+                    failure_threshold=self.default_failure_threshold,
+                    explicit_only=True,
+                    paid=True,
                 )
             )
 
@@ -846,6 +867,16 @@ class ModelCascade:
             _min_fallback_tokens = int(os.getenv("DEEPSEEK_MIN_MAX_TOKENS", "2048"))
             if int(max_tokens) < _min_fallback_tokens:
                 payload["max_tokens"] = _min_fallback_tokens
+
+        # ── MiniMax M3 (tier_quality): reasoning model via OpenRouter ──
+        # Like DeepSeek, MiniMax M3 allocates tokens to internal reasoning
+        # before content. With Phase B's 180 max_tokens, the model uses
+        # 179 tokens for reasoning and returns empty content. Minimum 400
+        # tokens ensures content is always returned. Env-overridable.
+        if provider.name == "tier_quality":
+            _min_quality_tokens = int(os.getenv("QUALITY_MIN_MAX_TOKENS", "400"))
+            if int(max_tokens) < _min_quality_tokens:
+                payload["max_tokens"] = _min_quality_tokens
 
         response = requests.post(
             provider.url,
