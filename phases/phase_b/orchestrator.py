@@ -67,7 +67,7 @@ from .constants import (
     MAX_CONVERSATION_DEPTH,
     _OWN_POST_REPLY_SCORE_LIMIT,
 )
-from .scoring import RelevanceDecision, _get_feed_min_score, text_has_fabricated_measurement, _triage_comment_value
+from .scoring import RelevanceDecision, _get_feed_min_score, text_has_fabricated_measurement, _triage_comment_value, set_watchlist_authors, _extract_author_name
 from . import constants as _constants_mod
 
 
@@ -703,6 +703,14 @@ class PhaseB:
         self.max_replies_per_cycle = behavior.get("max_comment_replies_per_cycle", 2)
         self.max_feed_comments_per_post = behavior.get("max_feed_comments_per_post", 1)
         self.max_own_posts_per_cycle = behavior.get("phase_b_max_own_posts_per_cycle", 6)
+        # ── Watchlist: autores de alta autoridad ───────────────────
+        self._watchlist_authors: Set[str] = self._load_watchlist_authors()
+        set_watchlist_authors(self._watchlist_authors)
+        self._watchlist_max_per_author_day: int = int(os.getenv(
+            "AGENT_MAX_PER_WATCHLIST_AUTHOR_DAY", "1"))
+        self._watchlist_author_count_today: Dict[str, int] = {}
+        self._watchlist_count_path: Path = BASE_DIR / "data" / "watchlist_count_today.json"
+        self._load_watchlist_count()
         self.delay_between_comments = behavior.get("delay_between_comments", 8)
         # ── Anti-dogpile: hard per-post reply cap (env-only, NOT auto-optimizable) ──
         self.max_replies_per_post = reply_cap.get_cap()
@@ -1709,9 +1717,22 @@ class PhaseB:
             max_feed = self.deps.behavior_cfg.get("max_feed_replies_per_day", POLICY.max_feed_replies_per_day)
             effective_cycle_limit = remaining_cycle_slots if remaining_cycle_slots is not None else self.max_replies_per_cycle
             remaining_daily = max(0, max_feed - feed_comment_count)
+
+            # ── Watchlist budget reservation ──────────────────────
+            watchlist_pct = int(self.deps.behavior_cfg.get("watchlist_budget_pct",
+                                int(os.getenv("AGENT_WATCHLIST_BUDGET_PCT", "30"))))
+            watchlist_reserved = max(0, int(max_feed * watchlist_pct / 100))
+            general_cap = max(0, max_feed - watchlist_reserved)
+            self._watchlist_feed_count = 0
+            self._general_feed_count = 0
+            self._watchlist_reserved = watchlist_reserved
+            self._general_cap = general_cap
+
             logger.info(
-                "Phase B: feed replies — comments_today=%s/%s, remaining_feed_daily=%s/%s, cycle_budget=%s",
-                daily_comment_count, self.max_comments_per_day, remaining_daily, max_feed, effective_cycle_limit,
+                "Phase B: feed replies — comments_today=%s/%s, remaining_feed_daily=%s/%s, "
+                "cycle_budget=%s, watchlist_reserved=%s, general_cap=%s",
+                daily_comment_count, self.max_comments_per_day, remaining_daily, max_feed,
+                effective_cycle_limit, watchlist_reserved, general_cap,
             )
 
             # Load roadmap for topic alignment
@@ -1805,6 +1826,10 @@ class PhaseB:
 
             results: List[Dict[str, Any]] = []
 
+            # ── LLM generation cap: stop after N failed attempts per cycle ──
+            _max_llm_attempts = int(os.getenv("MAX_LLM_ATTEMPTS_PER_CYCLE", "3"))
+            _llm_attempts = 0
+
             # ── Feed-specific limits: daily global, feed-daily, and remaining cycle budget ──
             for score, post in scored_posts:
                 daily_comment_count = self.get_comments_today()
@@ -1828,6 +1853,24 @@ class PhaseB:
                         "score": 0,
                     })
                     break
+
+                # ── Watchlist vs general budget gate ─────────────
+                post_author = _extract_author_name(post)
+                is_watchlist = self._is_watchlist_author(post_author)
+                if is_watchlist and self._watchlist_feed_count >= self._watchlist_reserved:
+                    logger.info(
+                        "Phase B: skip feed reply — watchlist budget consumed (%s/%s) for %s.",
+                        self._watchlist_feed_count, self._watchlist_reserved, post_author,
+                    )
+                    continue
+                if not is_watchlist and self._general_feed_count >= self._general_cap:
+                    logger.info(
+                        "Phase B: skip feed reply — general budget consumed (%s/%s), "
+                        "reserving %s for watchlist.",
+                        self._general_feed_count, self._general_cap, self._watchlist_reserved,
+                    )
+                    continue
+
                 effective_cycle_limit = remaining_cycle_slots if remaining_cycle_slots is not None else self.max_replies_per_cycle
                 if cycle_comment_count >= effective_cycle_limit:
                     logger.info(
@@ -1894,6 +1937,15 @@ class PhaseB:
                     "score": post_decision.score,
                     "snippet": post_body[:60],
                 })
+
+                # ── Top-level dedup pre-check: skip BEFORE LLM generation ──
+                if post_id in self._commented_post_ids:
+                    logger.info(
+                        "Phase B: skip feed post %s — already top-level commented.",
+                        post_id,
+                    )
+                    continue
+
                 # ── Ledger: observación del feed post ──
                 from services import interlocutors
                 interlocutors.record_interaction(
@@ -1903,14 +1955,28 @@ class PhaseB:
                 try:
                     bestof = (_quality_bestof_enabled()
                               and post_decision.score >= POLICY.min_comment_relevance_score + 20)
-                    reply_text = await self._generate_reply_for_post(post, bestof=bestof)
+                    # ── Tier routing: watchlist → quality, resto → flash ──
+                    feed_author = _extract_author_name(post)
+                    reply_tier = "quality" if self._is_watchlist_author(feed_author) else "flash"
+                    post["_reply_tier"] = reply_tier
+                    reply_text = await self._generate_reply_for_post(post, bestof=bestof, tier=reply_tier)
                 except Exception as e:
                     logger.warning(f"Phase B: error generando respuesta: {e}")
+                    _llm_attempts += 1
+                    if _llm_attempts >= _max_llm_attempts:
+                        logger.info("Phase B: LLM attempt cap reached (%s/%s), stopping cycle.",
+                                    _llm_attempts, _max_llm_attempts)
+                        break
                     continue
 
                 reply_text = (reply_text or "").strip()
                 if not reply_text:
                     logger.warning("Phase B: respuesta vacía generada.")
+                    _llm_attempts += 1
+                    if _llm_attempts >= _max_llm_attempts:
+                        logger.info("Phase B: LLM attempt cap reached (%s/%s), stopping cycle.",
+                                    _llm_attempts, _max_llm_attempts)
+                        break
                     continue
 
                 # ── Anti-fabrication guard: reject first-person measurement claims ──
@@ -1924,14 +1990,11 @@ class PhaseB:
                         "reason": "fabricated_measurement",
                         "score": post_decision.score,
                     })
-                    continue
-
-                # ── Top-level dedup: one comment per post in feed ──
-                if post_id in self._commented_post_ids:
-                    logger.info(
-                        "Phase B: skip feed post %s — already top-level commented.",
-                        post_id,
-                    )
+                    _llm_attempts += 1
+                    if _llm_attempts >= _max_llm_attempts:
+                        logger.info("Phase B: LLM attempt cap reached (%s/%s), stopping cycle.",
+                                    _llm_attempts, _max_llm_attempts)
+                        break
                     continue
 
                 # ── Cross-cycle semantic duplicate check ──
@@ -1947,23 +2010,63 @@ class PhaseB:
                             "reason": "cross_cycle_duplicate",
                             "score": post_decision.score,
                         })
+                        _llm_attempts += 1
+                        if _llm_attempts >= _max_llm_attempts:
+                            logger.info("Phase B: LLM attempt cap reached (%s/%s), stopping cycle.",
+                                        _llm_attempts, _max_llm_attempts)
+                            break
                         continue
                 except Exception:
                     pass
+                    _llm_attempts += 1
+                    if _llm_attempts >= _max_llm_attempts:
+                        logger.info("Phase B: LLM attempt cap reached (%s/%s), stopping cycle.",
+                                    _llm_attempts, _max_llm_attempts)
+                        break
                     continue
 
                 reply_text = clean_llm_output(reply_text)
 
                 reply_text = await self._check_and_prevent_duplicate(post_id, reply_text)
                 if reply_text is None:
+                    _llm_attempts += 1
+                    if _llm_attempts >= _max_llm_attempts:
+                        logger.info("Phase B: LLM attempt cap reached (%s/%s), stopping cycle.",
+                                    _llm_attempts, _max_llm_attempts)
+                        break
                     continue
 
                 if len(reply_text.strip()) < 40 or is_likely_truncated(reply_text):
                     logger.info("Phase B: skip feed reply — too short or truncated (len=%d)", len(reply_text.strip()))
+                    _llm_attempts += 1
+                    if _llm_attempts >= _max_llm_attempts:
+                        logger.info("Phase B: LLM attempt cap reached (%s/%s), stopping cycle.",
+                                    _llm_attempts, _max_llm_attempts)
+                        break
+                    continue
+
+                # ── Watchlist per-author daily cap ──────────────
+                feed_author = _extract_author_name(post)
+                is_wl = self._is_watchlist_author(feed_author)
+                if is_wl and not self._check_increment_watchlist_cap(feed_author):
+                    logger.info(
+                        "Phase B: skip feed reply — watchlist cap for %s (%s/day).",
+                        feed_author, self._watchlist_max_per_author_day,
+                    )
+                    _llm_attempts += 1
+                    if _llm_attempts >= _max_llm_attempts:
+                        logger.info("Phase B: LLM attempt cap reached (%s/%s), stopping cycle.",
+                                    _llm_attempts, _max_llm_attempts)
+                        break
                     continue
 
                 resp = self._safe_publish_comment(post_id=str(post_id), content=reply_text)
                 if resp is None:
+                    _llm_attempts += 1
+                    if _llm_attempts >= _max_llm_attempts:
+                        logger.info("Phase B: LLM attempt cap reached (%s/%s), stopping cycle.",
+                                    _llm_attempts, _max_llm_attempts)
+                        break
                     continue
 
                 success = False
@@ -2017,15 +2120,22 @@ class PhaseB:
 
                 if success:
                     logger.info(
-                        "Phase B: comentario publicado en post_id=%s title=%s...",
+                        "Phase B: comentario publicado en post_id=%s title=%s... tier=%s author=%s watchlist=%s",
                         post_id,
                         str(post.get("title") or "")[:40],
+                        getattr(post, "_reply_tier", "flash"),
+                        feed_author,
+                        is_wl,
                     )
                     interlocutors.record_interaction(
                         post.get("author"), on_our_post=False,
                     )
                     feed_comment_count += 1
                     cycle_comment_count += 1
+                    if is_wl:
+                        self._watchlist_feed_count += 1
+                    else:
+                        self._general_feed_count += 1
                     self.incr_comments_today()
                     send_event("phase_b_reply_success", {
                         "post_id": post_id,
@@ -2273,7 +2383,7 @@ class PhaseB:
         return depth
 
     async def _generate_reply_bestof(self, user_prompt: str, system_prompt: str,
-                                     title: str, body: str) -> str:
+                                     title: str, body: str, tier: str = "flash") -> str:
         """Best-of-2: genera 2 borradores y conserva el de mayor _score_reply_draft.
         Degradación elegante: si el 2º falla o sale vacío se usa el 1º; nunca
         devuelve un resultado peor/inválido que un reply único."""
@@ -2282,7 +2392,7 @@ class PhaseB:
         candidate_b = ""
         try:
             raw_a = await self.llm.generate(
-                tier="flash",
+                tier=tier,
                 prompt=user_prompt,
                 system_prompt=system_prompt,
                 max_tokens=180,
@@ -2293,7 +2403,7 @@ class PhaseB:
             logger.warning("Phase B: best-of-2 first candidate failed: %s", e)
         try:
             raw_b = await self.llm.generate(
-                tier="flash",
+                tier=tier,
                 prompt=user_prompt,
                 system_prompt=system_prompt,
                 max_tokens=180,
@@ -2314,7 +2424,7 @@ class PhaseB:
                     score_a, score_b, "A" if chosen == candidate_a else "B")
         return chosen
 
-    async def _generate_reply_for_post(self, post: Dict[str, Any], bestof: bool = False) -> str:
+    async def _generate_reply_for_post(self, post: Dict[str, Any], bestof: bool = False, tier: str = "flash") -> str:
         with Span("llm_generation", type="feed") as span:
             title = str(post.get("title") or "").strip()
             body = str(post.get("content") or post.get("body") or "").strip()
@@ -2486,11 +2596,11 @@ class PhaseB:
             try:
                 if bestof:
                     reply = await self._generate_reply_bestof(
-                        user_prompt, system_prompt, title, body
+                        user_prompt, system_prompt, title, body, tier=tier
                     )
                 else:
                     reply = await self.llm.generate(
-                        tier="flash",
+                        tier=tier,
                         prompt=user_prompt,
                         system_prompt=system_prompt,
                         max_tokens=180,
@@ -2566,29 +2676,11 @@ class PhaseB:
                     self._replied_topic_fingerprints.add(fingerprint)
                     self._dedup.sync_replied_topic_fingerprints(self._replied_topic_fingerprints)
 
-                # ── Quality gate: ensure reply has framework/evidence signals ──
-                if not self._passes_quality_gate(reply):
-                    logger.info("Phase B: reply failed quality gate, attempting retry...")
-                    try:
-                        retry_prompt = (
-                            f"Your previous response was too generic. Rewrite to include:\n"
-                            f"1. A specific metric or measurement (with a number)\n"
-                            f"2. A named pattern or framework\n"
-                            f"Original: {reply}\n\nRewrite (max 4 sentences):"
-                        )
-                        retry_text = await self.llm.generate(
-                            prompt=retry_prompt,
-                            system_prompt="You are a senior systems engineer. Be specific and concrete.",
-                            max_tokens=1024,
-                            temperature=0.7,
-                            tier="flash",
-                            caller="phase_b_quality_retry",
-                        )
-                        if retry_text and retry_text.strip() and self._passes_quality_gate(retry_text.strip()):
-                            reply = retry_text.strip()
-                            logger.info("Phase B: quality gate retry succeeded")
-                    except Exception:
-                        pass  # Use original reply if retry fails
+                # ── Quality gate: signal check logged for diagnostics, never blocks ──
+                # (v5.1: length + banned openers are enforced in _safe_publish_comment;
+                #  evidence/framework/metric are logged here for visibility only.)
+                # REMOVED: wasteful retry loop — _passes_quality_gate always returns True
+                # after length/banned-opener check; retrying never helps and burns 1 LLM call.
 
                 return _safe_truncate(reply, max_chars=500)
             except Exception as e:
@@ -3155,6 +3247,57 @@ class PhaseB:
         if isinstance(author, str):
             return author
         return ""
+
+
+    # ── Watchlist helpers ──────────────────────────────────────────
+
+    @staticmethod
+    def _load_watchlist_authors() -> Set[str]:
+        try:
+            import yaml
+            strategy_file = BASE_DIR / "config/phase_b_strategy.yaml"
+            if strategy_file.exists():
+                strategy = yaml.safe_load(strategy_file.read_text(encoding="utf-8")) or {}
+                authors = strategy.get("watchlist_authors") or []
+                return {str(a).strip().lower() for a in authors if a}
+        except Exception:
+            pass
+        return set()
+
+    def _load_watchlist_count(self) -> None:
+        try:
+            if self._watchlist_count_path.exists():
+                data = json.loads(self._watchlist_count_path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    today = datetime.now(timezone.utc).date().isoformat()
+                    if data.get("date") == today:
+                        self._watchlist_author_count_today = data.get("counts", {})
+        except Exception:
+            self._watchlist_author_count_today = {}
+
+    def _save_watchlist_count(self) -> None:
+        try:
+            self._watchlist_count_path.parent.mkdir(parents=True, exist_ok=True)
+            today = datetime.now(timezone.utc).date().isoformat()
+            self._watchlist_count_path.write_text(
+                json.dumps({"date": today, "counts": self._watchlist_author_count_today}),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+    def _check_increment_watchlist_cap(self, author: str) -> bool:
+        """Return True if author can be replied to (under daily cap)."""
+        author_key = author.strip().lower()
+        current = self._watchlist_author_count_today.get(author_key, 0)
+        if current >= self._watchlist_max_per_author_day:
+            return False
+        self._watchlist_author_count_today[author_key] = current + 1
+        self._save_watchlist_count()
+        return True
+
+    def _is_watchlist_author(self, author: str) -> bool:
+        return author.strip().lower() in self._watchlist_authors
 
 
     # ── Research agenda helpers ───────────────────────────────────
