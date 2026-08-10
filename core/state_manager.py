@@ -10,7 +10,7 @@ from services.persistence import load_agent_state, save_agent_state
 
 logger = logging.getLogger("core.state_manager")
 
-PACING_MIN_HOURS = 2  # v5.1: minimum hours between consecutive posts
+PACING_MIN_HOURS = 1  # v5.1: minimum hours between consecutive posts
 
 
 class AgentState:
