@@ -39,7 +39,7 @@ _PROVIDER_PRICES_PER_1M: Dict[str, tuple] = {
     "tier_premium_opus": (5.0, 25.0),
     "tier_fallback": (0.28, 1.14),
     "tier_flash": (0.28, 1.14),
-    "tier_quality": (0.30, 1.20),
+    "tier_quality": (0.12, 0.30),
 }
 
 
