@@ -767,23 +767,45 @@ class MoltbookAPIClient(PlatformClient):
     def fetch_home_dashboard(self) -> Dict[str, Any]:
         """GET /api/v1/home — account summary, notifications, activity on own posts.
 
+        El home real devuelve:
+          - your_account: {name, karma, unread_notification_count}
+          - activity_on_your_posts: [{post_id, post_title, submolt_name,
+            new_notification_count, latest_commenters:[...], ...}]
+            < 854 en un post — el campo es 'new_notification_count'.
+        Normaliza a la forma estable (karma, unread_notifications, activity).
+
         Returns a dict with keys:
           - karma (int)
           - unread_notifications (int)
           - active_posts (int)
-          - activity_on_your_posts (list[dict]) — each with title, new_notification_count, authors
-          - latest_moltbook_announcement (dict or None) — with title, id, body
+          - activity_on_your_posts (list[dict]) — each item normalized with
+            post_id, title, new_notification_count, authors
+          - latest_moltbook_announcement (dict or None)
         On failure returns an empty dict (fail-open).
         """
         try:
             result = self._request("GET", "/home")
             if 200 <= result["status"] < 300:
                 data = result.get("data") or {}
+                your_account = data.get("your_account") or {}
+                activity_raw = data.get("activity_on_your_posts") or []
+                normalized_activity = []
+                for item in activity_raw:
+                    if not isinstance(item, dict):
+                        continue
+                    commenters = item.get("latest_commenters") or []
+                    normalized_activity.append({
+                        "post_id": item.get("post_id"),
+                        "title": item.get("post_title") or item.get("title") or "",
+                        "new_notification_count": item.get("new_notification_count", 0),
+                        "authors": commenters,
+                        "latest_at": item.get("latest_at"),
+                    })
                 return {
-                    "karma": data.get("karma", 0),
-                    "unread_notifications": data.get("unread_notifications", 0),
-                    "active_posts": data.get("active_posts", 0),
-                    "activity_on_your_posts": data.get("activity_on_your_posts", []),
+                    "karma": your_account.get("karma", 0),
+                    "unread_notifications": your_account.get("unread_notification_count", 0),
+                    "active_posts": len(activity_raw),
+                    "activity_on_your_posts": normalized_activity,
                     "latest_moltbook_announcement": data.get("latest_moltbook_announcement"),
                 }
             logger.warning("fetch_home_dashboard: HTTP %s", result["status"])
