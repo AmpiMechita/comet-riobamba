@@ -1018,7 +1018,7 @@ class PhaseB:
 
 
     def _safe_publish_comment(self, post_id: str, content: str, parent_comment_id: Optional[str] = None,
-                              is_followup: bool = False) -> Optional[Dict]:
+                              is_followup: bool = False, skip_anti_dogpile: bool = False) -> Optional[Dict]:
         """Publish a comment with safety checks. Returns result dict or None if blocked.
 
         is_followup=True marca una respuesta enhebrada dentro de una conversación
@@ -1026,7 +1026,11 @@ class PhaseB:
         para el contador anti-dogpile por post (que existe para frenar el apilado
         de comentarios top-level), ni son bloqueados por su cap: sostener una
         conversación no es un dogpile. Su límite propio es
-        AGENT_MAX_FOLLOWUPS_PER_POST, controlado por el caller."""
+        AGENT_MAX_FOLLOWUPS_PER_POST, controlado por el caller.
+
+        skip_anti_dogpile=True (posts PROPIOS): el cap anti-dogpile previene
+        apilar en posts ajenos. Responder comentarios en posts propios no es
+        dogpile; su limite es max_comments_per_post, verificado por el caller."""
         # v5.1: Quality gate — length (50-500) + banned openers only
         if not self._passes_quality_gate(content):
             text_len = len(content.strip())
@@ -1074,11 +1078,13 @@ class PhaseB:
                 )
                 return {"success": True, "id": "dry-run-simulated", "status": 201, "dry_run": True}
 
-            # ── Anti-dogpile: monotonic per-post cap (feed + own-post) ──
+            # ── Anti-dogpile: monotonic per-post cap (FEED + own-post) ──
             # Hard guardrail (env AGENT_MAX_REPLIES_PER_POST, default 3),
             # independent of feed payload. Only for UUID post IDs.
             # Follow-ups enhebrados están exentos: conversar no es apilar.
-            if len(post_id) > 10 and not is_followup:
+            # skip_anti_dogpile (posts propios): responder la comunidad en un
+            # post propio no es dogpile; su limite es max_comments_per_post.
+            if len(post_id) > 10 and not is_followup and not skip_anti_dogpile:
                 current_count = self._get_replies_per_post(post_id)
                 if current_count >= self.max_replies_per_post:
                     logger.info(
@@ -3025,16 +3031,6 @@ class PhaseB:
             _value_cls = self._classify_comment_value(comment_text)
             self._stats["passed_value"] += 1
 
-            # ── Anti-dogpile pre-check: skip BEFORE LLM generation ──
-            if len(post_id) > 10:
-                dogpile_count = self._get_replies_per_post(post_id)
-                if dogpile_count >= self.max_replies_per_post:
-                    logger.info(
-                        "anti-dogpile: skip post %s (%d/%d) — checked before generation",
-                        post_id, dogpile_count, self.max_replies_per_post,
-                    )
-                    continue
-
             # ── Build thread history for conversational context ──
             thread_history = ""
             if parent_id:
@@ -3179,6 +3175,7 @@ class PhaseB:
                 post_id=post_id,
                 parent_comment_id=comment_id,
                 content=reply_text,
+                skip_anti_dogpile=True,
             )
             if result is None:
                 span.set("success", False)
