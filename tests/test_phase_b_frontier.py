@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 from phases.phase_b import PhaseB, RelevanceDecision
 from phases.deps import PhaseBDeps
 from config.agent_policy import POLICY
-from phases.phase_b.scoring import _triage_comment_value, _compute_visibility_bonus, _compute_relationship_bonus
+from phases.phase_b.scoring import _triage_comment_value, _compute_visibility_bonus, _compute_relationship_bonus, set_watchlist_authors, _extract_author_name
 
 
 def _make_pb():
@@ -237,3 +237,109 @@ class TestRelationshipBonus:
         bonus = _compute_relationship_bonus
         assert bonus(None) == 0
         assert bonus("unknown_user") == 0
+
+
+# ── Watchlist (autores de alta autoridad) ─────────────────────
+
+class TestWatchlistBonus:
+    def setup_method(self):
+        set_watchlist_authors({"vina", "diviner", "bytes", "neo_konsi_s2bw",
+                               "lightningzero", "capitanpercebe_es", "echoformai",
+                               "dynamo", "rossum", "christine"})
+
+    def test_watchlist_newborn_gets_max_priority(self):
+        """Post de autor watchlist con 0 comentarios y 5 min → bonus ≥25."""
+        now = datetime.now(timezone.utc)
+        watchlist_post = {
+            "created_at": (now - timedelta(minutes=5)).isoformat(),
+            "comment_count": 0,
+            "author": {"name": "vina"},
+        }
+        bonus = _compute_visibility_bonus(watchlist_post, author="vina")
+        # watchlist +25 + early-bird +5 + velocity 0 = 30
+        assert bonus >= 25, f"expected >=25 for watchlist newborn, got {bonus}"
+
+    def test_watchlist_newborn_beats_saturated_non_watchlist(self):
+        """Watchlist post (5 min, 0 comments) scores MORE than non-watchlist
+        saturated post (8h, 800 comments)."""
+        body = (
+            "How do you handle agent pipeline failures when LLM API returns "
+            "429 errors with cascading retries in production?"
+        )
+        now = datetime.now(timezone.utc)
+        watchlist_post = {
+            "created_at": (now - timedelta(minutes=5)).isoformat(),
+            "comment_count": 0,
+            "author": {"name": "vina"},
+        }
+        saturated_post = {
+            "created_at": (now - timedelta(hours=8)).isoformat(),
+            "comment_count": 800,
+            "author": "rando",
+        }
+
+        wl_decision = PhaseB._decide_reply_from_post(body, post=watchlist_post)
+        sat_decision = PhaseB._decide_reply_from_post(body, post=saturated_post)
+
+        assert wl_decision.should_reply
+        assert sat_decision.should_reply
+        assert wl_decision.score > sat_decision.score, (
+            f"watchlist score {wl_decision.score} should be > saturated score {sat_decision.score}"
+        )
+
+    def test_off_niche_watchlist_still_rejected(self):
+        """Post off-niche de autor watchlist → SIGUE rechazado."""
+        body = "buy my nft collection now!!!"
+        now = datetime.now(timezone.utc)
+        off_niche_wl = {
+            "created_at": (now - timedelta(minutes=5)).isoformat(),
+            "comment_count": 0,
+            "author": {"name": "vina"},
+        }
+        decision = PhaseB._decide_reply_from_post(body, post=off_niche_wl)
+        assert not decision.should_reply, (
+            f"Off-niche watchlist must not pass. score={decision.score}"
+        )
+
+    def test_watchlist_old_post_gets_plus_ten(self):
+        """Watchlist post with age > 30 min gets +10."""
+        now = datetime.now(timezone.utc)
+        old_wl_post = {
+            "created_at": (now - timedelta(hours=3)).isoformat(),
+            "comment_count": 2,
+            "author": {"name": "diviner"},
+        }
+        bonus = _compute_visibility_bonus(old_wl_post, author="diviner")
+        # watchlist old +10, velocity = 2/180 ≈ 0.01 → no velocity bonus,
+        # age > 30 → no early-bird, comment < 150 → no penalty
+        assert bonus >= 10, f"expected >=10 for old watchlist, got {bonus}"
+
+    def test_watchlist_cap_blocks_second_comment(self):
+        """Segundo post del mismo autor el mismo dia → bloqueado por el cap."""
+        from unittest.mock import MagicMock
+        deps = PhaseBDeps(
+            model_cascade=MagicMock(),
+            moltbook_client=MagicMock(),
+            behavior_cfg={"max_comments_per_post": 5, "max_comments_per_day": 10,
+                          "max_comment_replies_per_cycle": 3, "max_feed_comments_per_post": 1},
+            agent_name="test-agent",
+        )
+        phase_b = PhaseB(deps)
+        phase_b._watchlist_author_count_today["vina"] = 1
+        assert not phase_b._check_increment_watchlist_cap("vina")
+
+    def test_flash_only_does_not_degrade_quality_tier(self):
+        """Con AGENT_FLASH_ONLY=1, tier='quality' NO se degrada a flash."""
+        import os
+        try:
+            os.environ["AGENT_FLASH_ONLY"] = "1"
+            from services.model_cascade import ModelCascade
+            quality_tier = ModelCascade.TIER_MAPPING.get("quality", "")
+            assert quality_tier == "tier_quality", (
+                f"TIER_MAPPING should map quality -> tier_quality, got {quality_tier}"
+            )
+            # Verify FLASH_ONLY list doesn't include quality
+            tier_list = ("premium", "premium_opus", "opus", "sonnet", "fallback", "haiku")
+            assert "quality" not in tier_list, "quality must NOT be in FLASH_ONLY tier list"
+        finally:
+            os.environ["AGENT_FLASH_ONLY"] = "0"

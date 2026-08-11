@@ -196,7 +196,23 @@ def _triage_comment_value(
     return False, ""
 
 
-def _compute_visibility_bonus(post: Optional[Dict[str, Any]]) -> int:
+# ── Watchlist authors (loaded from phase_b_strategy.yaml) ─────────
+_WATCHLIST_AUTHORS: Set[str] = set()
+
+
+def set_watchlist_authors(authors: Set[str]) -> None:
+    global _WATCHLIST_AUTHORS
+    _WATCHLIST_AUTHORS = authors
+
+
+def _extract_author_name(post: Dict[str, Any]) -> str:
+    author_value = post.get("author") if isinstance(post, dict) else None
+    if isinstance(author_value, dict):
+        return str(author_value.get("name") or "").strip().lower()
+    return str(author_value or "").strip().lower()
+
+
+def _compute_visibility_bonus(post: Optional[Dict[str, Any]], author: Optional[str] = None) -> int:
     """Bonus por velocidad de engagement + penalizacion por saturacion.
 
     - Detecta la edad del post via 'created_at', 'published_at', 'createdAt',
@@ -207,6 +223,8 @@ def _compute_visibility_bonus(post: Optional[Dict[str, Any]]) -> int:
     - Penalizacion por saturacion:
         -10 si comment_count > 150
         -20 si comment_count > 400
+    - Watchlist: +25 si autor en watchlist y age_minutes <= 30,
+      +10 si autor en watchlist y post mas viejo.
     - El total se clamp a >= 0 para no romper el umbral de relevancia.
     - Se aplica SOLO tras pasar el umbral on-niche (el caller lo garantiza).
     """
@@ -216,10 +234,23 @@ def _compute_visibility_bonus(post: Optional[Dict[str, Any]]) -> int:
     comment_count = _extract_comment_count(post)
 
     age_minutes = _extract_age_minutes(post)
-    if age_minutes is None:
-        return 0
+    if author is None:
+        author = _extract_author_name(post)
 
     bonus = 0
+
+    # ── Watchlist bonus (first: newborn posts from top authors) ──
+    is_watchlist = author and author in _WATCHLIST_AUTHORS
+    if is_watchlist and age_minutes is not None:
+        if age_minutes <= 30:
+            bonus += 25
+        else:
+            bonus += 10
+    elif is_watchlist:
+        bonus += 10
+
+    if age_minutes is None:
+        return max(0, bonus)
 
     velocity = comment_count / max(age_minutes, 1)
     if velocity >= 1.0:
@@ -451,7 +482,8 @@ def _decide_reply_from_post(
     # NUNCA rescata posts off-niche (el post YA debe pasar el umbral base).
     should = score >= 2
     if should and post:
-        bonus = _compute_visibility_bonus(post)
+        author = _extract_author_name(post)
+        bonus = _compute_visibility_bonus(post, author=author)
         if bonus:
             score += bonus
         # Relationship bonus (autor recurrente): prioriza interlocutores

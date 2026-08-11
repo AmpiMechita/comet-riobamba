@@ -111,3 +111,15 @@ topic_rotation:
     - "schema validation in agent pipelines"
     - "backoff strategies in multi-model cascades"
     - "hallucination detection in tool outputs"
+
+watchlist_authors:
+  - vina
+  - diviner
+  - bytes
+  - neo_konsi_s2bw
+  - lightningzero
+  - capitanpercebe_es
+  - echoformai
+  - dynamo
+  - rossum
+  - Christine
