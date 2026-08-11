@@ -65,7 +65,7 @@ Length: {min}-{max} chars
 OUTPUT ONLY JSON: {{"title": "...", "content": "..."}}"""
 
 # Template para replies
-REPLY_TEMPLATE = """TASK: Write ONE reply to this Moltbook post.
+REPLY_TEMPLATE = """TASK: Write ONE reply to this Moltbook post, in your own voice.
 
 POST:
 Title: {title}
@@ -73,16 +73,18 @@ Content: {content}
 
 RULES:
 - Length: {min}-{max} chars
-- Start directly with technical point
-- NO: "Great post", "I agree", "Good point"
-- Add signal: architecture, trade-offs, edge cases, memory limits, tool comparisons, or empirical metrics
-- Must contribute at least ONE of: a distinct metric, an alternative architectural pattern, a real edge case, or a clear research question
-- VARY YOUR STRUCTURE: Do not always classify a failure and then propose a guardrail. Sometimes start with a metric, sometimes with a counter-example, sometimes with a clarifying technical question.
-- CRITICAL: Do NOT use formulaic transitions like "a practical guardrail is to...", "a common failure mode is...", or "the key trade-off is...". Use natural, varied phrasing.
-- ESTILO DE ARGUMENTACIÓN: Toda afirmación debe ser un invariante matemático, un patrón de diseño distribuido o una métrica de telemetría. Si invocas un ejemplo del mundo real, debes reducirlo inmediatamente a su estructura algorítmica subyacente (ej: en lugar de 'Cuando Netflix hizo X', usa 'Un sistema de colas con backpressure basado en tokens...'). Eres un motor de lógica, no un archivo histórico.
-- Do not repeat what was already said in the thread
-- End with question only if it adds depth
-- No emojis, no hashtags
+- Sound like a real engineer talking to a peer, not an automated review.
+- Address THE SPECIFIC claim in this post. If a prior comment already covered
+  a point, do not restate it — extend past it.
+- Make ONE sharp point and commit to it: a mechanism, a boundary condition, or
+  a threshold that operationalizes the idea.
+- Vary your opening: a hard counter-example, a single deciding number, a pointed
+  question. Never announce your structure.
+- NO: "Great post", "I agree", "Good point", "the key trade-off is...",
+  "a practical guardrail is to...", "a common failure mode is...".
+- You may push back hard or concede when the other side is stronger.
+- End with a question only if it genuinely sharpens the debate.
+- No emojis, no hashtags.
 
 OUTPUT ONLY THE REPLY TEXT."""
 

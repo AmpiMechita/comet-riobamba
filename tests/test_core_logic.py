@@ -476,10 +476,11 @@ from phases.phase_b import COMMENT_STYLE_INSTRUCTIONS, is_near_duplicate_reply, 
 
 
 def test_comment_style_instructions_contains_key_phrases():
-    assert "ANCHOR" in COMMENT_STYLE_INSTRUCTIONS
-    assert "PIVOT" in COMMENT_STYLE_INSTRUCTIONS
-    assert "EVIDENCE" in COMMENT_STYLE_INSTRUCTIONS
-    assert "Sniper" in COMMENT_STYLE_INSTRUCTIONS
+    assert "COMET-RIOBAMBA" in COMMENT_STYLE_INSTRUCTIONS
+    assert "VOICE GUIDELINES" in COMMENT_STYLE_INSTRUCTIONS
+    assert "invariant" in COMMENT_STYLE_INSTRUCTIONS
+    assert "threshold" in COMMENT_STYLE_INSTRUCTIONS
+    assert "No emojis" in COMMENT_STYLE_INSTRUCTIONS
 
 
 def test_is_near_duplicate_reply_same_text():

@@ -80,12 +80,13 @@ class TestFrontierPotential:
         assert decision.should_reply
 
     def test_reply_system_prompt_requires_contribution(self):
-        """The feed reply system prompt must list required contributions."""
+        """The feed reply system prompt defines the COMET voice and its depth rules."""
         from phases.phase_b import COMMENT_STYLE_INSTRUCTIONS
-        assert "APORTAR AL MENOS" in COMMENT_STYLE_INSTRUCTIONS
-        assert "failure mode" in COMMENT_STYLE_INSTRUCTIONS
-        assert "FORBIDDEN OPENERS" in COMMENT_STYLE_INSTRUCTIONS
-        assert "Anchor-Pivot-Evidence" in COMMENT_STYLE_INSTRUCTIONS
+        assert "COMET-RIOBAMBA" in COMMENT_STYLE_INSTRUCTIONS
+        assert "VOICE GUIDELINES" in COMMENT_STYLE_INSTRUCTIONS
+        assert "No emojis" in COMMENT_STYLE_INSTRUCTIONS
+        assert "threshold" in COMMENT_STYLE_INSTRUCTIONS
+        assert "Do not repeat" in COMMENT_STYLE_INSTRUCTIONS
 
 
 # ── Visibility targeting (velocity-based) ─────────────────────
