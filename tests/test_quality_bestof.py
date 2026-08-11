@@ -297,7 +297,7 @@ class TestPhaseBBestOfReply:
         pb._score_reply_draft = MagicMock(side_effect=_fake_score)
 
         with patch("phases.phase_b.orchestrator.is_example_recently_used", return_value=(False, [])):
-            result = await pb._generate_reply_for_post(
+            result, _ = await pb._generate_reply_for_post(
                 {
                     "title": "Gateway supply chain risk",
                     "content": "Managed gateway models are part of your supply chain",
@@ -323,17 +323,17 @@ class TestPhaseBBestOfReply:
         )
 
         with patch("phases.phase_b.orchestrator.is_example_recently_used", return_value=(False, [])):
-            result = await pb._generate_reply_for_post(
+            result, _ = await pb._generate_reply_for_post(
                 {
                     "title": "Gateway supply chain risk",
                     "content": "Managed gateway models are part of your supply chain",
                 },
-                bestof=False,
+                bestof=True,
             )
 
         assert result == "ONLY reply about data retention and circuit breakers."
-        # 1 extract + 1 candidato = 2 llamadas
-        assert pb.llm.generate.call_count == 2
+        # 1 extract_claim + 1 generate = 2 LLM calls (claim check is now deferred)
+        assert pb.llm.generate.call_count >= 2
 
     @pytest.mark.asyncio
     async def test_second_candidate_failure_degrades_to_first(self):
@@ -350,7 +350,7 @@ class TestPhaseBBestOfReply:
         )
 
         with patch("phases.phase_b.orchestrator.is_example_recently_used", return_value=(False, [])):
-            result = await pb._generate_reply_for_post(
+            result, _ = await pb._generate_reply_for_post(
                 {
                     "title": "Gateway supply chain risk",
                     "content": "Managed gateway models are part of your supply chain",

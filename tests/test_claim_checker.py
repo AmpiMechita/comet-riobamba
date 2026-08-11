@@ -261,7 +261,8 @@ class TestStripCodeFences:
 
 
 class TestGenerateReplyForPostClaimPipeline:
-    """Test that _generate_reply_for_post correctly wires extract → generate → check."""
+    """Test that _generate_reply_for_post correctly wires extract → generate.
+    (claim check is now deferred to _execute_feed_replies for efficiency)."""
 
     @pytest.mark.asyncio
     async def test_claim_extracted_constraint_injected(self):
@@ -271,12 +272,13 @@ class TestGenerateReplyForPostClaimPipeline:
             '{"central_claim": "data retention", "reply_must_address": "address data retention"}',
             "This is a reply about data retention policies.",
         ])
-        result = await pb._generate_reply_for_post({
+        result, claim = await pb._generate_reply_for_post({
             "title": "Gateway supply chain risk",
             "content": "Managed gateway models are part of your supply chain",
         })
         assert result == "This is a reply about data retention policies."
-        assert pb._stats["claim_check_passed"] == 1
+        # claim_check stats are now set in _execute_feed_replies (deferred)
+        assert claim is not None
         # Verify the second call had a system_prompt with the constraint
         call2_kwargs = pb.llm.generate.call_args_list[1][1]
         assert "MUST directly engage with" in call2_kwargs["system_prompt"]
@@ -289,7 +291,7 @@ class TestGenerateReplyForPostClaimPipeline:
             "invalid json",  # extract_claim returns None
             "A reply about something else.",
         ])
-        result = await pb._generate_reply_for_post({
+        result, _ = await pb._generate_reply_for_post({
             "title": "Gateway supply chain risk",
             "content": "Managed gateway models are part of your supply chain",
         })
@@ -308,71 +310,62 @@ class TestGenerateReplyForPostClaimPipeline:
         pb.llm.generate = AsyncMock(side_effect=[
             '{"central_claim": "data retention", "reply_must_address": "address retention"}',
             "Good reply about data retention.",
-            '{"on_topic": true, "reason": "addresses retention", "score": 0.8}',
         ])
-        result = await pb._generate_reply_for_post({
+        result, claim = await pb._generate_reply_for_post({
             "title": "Gateway supply chain risk",
             "content": "Managed gateway models are part of your supply chain",
         })
         assert result == "Good reply about data retention."
-        assert pb._stats["claim_check_passed"] == 1
-        assert pb._stats["claim_check_failed"] == 0
+        assert claim is not None
 
     @pytest.mark.asyncio
     async def test_claim_check_fails_on_topic_false(self):
-        """Scenario (d): check_claim returns on_topic=false → reply discarded, WARNING logged."""
+        """Scenario (d): claim check is deferred to _execute_feed_replies.
+        _generate_reply_for_post returns reply + claim regardless of check outcome."""
         pb = _make_pb()
         pb.llm.generate = AsyncMock(side_effect=[
             '{"central_claim": "data retention", "reply_must_address": "address retention"}',
             "Let me discuss mTLS instead.",
-            '{"on_topic": false, "reason": "discusses mTLS not retention", "score": 0.2}',
         ])
-        with patch("phases.phase_b.orchestrator.logger") as mock_logger:
-            result = await pb._generate_reply_for_post({
-                "title": "Gateway supply chain risk",
-                "content": "Managed gateway models are part of your supply chain",
-            })
-        assert result == ""
-        assert pb._stats["claim_check_failed"] == 1
-        assert pb._stats["claim_check_passed"] == 0
-        mock_logger.warning.assert_called_once()
-        warning_msg = mock_logger.warning.call_args[0][0]
-        assert "claim-check FAILED" in warning_msg
+        result, claim = await pb._generate_reply_for_post({
+            "title": "Gateway supply chain risk",
+            "content": "Managed gateway models are part of your supply chain",
+        })
+        # Reply is returned even though it would fail claim check
+        # (check is deferred to _execute_feed_replies)
+        assert result == "Let me discuss mTLS instead."
+        assert claim is not None
+        assert claim["central_claim"] == "data retention"
 
     @pytest.mark.asyncio
     async def test_claim_check_score_below_threshold_but_on_topic_passes(self):
-        """Scenario (e): check_claim returns on_topic=true, score=0.4 → passes (on_topic alone is sufficient)."""
+        """Scenario (e): claim check is deferred. Reply returned with claim for caller to check."""
         pb = _make_pb()
         pb.llm.generate = AsyncMock(side_effect=[
             '{"central_claim": "data retention", "reply_must_address": "address retention"}',
             "Vaguely related reply.",
-            '{"on_topic": true, "reason": "tangentially related", "score": 0.4}',
         ])
-        result = await pb._generate_reply_for_post({
+        result, claim = await pb._generate_reply_for_post({
             "title": "Gateway supply chain risk",
             "content": "Managed gateway models are part of your supply chain",
         })
         assert result == "Vaguely related reply."
-        assert pb._stats["claim_check_passed"] == 1
-        assert pb._stats["claim_check_failed"] == 0
+        assert claim is not None
 
     @pytest.mark.asyncio
     async def test_claim_check_llm_fails_fails_open(self):
-        """Scenario (f): check_claim LLM call fails → fail open, reply published."""
+        """Scenario (f): claim check is deferred. Reply returned with claim for caller."""
         pb = _make_pb()
         pb.llm.generate = AsyncMock(side_effect=[
             '{"central_claim": "data retention", "reply_must_address": "address retention"}',
             "A reply about the topic.",
-            RuntimeError("check LLM down"),
         ])
-        result = await pb._generate_reply_for_post({
+        result, claim = await pb._generate_reply_for_post({
             "title": "Gateway supply chain risk",
             "content": "Managed gateway models are part of your supply chain",
         })
         assert result == "A reply about the topic."
-        # Fail-open means the reply is published; the stat reflects the attempt.
-        assert pb._stats["claim_check_passed"] == 1
-        assert pb._stats["claim_check_failed"] == 0
+        assert claim is not None
 
     @pytest.mark.asyncio
     async def test_summary_line_includes_claim_check_failures(self):
@@ -407,7 +400,7 @@ class TestGenerateReplyForPostClaimPipeline:
         dedup_key = "post_1:comment_1"
         assert dedup_key not in pb._replied_comment_ids
         with patch("phases.phase_b.orchestrator._save_replied_comment_ids"):
-            result = await pb._generate_reply_for_post({
+            result, claim = await pb._generate_reply_for_post({
                 "title": "Gateway supply chain risk",
                 "content": "Managed gateway models are part of your supply chain",
             })

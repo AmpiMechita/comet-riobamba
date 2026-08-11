@@ -120,7 +120,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from config.agent_policy import POLICY
 from config import BASE_DIR
@@ -1968,7 +1968,7 @@ class PhaseB:
                             feed_author, self._watchlist_max_per_author_day,
                         )
                         continue
-                    reply_text = await self._generate_reply_for_post(post, bestof=bestof, tier=reply_tier)
+                    reply_text, claim = await self._generate_reply_for_post(post, bestof=bestof, tier=reply_tier)
                 except Exception as e:
                     logger.warning(f"Phase B: error generando respuesta: {e}")
                     _llm_attempts += 1
@@ -2053,6 +2053,36 @@ class PhaseB:
                                     _llm_attempts, _max_llm_attempts)
                         break
                     continue
+
+                # ── Deferred claim check: runs AFTER cheap gates, saving LLM calls ──
+                if claim and reply_text:
+                    try:
+                        check_result = await check_claim(
+                            claim, reply_text, self.llm,
+                            tier=getattr(self, "_claim_checker_tier", "fallback"),
+                        )
+                    except Exception:
+                        check_result = {
+                            "on_topic": True, "score": 1.0,
+                            "reason": "check skipped (LLM error)",
+                        }
+                    self._last_claim_check = check_result
+                    on_topic = check_result.get("on_topic", False)
+                    check_score = check_result.get("score", 0.0)
+                    if on_topic or check_score >= 0.4:
+                        self._stats["claim_check_passed"] += 1
+                    else:
+                        self._stats["claim_check_failed"] += 1
+                        logger.warning(
+                            "Phase B: claim-check FAILED — on_topic=%s, score=%s, reason=%s",
+                            on_topic, check_score, check_result.get("reason", ""),
+                        )
+                        _llm_attempts += 1
+                        if _llm_attempts >= _max_llm_attempts:
+                            logger.info("Phase B: LLM attempt cap reached (%s/%s), stopping cycle.",
+                                        _llm_attempts, _max_llm_attempts)
+                            break
+                        continue
 
                 resp = self._safe_publish_comment(post_id=str(post_id), content=reply_text)
                 if resp is None:
@@ -2418,7 +2448,7 @@ class PhaseB:
                     score_a, score_b, "A" if chosen == candidate_a else "B")
         return chosen
 
-    async def _generate_reply_for_post(self, post: Dict[str, Any], bestof: bool = False, tier: str = "flash") -> str:
+    async def _generate_reply_for_post(self, post: Dict[str, Any], bestof: bool = False, tier: str = "flash") -> Tuple[str, Optional[Dict[str, Any]]]:
         with Span("llm_generation", type="feed") as span:
             title = str(post.get("title") or "").strip()
             body = str(post.get("content") or post.get("body") or "").strip()
@@ -2549,7 +2579,7 @@ class PhaseB:
                     groq_open = self.llm._is_circuit_open_by_name("groq")
                     if haiku_open and groq_open:
                         logger.warning("Phase B: Main model circuits OPEN (fallback=%s, groq=%s). Skipping reply generation — no reliable LLM available.", haiku_open, groq_open)
-                        return ""
+                        return "", None
             except Exception:
                 pass
 
@@ -2562,7 +2592,7 @@ class PhaseB:
 
             if not self.llm:
                 span.set("length", 0)
-                return ""
+                return "", None
 
             # ── Step A: Extract claim ──────────────────────────────────────
             claim = None
@@ -2607,7 +2637,7 @@ class PhaseB:
                 is_repeat, blocked_examples = is_example_recently_used(reply)
                 if is_repeat:
                     logger.warning("Phase B: feed reply BLOCKED — repeated historical examples: %s", ", ".join(blocked_examples))
-                    return ""
+                    return "", None
 
                 score, reasons = self._score_reply_draft(reply, f"{title}\n{body}",
                                                             log_context={"post_id": post.get("id")})
@@ -2616,32 +2646,11 @@ class PhaseB:
                         "Phase B: feed reply REJECTED — score=%d reasons=%s preview=%s",
                         score, ",".join(reasons) or "none", reply[:100],
                     )
-                    return ""
+                    return "", None
 
-                # ── Step C: Check claim ────────────────────────────────────
-                if claim and reply:
-                    try:
-                        check_result = await check_claim(
-                            claim, reply, self.llm,
-                            tier=getattr(self, "_claim_checker_tier", "fallback"),
-                        )
-                    except Exception:
-                        check_result = {
-                            "on_topic": True, "score": 1.0,
-                            "reason": "check skipped (LLM error)",
-                        }
-                    self._last_claim_check = check_result
-                    on_topic = check_result.get("on_topic", False)
-                    check_score = check_result.get("score", 0.0)
-                    if on_topic or check_score >= 0.4:
-                        self._stats["claim_check_passed"] += 1
-                    else:
-                        self._stats["claim_check_failed"] += 1
-                        logger.warning(
-                            "Phase B: claim-check FAILED — on_topic=%s, score=%s, reason=%s",
-                            on_topic, check_score, check_result.get("reason", ""),
-                        )
-                        return ""
+                # ── Claim check MOVED to caller (_execute_feed_replies)
+                # so it runs AFTER fabrication/dupe/length gates.
+                # Return claim for deferred checking.
 
                 # ── Register claims from reply ─────────────────────
                 try:
@@ -2664,7 +2673,7 @@ class PhaseB:
                     if _phrase in reply.lower():
                         logger.warning("Phase B: BLOCKED feed reply — forbidden phrase '%s'", _phrase)
                         span.set("length", 0)
-                        return ""
+                        return "", None
                 fingerprint = self._reply_theme_fingerprint(reply, f"{title}\n{body}")
                 if fingerprint:
                     self._replied_topic_fingerprints.add(fingerprint)
@@ -2676,11 +2685,11 @@ class PhaseB:
                 # REMOVED: wasteful retry loop — _passes_quality_gate always returns True
                 # after length/banned-opener check; retrying never helps and burns 1 LLM call.
 
-                return _safe_truncate(reply, max_chars=500)
+                return _safe_truncate(reply, max_chars=500), claim
             except Exception as e:
                 logger.warning(f"Phase B: error en generación de reply: {e}")
                 span.set("length", 0)
-                return ""
+                return "", None
 
     # ── Value classification ──────────────────────────────────────
 
