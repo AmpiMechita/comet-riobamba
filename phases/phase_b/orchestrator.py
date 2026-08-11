@@ -1957,8 +1957,17 @@ class PhaseB:
                               and post_decision.score >= POLICY.min_comment_relevance_score + 20)
                     # ── Tier routing: watchlist → quality, resto → flash ──
                     feed_author = _extract_author_name(post)
-                    reply_tier = "quality" if self._is_watchlist_author(feed_author) else "flash"
+                    is_wl = self._is_watchlist_author(feed_author)
+                    reply_tier = "quality" if is_wl else "flash"
                     post["_reply_tier"] = reply_tier
+
+                    # ── Watchlist cap pre-check: skip BEFORE LLM generation ──
+                    if is_wl and not self._check_increment_watchlist_cap(feed_author):
+                        logger.info(
+                            "Phase B: skip feed reply — watchlist cap for %s (%s/day).",
+                            feed_author, self._watchlist_max_per_author_day,
+                        )
+                        continue
                     reply_text = await self._generate_reply_for_post(post, bestof=bestof, tier=reply_tier)
                 except Exception as e:
                     logger.warning(f"Phase B: error generando respuesta: {e}")
@@ -2038,21 +2047,6 @@ class PhaseB:
 
                 if len(reply_text.strip()) < 40 or is_likely_truncated(reply_text):
                     logger.info("Phase B: skip feed reply — too short or truncated (len=%d)", len(reply_text.strip()))
-                    _llm_attempts += 1
-                    if _llm_attempts >= _max_llm_attempts:
-                        logger.info("Phase B: LLM attempt cap reached (%s/%s), stopping cycle.",
-                                    _llm_attempts, _max_llm_attempts)
-                        break
-                    continue
-
-                # ── Watchlist per-author daily cap ──────────────
-                feed_author = _extract_author_name(post)
-                is_wl = self._is_watchlist_author(feed_author)
-                if is_wl and not self._check_increment_watchlist_cap(feed_author):
-                    logger.info(
-                        "Phase B: skip feed reply — watchlist cap for %s (%s/day).",
-                        feed_author, self._watchlist_max_per_author_day,
-                    )
                     _llm_attempts += 1
                     if _llm_attempts >= _max_llm_attempts:
                         logger.info("Phase B: LLM attempt cap reached (%s/%s), stopping cycle.",
