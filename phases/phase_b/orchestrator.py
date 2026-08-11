@@ -2976,6 +2976,16 @@ class PhaseB:
             _value_cls = self._classify_comment_value(comment_text)
             self._stats["passed_value"] += 1
 
+            # ── Anti-dogpile pre-check: skip BEFORE LLM generation ──
+            if len(post_id) > 10:
+                dogpile_count = self._get_replies_per_post(post_id)
+                if dogpile_count >= self.max_replies_per_post:
+                    logger.info(
+                        "anti-dogpile: skip post %s (%d/%d) — checked before generation",
+                        post_id, dogpile_count, self.max_replies_per_post,
+                    )
+                    continue
+
             # ── Build thread history for conversational context ──
             thread_history = ""
             if parent_id:
