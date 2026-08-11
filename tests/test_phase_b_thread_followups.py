@@ -138,18 +138,25 @@ async def test_same_comment_not_answered_twice_durable_dedup():
 
 @pytest.mark.asyncio
 async def test_depth_over_max_is_not_followed():
-    """Profundidad >= MAX_CONVERSATION_DEPTH (3) → no se sigue el hilo."""
+    """Profundidad >= MAX_CONVERSATION_DEPTH (ahora 8) → no se sigue el hilo.
+    Cadena de profundidad 3 ya NO es limite con libre albedrío; se construye
+    una cadena profunda (8+) para verificar el corte real."""
+    from phases.phase_b.constants import MAX_CONVERSATION_DEPTH
     pb = _make_pb()
     pb._commented_post_ids = {POST: datetime.now().isoformat()}
+    # Construir cadena hasta el depth MAX: a(0)→b(1)→...→ours(MAX-1)→reply(MAX)
+    chain = []
+    prev = None
+    for i in range(MAX_CONVERSATION_DEPTH):
+        cid = f"c{i}"
+        chain.append({"id": cid, "parent_id": prev, "author": {"name": "u"},
+                      "content": f"l{i}", "text": f"l{i}"})
+        prev = cid
+    chain.append({"id": "ours-deep", "parent_id": prev, "author": {"name": AGENT},
+                  "content": "our deep comment", "text": "our deep comment"})
+    chain.append(_reply_to("ours-deep", "reply-deep"))
     pb._agent_comment_ids = {POST: ["ours-deep"]}
-    # Cadena: a(0) → b(1) → ours-deep(2) → reply(3). reply está en depth 3.
-    pb.api.fetch_post_comments.return_value = [
-        {"id": "a", "parent_id": None, "author": {"name": "u1"}, "content": "root", "text": "root"},
-        {"id": "b", "parent_id": "a", "author": {"name": "u2"}, "content": "l1", "text": "l1"},
-        {"id": "ours-deep", "parent_id": "b", "author": {"name": AGENT},
-         "content": "our deep comment", "text": "our deep comment"},
-        _reply_to("ours-deep", "reply-deep"),
-    ]
+    pb.api.fetch_post_comments.return_value = chain
 
     results = await pb._execute_thread_followups(remaining_cycle_slots=4)
 

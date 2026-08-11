@@ -17,7 +17,7 @@ _cold_start_logged = False
 _cold_start_lock = Lock()
 
 # Conversational depth limit
-MAX_CONVERSATION_DEPTH = 3
+MAX_CONVERSATION_DEPTH = 8
 
 # Own-post reply candidate scoring: how many own posts (ranked by engagement)
 # are fetched for unreplied-comment scoring per cycle.

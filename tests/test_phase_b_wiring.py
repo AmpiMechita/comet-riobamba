@@ -302,7 +302,7 @@ async def test_feed_reply_gate_uses_thread_count():
     with (
         patch.object(phase_b, "_fetch_candidate_posts", return_value=posts),
         patch.object(phase_b, "_decide_reply_from_post", return_value=RelevanceDecision(True, 30, "reply_sent")),
-        patch.object(phase_b, "_generate_reply_for_post", AsyncMock(return_value="A circuit breaker pattern with a 200ms timeout avoids cascade failures. The key threshold is the retry budget per upstream dependency.")),
+        patch.object(phase_b, "_generate_reply_for_post", AsyncMock(return_value=("A circuit breaker pattern with a 200ms timeout avoids cascade failures. The key threshold is the retry budget per upstream dependency.", None))),
         patch.object(phase_b, "_check_and_prevent_duplicate", AsyncMock(return_value="A circuit breaker pattern with a 200ms timeout avoids cascade failures. The key threshold is the retry budget per upstream dependency.")),
         patch.object(phase_b.api, "create_comment", return_value={"success": True, "id": "c1"}),
     ):
@@ -348,7 +348,7 @@ async def test_feed_reply_persists_dedup_key():
     with (
         patch.object(phase_b, "_fetch_candidate_posts", return_value=posts),
         patch.object(phase_b, "_decide_reply_from_post", return_value=RelevanceDecision(True, 30, "reply_sent")),
-        patch.object(phase_b, "_generate_reply_for_post", AsyncMock(return_value="A circuit breaker pattern with a 200ms timeout avoids cascade failures. The key threshold is the retry budget per upstream dependency.")),
+        patch.object(phase_b, "_generate_reply_for_post", AsyncMock(return_value=("A circuit breaker pattern with a 200ms timeout avoids cascade failures. The key threshold is the retry budget per upstream dependency.", None))),
         patch.object(phase_b, "_check_and_prevent_duplicate", AsyncMock(return_value="A circuit breaker pattern with a 200ms timeout avoids cascade failures. The key threshold is the retry budget per upstream dependency.")),
         patch.object(phase_b.api, "create_comment", return_value={"success": True, "id": "c1"}),
     ):
@@ -391,7 +391,7 @@ async def test_feed_reply_blocks_repeat_same_post_without_exception():
     with (
         patch.object(phase_b, "_fetch_candidate_posts", return_value=posts),
         patch.object(phase_b, "_decide_reply_from_post", return_value=RelevanceDecision(True, 40, "reply_sent")),
-        patch.object(phase_b, "_generate_reply_for_post", AsyncMock(return_value="Should not be used")),
+        patch.object(phase_b, "_generate_reply_for_post", AsyncMock(return_value=("Should not be used", None))),
         patch.object(phase_b.api, "create_comment", return_value={"success": True, "id": "c1"}),
     ):
         results = await phase_b._execute_feed_replies()
@@ -419,7 +419,7 @@ async def test_reply_quality_guard_blocks_templated_numeric_draft():
     phase_b._replied_topic_fingerprints.add("guardrail|latency")
     phase_b.llm.generate = AsyncMock(return_value="a practical guardrail is to keep p99 latency under 500 ms and cap retries at 2.")
     with patch.object(phase_b._dedup, "sync_replied_topic_fingerprints"):
-        reply = await phase_b._generate_reply_for_post({
+        reply, _ = await phase_b._generate_reply_for_post({
             "id": "post-1",
             "title": "Deployment question",
             "content": "This discusses deployment strategies for production systems.",
@@ -443,7 +443,7 @@ async def test_reply_quality_guard_allows_source_anchored_specific_draft():
     phase_b = PhaseB(deps=deps)
     phase_b.llm.generate = AsyncMock(return_value="Your rollback note is the key point: recovery time matters more than raw throughput.")
     with patch.object(phase_b._dedup, "sync_replied_topic_fingerprints"):
-        reply = await phase_b._generate_reply_for_post({
+        reply, _ = await phase_b._generate_reply_for_post({
             "id": "post-2",
             "title": "Rollback note",
             "content": "The post focuses on rollback and recovery time after deployment.",
@@ -892,7 +892,7 @@ async def test_feed_reply_already_existed_increments_comments_today(tmp_path):
     with (
         patch.object(pb, "_fetch_candidate_posts", return_value=posts),
         patch.object(pb, "_decide_reply_from_post", return_value=RelevanceDecision(True, 30, "reply_sent")),
-        patch.object(pb, "_generate_reply_for_post", AsyncMock(return_value="A reply with enough content to pass all checks and gates that require minimum length thresholds for publication in the feed.")),
+        patch.object(pb, "_generate_reply_for_post", AsyncMock(return_value=("A reply with enough content to pass all checks and gates that require minimum length thresholds for publication in the feed.", None))),
         patch.object(pb, "_check_and_prevent_duplicate", AsyncMock(return_value="A reply with enough content to pass all checks and gates that require minimum length thresholds for publication in the feed.")),
     ):
         import phases.phase_b as _pb_mod
@@ -972,3 +972,4 @@ def test_feed_stall_load_tolerates_corrupt_file(tmp_path):
     state_file.write_text("{no es json", encoding="utf-8")
     with patch.object(orch, "_FEED_STALL_STATE_FILE", state_file):
         assert orch._load_feed_stall_count() == 0
+

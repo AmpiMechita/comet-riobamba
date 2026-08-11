@@ -13,19 +13,19 @@ class AgentPolicy:
     phase_a_mode: str = "research"
 
     # ── Activity Budget (per day) ──────────────────────────────────
-    max_comments_per_day: int = 80        # v5.0: synced with phase_b_strategy.yaml
-    max_feed_initiations_per_day: int = 6      # First comment in a new feed post
-    max_feed_replies_per_day: int = 20         # Total feed replies (legacy compat)
+    max_comments_per_day: int = 150      # v5.2: libre albedrío — la comunidad decide
+    max_feed_initiations_per_day: int = 10     # First comment in a new feed post
+    max_feed_replies_per_day: int = 60         # Total feed replies
 
     # ── Per-cycle limits ───────────────────────────────────────────
-    max_comment_replies_per_cycle: int = 6
+    max_comment_replies_per_cycle: int = 30
 
     # ── Per-post limits ────────────────────────────────────────────
-    max_comments_per_post: int = 10            # Hard cap per own post
-    max_feed_comments_per_post: int = 5        # Hard cap per feed post
+    max_comments_per_post: int = 30            # Responses in own post (free-will)
+    max_feed_comments_per_post: int = 10        # Replies per feed post
 
     # ── Thread engagement ──────────────────────────────────────────
-    max_thread_depth: int = 5
+    max_thread_depth: int = 10
     disengage_after_no_value_replies: int = 2
 
     min_comment_relevance_score: int = 4

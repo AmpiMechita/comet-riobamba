@@ -707,7 +707,7 @@ class PhaseB:
         self._watchlist_authors: Set[str] = self._load_watchlist_authors()
         set_watchlist_authors(self._watchlist_authors)
         self._watchlist_max_per_author_day: int = int(os.getenv(
-            "AGENT_MAX_PER_WATCHLIST_AUTHOR_DAY", "1"))
+            "AGENT_MAX_PER_WATCHLIST_AUTHOR_DAY", "3"))
         self._watchlist_author_count_today: Dict[str, int] = {}
         self._watchlist_count_path: Path = BASE_DIR / "data" / "watchlist_count_today.json"
         self._load_watchlist_count()

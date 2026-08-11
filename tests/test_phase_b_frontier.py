@@ -315,7 +315,7 @@ class TestWatchlistBonus:
         assert bonus >= 10, f"expected >=10 for old watchlist, got {bonus}"
 
     def test_watchlist_cap_blocks_second_comment(self):
-        """Segundo post del mismo autor el mismo dia → bloqueado por el cap."""
+        """Cuarto post del mismo autor el mismo dia → bloqueado (cap default 3)."""
         from unittest.mock import MagicMock
         deps = PhaseBDeps(
             model_cascade=MagicMock(),
@@ -325,7 +325,12 @@ class TestWatchlistBonus:
             agent_name="test-agent",
         )
         phase_b = PhaseB(deps)
-        phase_b._watchlist_author_count_today["vina"] = 1
+        phase_b._watchlist_max_per_author_day = 3  # fuerza libre albedrío (default)
+        phase_b._watchlist_author_count_today = {}
+        # Cap default 3: los primeros 3 pasan, el 4to se bloquea
+        assert phase_b._check_increment_watchlist_cap("vina")
+        assert phase_b._check_increment_watchlist_cap("vina")
+        assert phase_b._check_increment_watchlist_cap("vina")
         assert not phase_b._check_increment_watchlist_cap("vina")
 
     def test_flash_only_does_not_degrade_quality_tier(self):

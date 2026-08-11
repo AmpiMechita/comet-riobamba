@@ -371,7 +371,7 @@ def test_phase_b_interval_in_policy() -> None:
 def test_max_feed_replies_in_policy() -> None:
     from config.agent_policy import POLICY
     assert hasattr(POLICY, "max_feed_replies_per_day")
-    assert POLICY.max_feed_replies_per_day == 20
+    assert POLICY.max_feed_replies_per_day == 60
 
 
 # ============================================================
