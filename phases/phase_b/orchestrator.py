@@ -1300,12 +1300,14 @@ class PhaseB:
             self._stats["upvotes"] = self._upvotes_this_cycle
             self._stats["follows"] = self._follows_this_cycle
             semantic_count = self._stats.get("semantic_candidates", 0)
+            inbound_wl = self.get_watchlist_inbound_today()
             logger.info(
                 "Phase B: cycle summary — own-post replies=%s, thread follow-ups=%s, "
                 "feed replies=%s, upvotes=%s, follows=%s, semantic_candidates=%s, "
-                "claim-check failures=%s, total=%s",
+                "claim-check failures=%s, total=%s, watchlist_inbound_today=%s",
                 own_count, followup_count, feed_count, self._upvotes_this_cycle,
                 self._follows_this_cycle, semantic_count, self._stats.get("claim_check_failed", 0), total,
+                inbound_wl,
             )
             span.set("feed_replies", feed_count)
             span.set("own_replies", own_count)
@@ -2151,6 +2153,26 @@ class PhaseB:
                         feed_author,
                         is_wl,
                     )
+                    # ── Post-pairing feeder: engancha al autor top hacia NOSOTROS ──
+                    # Cada reply exitosa a un post de watchlist registra un "counter-claim"
+                    # en la agenda para que Fase A publique un refute/profundizacion
+                    # 6-24h despues. Es el mecanismo de invitacion implicita.
+                    if is_wl:
+                        try:
+                            from services.research_agenda import load_agenda, save_agenda
+                            _ag = load_agenda()
+                            _claim = str(post.get("content") or post.get("body") or "")[:200]
+                            _counter_topic = (
+                                f"Counter-claim to the position by {feed_author} on "
+                                f"'{str(post.get('title') or '')[:80]}': sharpen the limit of "
+                                f"the mechanism they defend and propose the boundary condition "
+                                f"where it fails"
+                            )
+                            _ag.add_topic(_counter_topic, source="watchlist_pairing", tags=["watchlist", feed_author])
+                            save_agenda(_ag)
+                            logger.info("Phase B: watchlist pairing topic added (author=%s)", feed_author)
+                        except Exception as _e:
+                            logger.debug("Phase B: watchlist pairing feeder failed: %s", _e)
                     interlocutors.record_interaction(
                         post.get("author"), on_our_post=False,
                     )
@@ -2590,6 +2612,26 @@ class PhaseB:
                 max=400
             )
 
+            # ── CTA de retorno: post-pairing hook para autores watchlist ──
+            # Cuando respondemos a un autor top, cerramos con una pregunta de
+            # co-diseno que invita a seguir el tema en NUESTRO post. Convierte
+            # la reply de "participacion" a "invitacion implicita".
+            try:
+                if post.get("_reply_tier") == "quality":
+                    _enter_hook = (
+                        "\n\nENGAGEMENT HOOK (Solo para este autor senior): "
+                        "En las ultimas 2 frases, plantea UNA pregunta de co-diseno "
+                        "abierta y provocadora sobre la tension central (el threshold "
+                        "o trade-off del que hablaste). La pregunta debe ser lo "
+                        "suficientemente especifica como para que el autor quiera "
+                        "responder y su respuesta natural sea un post o comentario "
+                        "largo. NO nombre otras plataformas. Termina con la pregunta, "
+                        "sin cortesia."
+                    )
+                    system_prompt = system_prompt + _enter_hook
+            except Exception:
+                pass
+
             if not self.llm:
                 span.set("length", 0)
                 return "", None
@@ -2921,6 +2963,10 @@ class PhaseB:
             comment_id = comment.get("id") or comment.get("comment_id")
             comment_text = comment.get("content") or comment.get("text") or ""
             author = self._get_author_name(comment) or "usuario"
+
+            # ── Inbound watchlist tracking: un referente comento en NUESTRO post ──
+            if self._is_watchlist_author(author):
+                self.record_watchlist_inbound(author)
 
             if not comment_id:
                 logger.warning(f"Phase B: comment without id on post {post_id}, skipping")
@@ -3311,6 +3357,40 @@ class PhaseB:
 
     def _is_watchlist_author(self, author: str) -> bool:
         return author.strip().lower() in self._watchlist_authors
+
+    # ── Inbound watchlist tracking (calibracion) ─────────────────
+    # Cuenta cuantos autores de la watchlist comentan en POSTS DE COMET.
+    # Objetivo: >0/dia (hoy solo ocurre con authors explicitamente). Es la
+    # metrica de exito del post-pairing; si crece, el engagement reciproco
+    # esta funcionando.
+    def record_watchlist_inbound(self, author: str) -> None:
+        try:
+            _path = BASE_DIR / "data" / "watchlist_inbound_today.json"
+            today = datetime.now(timezone.utc).date().isoformat()
+            if _path.exists():
+                data = json.loads(_path.read_text(encoding="utf-8"))
+            else:
+                data = {}
+            if data.get("date") != today:
+                data = {"date": today, "counts": {}}
+            key = author.strip().lower()
+            data["counts"][key] = int(data["counts"].get(key, 0)) + 1
+            _path.write_text(json.dumps(data), encoding="utf-8")
+        except Exception as e:
+            logger.debug("record_watchlist_inbound failed: %s", e)
+
+    def get_watchlist_inbound_today(self) -> int:
+        try:
+            _path = BASE_DIR / "data" / "watchlist_inbound_today.json"
+            if _path.exists():
+                data = json.loads(_path.read_text(encoding="utf-8"))
+                today = datetime.now(timezone.utc).date().isoformat()
+                if data.get("date") == today:
+                    counts = data.get("counts", {})
+                    return sum(int(v) for v in counts.values())
+        except Exception:
+            pass
+        return 0
 
 
     # ── Research agenda helpers ───────────────────────────────────

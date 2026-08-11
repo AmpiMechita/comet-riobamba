@@ -507,9 +507,16 @@ def choose_topic(mode: str = "research") -> tuple[str, str]:
         # Sin esto, un backlog viejo bloquea indefinidamente temas nuevos y de
         # mejor calidad (ej. arxiv, postmortem_own) que quedan al final de la
         # cola. created_at ausente/invalido se trata como el mas antiguo.
+        # v5.2: topics de post-pairing con autores watchlist tienen prioridad
+        # maxima — el mecanismo de invitacion reciproca hacia los referentes.
+        # Con reverse=True, la prioridad usa valor 2 (mayor) para watchlist
+        # y 1 para el resto; dentro de cada grupo rige created_at descendente.
         all_uncovered = sorted(
             all_uncovered,
-            key=lambda t: t.get("created_at") or "",
+            key=lambda t: (
+                2 if str(t.get("source", "")).startswith("watchlist_pairing") else 1,
+                t.get("created_at") or "",
+            ),
             reverse=True,
         )
         uncovered = []
@@ -1024,9 +1031,15 @@ def _topic_with_matrix_fallback(
         # Sin esto, un backlog viejo bloquea indefinidamente temas nuevos y de
         # mejor calidad (ej. arxiv, postmortem_own) que quedan al final de la
         # cola. created_at ausente/invalido se trata como el mas antiguo.
+        # v5.2: los topicos de post-pairing con autores watchlist tienen prioridad
+        # maxima — son el mecanismo de invitacion reciproca hacia los referentes.
+        # Con reverse=True, prioridad 2 (watchlist) y 1 (resto), created_at desc.
         all_uncovered = sorted(
             all_uncovered,
-            key=lambda t: t.get("created_at") or "",
+            key=lambda t: (
+                2 if str(t.get("source", "")).startswith("watchlist_pairing") else 1,
+                t.get("created_at") or "",
+            ),
             reverse=True,
         )
         uncovered = []
