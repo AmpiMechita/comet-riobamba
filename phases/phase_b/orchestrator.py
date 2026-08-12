@@ -2983,7 +2983,7 @@ class PhaseB:
 
             # ── Inbound watchlist tracking: un referente comento en NUESTRO post ──
             if self._is_watchlist_author(author):
-                self.record_watchlist_inbound(author)
+                self.record_watchlist_inbound(author, comment_id=str(comment_id or ""))
 
             if not comment_id:
                 logger.warning(f"Phase B: comment without id on post {post_id}, skipping")
@@ -3371,7 +3371,7 @@ class PhaseB:
     # Objetivo: >0/dia (hoy solo ocurre con authors explicitamente). Es la
     # metrica de exito del post-pairing; si crece, el engagement reciproco
     # esta funcionando.
-    def record_watchlist_inbound(self, author: str) -> None:
+    def record_watchlist_inbound(self, author: str, comment_id: str = "") -> None:
         try:
             _path = BASE_DIR / "data" / "watchlist_inbound_today.json"
             today = datetime.now(timezone.utc).date().isoformat()
@@ -3382,6 +3382,14 @@ class PhaseB:
             if data.get("date") != today:
                 data = {"date": today, "counts": {}}
             key = author.strip().lower()
+            # Dedup: un mismo comment_id NO cuenta dos veces aunque el post se
+            # re-escanee en multiples ciclos (evita inflar el inbound por re-scan).
+            seen = data.setdefault("_seen", [])
+            if comment_id and comment_id in seen:
+                return
+            if comment_id:
+                seen.append(comment_id)
+                seen[:] = seen[-2000:]  # cota el historial diario
             data["counts"][key] = int(data["counts"].get(key, 0)) + 1
             _path.write_text(json.dumps(data), encoding="utf-8")
         except Exception as e:
