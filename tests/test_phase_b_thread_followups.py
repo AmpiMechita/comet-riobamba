@@ -263,3 +263,126 @@ async def test_reply_from_ourselves_is_ignored():
 
     assert results == []
     pb.api.create_comment.assert_not_called()
+
+
+# ──────────────────────────────────────────────────────────────────
+# Extractores robustos de parent id (API real: parent_id plano en
+# hijos anidados; formas alternativas parent{} / reply_to{}).
+# ──────────────────────────────────────────────────────────────────
+
+def test_extract_parent_id_flat():
+    assert PhaseB._extract_parent_id({"parent_id": "abc"}) == "abc"
+    assert PhaseB._extract_parent_id({"parentId": "abc"}) == "abc"
+    assert PhaseB._extract_parent_id({"parent_comment_id": "abc"}) == "abc"
+
+
+def test_extract_parent_id_nested_objects():
+    assert PhaseB._extract_parent_id({"parent": {"id": "p1"}}) == "p1"
+    assert PhaseB._extract_parent_id({"reply_to": {"id": "r1"}}) == "r1"
+    assert PhaseB._extract_parent_id({"parent": {"id": "p1"}, "reply_to": {"id": "r1"}}) == "p1"
+    # parent/reply_to no dict → no rompe
+    assert PhaseB._extract_parent_id({"parent": "plain-string"}) == ""
+
+
+def test_extract_parent_id_flat_wins_over_nested():
+    assert PhaseB._extract_parent_id({"parent_id": "flat", "parent": {"id": "nested"}}) == "flat"
+
+
+def test_extract_parent_id_no_parent():
+    assert PhaseB._extract_parent_id({}) == ""
+    assert PhaseB._extract_parent_id({"id": "c1", "content": "hi"}) == ""
+
+
+@pytest.mark.asyncio
+async def test_reply_with_nested_parent_object_matches():
+    """Respuesta que expresa el padre como parent:{id} → se matchea y genera
+    follow-up (mismo comportamiento que parent_id plano)."""
+    pb = _make_pb()
+    pb._commented_post_ids = {POST: datetime.now().isoformat()}
+    pb._agent_comment_ids = {POST: ["ours-1"]}
+    pb.api.fetch_post_comments.return_value = [
+        _our_top_level("ours-1"),
+        {**_reply_to("ours-1", "reply-nested"), "parent": {"id": "ours-1"}, "parent_id": None},
+    ]
+
+    results = await pb._execute_thread_followups(remaining_cycle_slots=4)
+
+    assert len(results) == 1
+    assert results[0]["parent_comment_id"] == "reply-nested"
+
+
+@pytest.mark.asyncio
+async def test_reply_with_reply_to_object_matches():
+    """Respuesta que expresa el padre como reply_to:{id} → se matchea."""
+    pb = _make_pb()
+    pb._commented_post_ids = {POST: datetime.now().isoformat()}
+    pb._agent_comment_ids = {POST: ["ours-1"]}
+    pb.api.fetch_post_comments.return_value = [
+        _our_top_level("ours-1"),
+        {**_reply_to("ours-1", "reply-rt"), "reply_to": {"id": "ours-1"}, "parent_id": None},
+    ]
+
+    results = await pb._execute_thread_followups(remaining_cycle_slots=4)
+
+    assert len(results) == 1
+    assert results[0]["parent_comment_id"] == "reply-rt"
+
+
+@pytest.mark.asyncio
+async def test_reply_without_parent_does_not_match():
+    """Comentario sin ningún indicador de padre → no es respuesta a nosotros."""
+    pb = _make_pb()
+    pb._commented_post_ids = {POST: datetime.now().isoformat()}
+    pb._agent_comment_ids = {POST: ["ours-1"]}
+    pb.api.fetch_post_comments.return_value = [
+        _our_top_level("ours-1"),
+        _reply_to(None, "orphan-1"),
+    ]
+
+    results = await pb._execute_thread_followups(remaining_cycle_slots=4)
+
+    assert results == []
+    pb.api.create_comment.assert_not_called()
+
+
+def _flat_thread():
+    """Cadena a(0)→b(1)→c(2) en lista plana, cada nodo en su forma distinta:
+    b usa parent_id plano, c usa parent:{id}."""
+    return [
+        {"id": "a", "parent_id": None},
+        {"id": "b", "parent_id": "a"},
+        {"id": "c", "parent": {"id": "b"}, "parent_id": None},
+    ]
+
+
+def test_thread_depth_flat_parent_id():
+    comments = _flat_thread()
+    assert PhaseB._compute_thread_depth(comments[0], comments) == 0
+    assert PhaseB._compute_thread_depth(comments[1], comments) == 1
+    assert PhaseB._compute_thread_depth(comments[2], comments) == 2
+
+
+def test_thread_depth_reply_to_form():
+    comments = [
+        {"id": "a", "parent_id": None},
+        {"id": "b", "reply_to": {"id": "a"}},
+        {"id": "c", "reply_to": {"id": "b"}},
+    ]
+    assert PhaseB._compute_thread_depth(comments[0], comments) == 0
+    assert PhaseB._compute_thread_depth(comments[1], comments) == 1
+    assert PhaseB._compute_thread_depth(comments[2], comments) == 2
+
+
+def test_thread_depth_mixed_forms_chain():
+    """Cadena mezclando las tres formas: a(0)→b(parent_id plano)→c(parent:{id})
+    →d(reply_to:{id}) → depth correcto con el extractor en cada salto."""
+    comments = [
+        {"id": "a", "parent_id": None},
+        {"id": "b", "parent_id": "a"},
+        {"id": "c", "parent": {"id": "b"}},
+        {"id": "d", "reply_to": {"id": "c"}},
+    ]
+    assert PhaseB._compute_thread_depth(comments[0], comments) == 0
+    assert PhaseB._compute_thread_depth(comments[1], comments) == 1
+    assert PhaseB._compute_thread_depth(comments[2], comments) == 2
+    assert PhaseB._compute_thread_depth(comments[3], comments) == 3

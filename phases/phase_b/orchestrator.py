@@ -1539,7 +1539,7 @@ class PhaseB:
                 replies_to_us = [
                     c for c in comments
                     if isinstance(c, dict)
-                    and str(c.get("parent_id") or "") in our_id_set
+                    and PhaseB._extract_parent_id(c) in our_id_set
                     and not self._is_own_author(self._get_author_name(c))
                 ]
                 diag_replies_matched += len(replies_to_us)
@@ -1940,7 +1940,7 @@ class PhaseB:
                     max_depth = max(
                         (self._compute_thread_depth(c, post_comments)
                          for c in post_comments
-                         if c.get("parent_id") in agent_post_ids),
+                         if PhaseB._extract_parent_id(c) in agent_post_ids),
                         default=0,
                     )
                     if max_depth >= MAX_CONVERSATION_DEPTH:
@@ -2454,21 +2454,30 @@ class PhaseB:
             return True
 
     @staticmethod
+    def _extract_parent_id(c: Dict) -> str:
+        pid = c.get("parent_id") or c.get("parentId") or c.get("parent_comment_id")
+        if not pid:
+            parent = c.get("parent") if isinstance(c.get("parent"), dict) else {}
+            reply_to = c.get("reply_to") if isinstance(c.get("reply_to"), dict) else {}
+            pid = parent.get("id") or reply_to.get("id")
+        return str(pid or "")
+
+    @staticmethod
     def _compute_thread_depth(comment: Dict, all_comments: List[Dict]) -> int:
         """How many levels deep this comment is in the thread.
 
-        Depth 0 = no parent_id (top-level).
+        Depth 0 = no parent id (top-level).
         Depth 1 = parent is a top-level comment.
         Depth 2 = grandparent is a top-level comment, etc.
         """
         depth = 0
-        parent_id = comment.get("parent_id")
+        parent_id = PhaseB._extract_parent_id(comment)
         if not parent_id:
             return 0
         cmap = {c.get("id"): c for c in all_comments if c.get("id")}
         while parent_id and parent_id in cmap:
             depth += 1
-            parent_id = cmap[parent_id].get("parent_id")
+            parent_id = PhaseB._extract_parent_id(cmap[parent_id])
         return depth
 
     async def _generate_reply_bestof(self, user_prompt: str, system_prompt: str,
@@ -3032,7 +3041,7 @@ class PhaseB:
                 continue
 
             # ── Thread depth guard ─────────────────────────────────
-            parent_id = comment.get("parent_id")
+            parent_id = PhaseB._extract_parent_id(comment)
             if parent_id and parent_id in self._agent_comment_ids.get(post_id, []):
                 depth = self._compute_thread_depth(comment, comments)
                 if depth >= MAX_CONVERSATION_DEPTH:

@@ -650,3 +650,100 @@ class TestCallWriteRetry5xx:
         client.create_post("title", "body")
 
         assert call_idx[0] == 1
+
+
+# ── fetch_post_comments: aplanamiento de replies anidadas ───────────
+
+
+def _nested_comments_response():
+    """Estructura real de la API: data.comments[] con replies[] anidados.
+    Los hijos llevan parent_id plano; los top-level NO tienen parent_id."""
+    return {
+        "status": 200,
+        "data": {
+            "comments": [
+                {
+                    "id": "top-1",
+                    "content": "top-level one",
+                    "author": {"name": "alice", "id": "a1"},
+                    "replies": [
+                        {
+                            "id": "child-1",
+                            "parent_id": "top-1",
+                            "content": "reply to top-1",
+                            "author": {"name": "bob", "id": "b1"},
+                            "replies": [],
+                        },
+                        {
+                            "id": "child-2",
+                            "parent_id": "top-1",
+                            "content": "second reply",
+                            "author": {"name": "carol", "id": "c1"},
+                            "replies": [
+                                {
+                                    "id": "grandchild-1",
+                                    "parent_id": "child-2",
+                                    "content": "deep reply",
+                                    "author": {"name": "dave", "id": "d1"},
+                                    "replies": [],
+                                }
+                            ],
+                        },
+                    ],
+                },
+                {"id": "top-2", "content": "top-level two", "author": {"name": "eve", "id": "e1"}, "replies": []},
+            ],
+        },
+    }
+
+
+def test_fetch_post_comments_flattens_nested_replies():
+    """La API devuelve respuestas ANIDADAS en replies[]; el cliente debe
+    aplanarlas para que el matcher de follow-ups vea los hijos."""
+    client = _make_client()
+    client._request = MagicMock(return_value=_nested_comments_response())
+
+    result = client.fetch_post_comments("post-1")
+
+    assert len(result) == 5  # 2 top-level + child-1 + child-2 + grandchild-1
+    ids = {c["id"] for c in result}
+    assert ids == {"top-1", "top-2", "child-1", "child-2", "grandchild-1"}
+    by_id = {c["id"]: c for c in result}
+    # Los hijos preservan su parent_id plano.
+    assert by_id["child-1"]["parent_id"] == "top-1"
+    assert by_id["grandchild-1"]["parent_id"] == "child-2"
+    # Normalización de autor aplicada en cada nivel.
+    assert by_id["grandchild-1"]["author"] == "dave"
+    assert by_id["top-1"]["author"] == "alice"
+    assert by_id["top-2"]["parent_id"] is None
+
+
+def test_fetch_post_comments_flat_list_unchanged():
+    """Si la API devuelve lista plana (sin replies), el resultado es idéntico."""
+    client = _make_client()
+    client._request = MagicMock(return_value={
+        "status": 200,
+        "data": {
+            "comments": [
+                {"id": "c1", "parent_id": None, "content": "x", "author": "alice"},
+                {"id": "c2", "parent_id": "c1", "content": "y", "author": "bob"},
+            ],
+        },
+    })
+
+    result = client.fetch_post_comments("post-1")
+
+    assert len(result) == 2
+    assert result[1]["parent_id"] == "c1"
+
+
+def test_fetch_post_comments_empty_data_returns_empty():
+    client = _make_client()
+    client._request = MagicMock(return_value={"status": 200, "data": {"comments": []}})
+    assert client.fetch_post_comments("post-1") == []
+
+
+def test_fetch_post_comments_error_returns_empty():
+    client = _make_client()
+    client._request = MagicMock(side_effect=ConnectionError("boom"))
+    assert client.fetch_post_comments("post-1") == []

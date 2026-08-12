@@ -14,6 +14,7 @@ Cliente HTTP con:
 - get_feed / getfeed y get_comments / getcomments compatibles con APIResponse.
 """
 
+import json
 import logging
 import os
 import threading
@@ -600,9 +601,25 @@ class MoltbookAPIClient(PlatformClient):
                 items = self._pick_list(data, "items", "comments", "data")
                 logger.info("fetch_post_comments(%s): %d comentarios", post_id, len(items))
 
-                normalized: List[Dict[str, Any]] = []
-                for raw in items:
-                    c = dict(raw)
+                # ── Log temporal de evidencia: UNA vez por proceso vuelca el
+                #    JSON crudo de un comentario real (recortado a 400 chars).
+                if not getattr(self, "_raw_dump_done", False):
+                    self._raw_dump_done = True
+                    if items and isinstance(items[0], dict):
+                        logger.info(
+                            "fetch_post_comments EVIDENCIA cruda (1er comentario, ~400 chars): %s",
+                            json.dumps(items[0], ensure_ascii=False)[:400],
+                        )
+
+                # ── Aplanar estructura anidada (data.comments[].replies[]) ──
+                # La API real devuelve respuestas ANIDADAS dentro de cada
+                # comentario; los hijos llevan parent_id plano. Sin este
+                # aplanado el matcher de follow-ups solo ve top-level y nunca
+                # las respuestas a nuestros comentarios (replies_matched=0).
+                flattened: List[Dict[str, Any]] = []
+
+                def _flatten(raw_item: Dict, parent_override: Optional[str] = None) -> None:
+                    c = dict(raw_item)
                     c["post_id"] = post_id
                     c["id"] = c.get("id") or c.get("comment_id") or c.get("commentId")
                     c["text"] = c.get("text") or c.get("content") or c.get("body") or ""
@@ -613,10 +630,23 @@ class MoltbookAPIClient(PlatformClient):
                     else:
                         c["author"] = author_raw
                     c["author_id"] = c.get("author_id") or c.get("user_id") or c.get("userid")
-                    c["parent_id"] = c.get("parent_id") or c.get("parentId")
-                    normalized.append(c)
+                    c["parent_id"] = c.get("parent_id") or c.get("parentId") or parent_override
+                    flattened.append(c)
+                    for sub in (raw_item.get("replies") or []):
+                        if isinstance(sub, dict):
+                            _flatten(sub, parent_override=c.get("id"))
 
-                return normalized
+                for raw in items:
+                    if isinstance(raw, dict):
+                        _flatten(raw)
+
+                if len(flattened) != len(items):
+                    logger.info(
+                        "fetch_post_comments(%s): aplanadas %d (top-level=%d, replies anidadas incluidas)",
+                        post_id, len(flattened), len(items),
+                    )
+
+                return flattened
         except Exception as e:
             logger.debug("fetch_post_comments(%s) falló: %s", post_id, e)
 
