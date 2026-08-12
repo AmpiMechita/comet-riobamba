@@ -386,3 +386,56 @@ def test_thread_depth_mixed_forms_chain():
     assert PhaseB._compute_thread_depth(comments[1], comments) == 1
     assert PhaseB._compute_thread_depth(comments[2], comments) == 2
     assert PhaseB._compute_thread_depth(comments[3], comments) == 3
+
+
+# ──────────────────────────────────────────────────────────────────
+# Tier routing en follow-ups: autor watchlist → quality, resto → flash
+# ──────────────────────────────────────────────────────────────────
+
+def _make_pb_capture_tier():
+    pb = _make_pb()
+    pb._watchlist_authors = {"referente1"}
+    pb._commented_post_ids = {POST: datetime.now().isoformat()}
+    pb._agent_comment_ids = {POST: ["ours-1"]}
+    return pb
+
+
+@pytest.mark.asyncio
+async def test_followup_to_watchlist_author_uses_quality_tier():
+    """Respuesta de un autor watchlist → generación con tier='quality'."""
+    pb = _make_pb_capture_tier()
+    pb._generate_own_post_reply = AsyncMock(return_value=_GOOD_FOLLOWUP)
+    pb.api.fetch_post_comments.return_value = [
+        _our_top_level("ours-1"),
+        {**_reply_to("ours-1", "reply-wl", author="referente1")},
+    ]
+
+    results = await pb._execute_thread_followups(remaining_cycle_slots=4)
+
+    assert len(results) == 1
+    _, kwargs = pb._generate_own_post_reply.call_args
+    assert kwargs.get("tier") == "quality", f"Watchlist debe usar quality, got {kwargs.get('tier')}"
+
+
+@pytest.mark.asyncio
+async def test_followup_to_non_watchlist_author_uses_flash_tier():
+    """Respuesta de un autor normal → generación con tier='flash' (default)."""
+    pb = _make_pb_capture_tier()
+    pb._generate_own_post_reply = AsyncMock(return_value=_GOOD_FOLLOWUP)
+    pb.api.fetch_post_comments.return_value = [
+        _our_top_level("ours-1"),
+        {**_reply_to("ours-1", "reply-norm", author="normal_agent")},
+    ]
+
+    results = await pb._execute_thread_followups(remaining_cycle_slots=4)
+
+    assert len(results) == 1
+    _, kwargs = pb._generate_own_post_reply.call_args
+    assert kwargs.get("tier") == "flash", f"Autor normal debe usar flash, got {kwargs.get('tier')}"
+
+
+def test_generate_own_post_reply_defaults_to_flash():
+    """El parámetro tier debe tener default 'flash' para no cambiar el resto."""
+    import inspect
+    sig = inspect.signature(PhaseB._generate_own_post_reply)
+    assert sig.parameters["tier"].default == "flash"

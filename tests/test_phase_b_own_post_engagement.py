@@ -153,10 +153,10 @@ class TestEngagementRanking:
         assert called_posts[0] == top_post["id"], f"High-engagement post should be first, got {called_posts}"
 
     @pytest.mark.asyncio
-    async def test_own_posts_per_cycle_uses_configurable_limit(self, _redirect_paths):
-        """El límite de posts propios por ciclo debe ser configurable
-        (phase_b_max_own_posts_per_cycle), no 3 fijo: los posts fuera del top-3
-        quedaban desatendidos indefinidamente."""
+    async def test_own_queue_per_cycle_uses_configurable_limit(self, _redirect_paths):
+        """El tamaño de la cola global por ciclo debe ser configurable
+        (phase_b_own_queue_per_cycle): con 4 posts y 1 comentario cada uno,
+        un queue de 2 procesa solo 2 comentarios; el resto queda pendiente."""
         pb = _make_pb(max_comments_per_day=50, max_replies_per_cycle=5)
         posts = [
             {"id": f"top-{i}000000-aaaa-bbbb-cccc-ddddeeeeffff", "comment_count": 100 - i}
@@ -170,7 +170,7 @@ class TestEngagementRanking:
         ]
         pb.api.create_comment.return_value = {"success": True, "id": "new", "status": 201}
 
-        # default 6: los 4 posts entran al ciclo
+        # default 10: los 4 comentarios (1 por post) entran al ciclo
         await pb._execute_own_post_replies()
         called = set()
         for c in pb.api.create_comment.call_args_list:
@@ -180,10 +180,10 @@ class TestEngagementRanking:
                 called.add(c.args[0])
         assert called == {p["id"] for p in posts}, f"Los 4 posts deberian entrar, got {len(called)}"
 
-        # con limit 1: solo el primero entra (posts distintos para evitar el
-        # dedup compartido con el caso anterior)
+        # con queue 1: solo 1 comentario se procesa (posts distintos para evitar
+        # el dedup compartido con el caso anterior)
         pb2 = _make_pb(max_comments_per_day=50, max_replies_per_cycle=5,
-                       behavior_extra={"phase_b_max_own_posts_per_cycle": 1})
+                       behavior_extra={"phase_b_own_queue_per_cycle": 1})
         posts2 = [
             {"id": f"top2-{i}000000-aaaa-bbbb-cccc-ddddeeeeffff", "comment_count": 100 - i}
             for i in range(4)
@@ -198,7 +198,7 @@ class TestEngagementRanking:
         await pb2._execute_own_post_replies()
         called2 = {c.kwargs.get("post_id") or c.args[0]
                    for c in pb2.api.create_comment.call_args_list if c.kwargs or c.args}
-        assert called2 == {posts2[0]["id"]}, f"Solo el top-1 deberia entrar, got {called2}"
+        assert len(called2) == 1, f"Solo 1 comentario de la cola deberia procesarse, got {called2}"
 
 
 class TestReconcileDeletedComments:
@@ -408,3 +408,140 @@ class TestOwnPostPerCycleCap:
         first_ids = {r.get("comment_id") for r in first}
         second_ids = {r.get("comment_id") for r in second}
         assert not (first_ids & second_ids), "Los ciclos no deben repetir comentarios"
+
+
+class TestOwnPostGlobalQueue:
+    """v5.2+: cola global de comentarios sin responder de TODOS los posts
+    propios, ordenada watchlist → recencia del comentario desc. El cap por
+    post se mantiene como tope secundario."""
+
+    def _comment(self, cid, author="user", text="What about latency in the retry loop?",
+                 created="2026-08-12T10:00:00Z"):
+        return {
+            "id": cid, "author": {"name": author},
+            "content": text, "text": text, "created_at": created,
+        }
+
+    def _make_pb_queue(self, queue_size=10, per_post_cap=10, daily=50, cycle=50):
+        pb = _make_pb(
+            max_comments_per_post=50, max_comments_per_day=daily, max_replies_per_cycle=cycle,
+            behavior_extra={
+                "phase_b_own_queue_per_cycle": queue_size,
+                "phase_b_max_own_comments_per_cycle": per_post_cap,
+            },
+        )
+        async def _fake_post_own_reply(post_id, comment_id, author, comment_text, thread_history=""):
+            dedup_key = f"{post_id}:{comment_id}"
+            pb._replied_comment_ids.add(dedup_key)
+            pb._dedup.mark_replied(dedup_key)
+            return {"status": "ok", "post_id": post_id, "comment_id": comment_id}
+        pb._post_own_reply = _fake_post_own_reply
+        pb._decide_reply = MagicMock(
+            return_value=MagicMock(should_reply=True, reason="test", score=0.9)
+        )
+        return pb
+
+    def _make_posts(self, n, prefix="q"):
+        return [
+            {"id": f"{prefix}-{i}000000-aaaa-bbbb-cccc-ddddeeeeffff", "comment_count": 100 - i}
+            for i in range(n)
+        ]
+
+    @pytest.mark.asyncio
+    async def test_queue_orders_watchlist_first_then_recency(self, _redirect_paths):
+        """La cola global ordena: watchlist primero (aunque su comentario sea
+        viejo), luego recencia desc."""
+        pb = self._make_pb_queue(queue_size=3, per_post_cap=10)
+        pb.api._request = MagicMock(return_value={"status": 200, "data": {"posts": self._make_posts(2)}})
+        pb.api.fetch_my_posts = MagicMock(return_value=[])
+        pb._watchlist_authors = {"watchbot"}
+        processed_order = []
+        orig_reply = pb._post_own_reply
+        async def _recording_reply(post_id, comment_id, author, comment_text, thread_history=""):
+            processed_order.append(comment_id)
+            return await orig_reply(post_id, comment_id, author, comment_text, thread_history)
+        pb._post_own_reply = _recording_reply
+        comments_by_post = {
+            "q-0000000-aaaa-bbbb-cccc-ddddeeeeffff": [
+                self._comment("old-wl", author="watchbot", created="2026-08-01T00:00:00Z"),
+                self._comment("new-norm", created="2026-08-12T11:00:00Z"),
+            ],
+            "q-1000000-aaaa-bbbb-cccc-ddddeeeeffff": [
+                self._comment("fresh-other", created="2026-08-12T12:00:00Z"),
+            ],
+        }
+        pb.api.fetch_post_comments = MagicMock(side_effect=lambda pid: comments_by_post[pid])
+
+        await pb._execute_own_post_replies()
+
+        assert processed_order[0] == "old-wl", f"Watchlist debe ir primero, got {processed_order}"
+        assert processed_order[1] == "fresh-other", f"Reciente no-watchlist debe seguir, got {processed_order}"
+        assert processed_order[2] == "new-norm", f"Viejo no-watchlist va al final, got {processed_order}"
+
+    @pytest.mark.asyncio
+    async def test_queue_respects_per_post_cap(self, _redirect_paths):
+        """Cap por post (tope secundario): un post con 15 accionables y cap 10
+        no monopoliza la cola; el resto entra de otros posts."""
+        pb = self._make_pb_queue(queue_size=15, per_post_cap=10)
+        pb.api._request = MagicMock(return_value={"status": 200, "data": {"posts": self._make_posts(2)}})
+        pb.api.fetch_my_posts = MagicMock(return_value=[])
+        comments_by_post = {
+            "q-0000000-aaaa-bbbb-cccc-ddddeeeeffff": [
+                self._comment(f"p0-c{i}", created=f"2026-08-12T10:{i:02d}:00Z") for i in range(15)
+            ],
+            "q-1000000-aaaa-bbbb-cccc-ddddeeeeffff": [
+                self._comment(f"p1-c{i}", created=f"2026-08-12T09:{i:02d}:00Z") for i in range(5)
+            ],
+        }
+        pb.api.fetch_post_comments = MagicMock(side_effect=lambda pid: comments_by_post[pid])
+
+        await pb._execute_own_post_replies()
+
+        processed = [r.split(":", 1)[1] for r in pb._dedup.get_replied_comment_ids()
+                     if ":" in r and (r.split(":", 1)[1].startswith("p0-") or r.split(":", 1)[1].startswith("p1-"))]
+        p0 = [c for c in processed if c.startswith("p0-")]
+        p1 = [c for c in processed if c.startswith("p1-")]
+        assert len(p0) <= 10, f"Cap por post excedido: {len(p0)} de post 0"
+        assert len(p1) == 5, f"Post 1 debería entrar completo, got {len(p1)}"
+
+    @pytest.mark.asyncio
+    async def test_all_30_posts_are_scanned(self, _redirect_paths):
+        """Con 30 posts en el pool, los 30 se revisan (antes solo 15/10)."""
+        pb = self._make_pb_queue(queue_size=10, per_post_cap=1, daily=50)
+        posts = self._make_posts(30)
+        pb.api._request = MagicMock(return_value={"status": 200, "data": {"posts": posts}})
+        pb.api.fetch_my_posts = MagicMock(return_value=[])
+        pb.api.fetch_post_comments = MagicMock(
+            side_effect=lambda pid: [self._comment("c1", created="2026-08-12T10:00:00Z")]
+        )
+
+        await pb._execute_own_post_replies()
+
+        fetched = [call.args[0] for call in pb.api.fetch_post_comments.call_args_list]
+        assert len(fetched) == 30, f"Deben revisarse 30 posts, got {len(fetched)}"
+        assert len(set(fetched)) == 30
+
+    @pytest.mark.asyncio
+    async def test_daily_limit_stops_queue(self, _redirect_paths):
+        """El cap diario sigue frenando la cola global."""
+        pb = self._make_pb_queue(queue_size=10, per_post_cap=10, daily=2, cycle=50)
+        pb.api._request = MagicMock(return_value={"status": 200, "data": {"posts": self._make_posts(2)}})
+        pb.api.fetch_my_posts = MagicMock(return_value=[])
+        pb.get_comments_today = MagicMock(
+            side_effect=lambda: len(pb._dedup.get_replied_comment_ids())
+        )
+        comments_by_post = {
+            "q-0000000-aaaa-bbbb-cccc-ddddeeeeffff": [
+                self._comment(f"c{i}", created=f"2026-08-12T10:{i:02d}:00Z") for i in range(5)
+            ],
+            "q-1000000-aaaa-bbbb-cccc-ddddeeeeffff": [
+                self._comment(f"d{i}", created=f"2026-08-12T09:{i:02d}:00Z") for i in range(5)
+            ],
+        }
+        pb.api.fetch_post_comments = MagicMock(side_effect=lambda pid: comments_by_post[pid])
+
+        await pb._execute_own_post_replies()
+
+        processed = [r for r in pb._dedup.get_replied_comment_ids()
+                     if ":" in r and (r.split(":", 1)[1].startswith("c") or r.split(":", 1)[1].startswith("d"))]
+        assert len(processed) == 2, f"Daily limit 2 debe frenar en 2, got {len(processed)}"

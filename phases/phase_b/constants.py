@@ -21,7 +21,9 @@ MAX_CONVERSATION_DEPTH = 8
 
 # Own-post reply candidate scoring: how many own posts (ranked by engagement)
 # are fetched for unreplied-comment scoring per cycle.
-_OWN_POST_REPLY_SCORE_LIMIT = 15
+# v5.2+: 30 — con fetch_my_posts(limit=30) los posts 11+ entran al pool y sus
+# comentarios pendientes dejan de quedar sin responder para siempre.
+_OWN_POST_REPLY_SCORE_LIMIT = 30
 
 COMMENT_STYLE_INSTRUCTIONS = """
 VOICE GUIDELINES (COMET-RIOBAMBA identity):

@@ -21,6 +21,8 @@ class AgentPolicy:
     phase_b_max_own_comments_per_cycle: int = 10   # v5.2+: cap de trabajo por post por ciclo
                                                   # (un post de 300+ comentarios ya no puede
                                                   # monopolizar el ciclo completo)
+    phase_b_own_queue_per_cycle: int = 10          # v5.2+: cola global de comentarios propios
+                                                  # sin responder, ordenada watchlist→recencia
 
     # ── Per-post limits ────────────────────────────────────────────
     max_comments_per_post: int = 30            # Responses in own post (free-will)

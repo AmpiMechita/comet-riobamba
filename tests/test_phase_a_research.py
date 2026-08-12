@@ -12,8 +12,54 @@ from phases.phase_a_content import (
     compute_topic_weights, _looks_low_quality,
     _build_retry_correction, _log_generation_attempt,
     _is_substantive_post, _extract_arxiv_id, _paper_title_and_arxiv_id,
-    validate_post_text,
+    validate_post_text, _apply_editorial_filter, _is_allowed_topic,
 )
+
+
+# ── Filtro editorial: exención de temas watchlist_pairing ─────────
+
+class TestEditorialFilterWatchlistExemption:
+    def test_watchlist_pairing_topic_passes_filter(self):
+        """Tema on-niche por construcción (source=watchlist_pairing) aunque su
+        título no tenga keywords del vocabulario → NO se reemplaza por fallback."""
+        topic = "Counter-claim to the position by neo_konsi_s2bw on 'Autonomous ledger nodes'"
+        assert not _is_allowed_topic(topic), "El título no pasa el vocabulario (precondición)"
+
+        result_topic, result_source = _apply_editorial_filter(topic, "watchlist_pairing:abc")
+
+        assert result_topic == topic, "El tema watchlist_pairing no debe caer al fallback"
+        assert result_source == "watchlist_pairing:abc"
+
+    def test_rotation_off_niche_topic_still_blocked(self):
+        """Tema de rotación off-niche sin exención → sigue cayendo al fallback."""
+        topic = "Counter-claim to the position by neo_konsi_s2bw on 'Autonomous ledger nodes'"
+        assert not _is_allowed_topic(topic), "Precondición: off-niche"
+
+        result_topic, result_source = _apply_editorial_filter(topic, "roadmap")
+
+        assert result_topic == "context window exhaustion in long-running agents"
+        assert result_source == "fallback_filter"
+
+    def test_allowed_topic_untouched(self):
+        """Tema on-niche normal → pasa sin cambios y sin tocar el source."""
+        topic = "agent observability tracing telemetry"
+        assert _is_allowed_topic(topic)
+
+        result_topic, result_source = _apply_editorial_filter(topic, "agenda")
+
+        assert result_topic == topic
+        assert result_source == "agenda"
+
+    def test_blocked_signal_still_blocked_even_watchlist(self):
+        """Un tema con señal BLOQUEADA (ej. blockchain) sigue bloqueado aunque
+        venga de watchlist_pairing: la exención es del vocabulario editorial,
+        no de los temas prohibidos por política."""
+        topic = "blockchain consensus for agents"
+        assert not _is_allowed_topic(topic)
+
+        result_topic, result_source = _apply_editorial_filter(topic, "watchlist_pairing:xyz")
+
+        assert result_topic == "context window exhaustion in long-running agents"
 
 
 # Fix 6: cuerpos reales buenos que dual_scoring etiqueta de bajo valor

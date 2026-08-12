@@ -146,6 +146,30 @@ def _is_allowed_topic(topic: str) -> bool:
     return any(signal in topic_lower for signal in ALLOWED_TOPIC_SIGNALS)
 
 
+def _apply_editorial_filter(topic: Optional[str], topic_source: str) -> tuple:
+    """Filtro editorial de verticales.
+
+    Los temas de post-pairing (watchlist_pairing) están exentos del chequeo de
+    vocabulario ALLOWED (son on-niche por construcción: responden a un referente
+    curado, aunque su título no contenga keywords editoriales). Los signals
+    BLOCKED (política dura: blockchain, crypto, filosofía, etc.) se mantienen.
+    El resto de los gates (dedup/similitud) siguen intactos aguas abajo.
+    """
+    if not topic:
+        return topic, topic_source
+    topic_lower = topic.lower()
+    if any(signal in topic_lower for signal in BLOCKED_TOPIC_SIGNALS):
+        logger.warning("Phase A: topic '%s' rejected by editorial filter, using fallback", topic)
+        return "context window exhaustion in long-running agents", "fallback_filter"
+    if str(topic_source or "").startswith("watchlist_pairing"):
+        logger.info("Phase A: topic watchlist_pairing exento del filtro editorial: '%s'", topic[:80])
+        return topic, topic_source
+    if not any(signal in topic_lower for signal in ALLOWED_TOPIC_SIGNALS):
+        logger.warning("Phase A: topic '%s' rejected by editorial filter, using fallback", topic)
+        return "context window exhaustion in long-running agents", "fallback_filter"
+    return topic, topic_source
+
+
 # ── Topic dedup: prevent repetitive posts ────────────────────────
 from difflib import SequenceMatcher
 
@@ -1239,10 +1263,10 @@ class PhaseAContentGeneration:
                 topic, topic_source = choose_topic(mode=phase_a_mode)
 
             # Topic filter: reject topics outside our verticals
-            if topic and not _is_allowed_topic(topic):
-                logger.warning("Phase A: topic '%s' rejected by editorial filter, using fallback", topic)
-                topic = "context window exhaustion in long-running agents"
-                topic_source = "fallback_filter"
+            # Los temas de post-pairing (watchlist_pairing) están exentos: son
+            # on-niche por construcción (responden a un referente curado) aunque
+            # su título generado no contenga keywords del vocabulario editorial.
+            topic, topic_source = _apply_editorial_filter(topic, topic_source)
 
             # Topic dedup: reject if too similar to recent posts (skip if first post of the day)
             if topic and _is_topic_recently_used(topic):

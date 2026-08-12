@@ -711,6 +711,12 @@ class PhaseB:
             "phase_b_max_own_comments_per_cycle",
             int(os.getenv("AGENT_PHASE_B_MAX_OWN_COMMENTS_PER_CYCLE", "10")),
         )
+        # v5.2+: tamaño de la cola global de comentarios propios sin responder
+        # procesados por ciclo (todos los posts, ordenada watchlist→recencia).
+        self.own_queue_per_cycle = behavior.get(
+            "phase_b_own_queue_per_cycle",
+            int(os.getenv("AGENT_PHASE_B_OWN_QUEUE_PER_CYCLE", "10")),
+        )
         # ── Watchlist: autores de alta autoridad ───────────────────
         self._watchlist_authors: Set[str] = self._load_watchlist_authors()
         set_watchlist_authors(self._watchlist_authors)
@@ -1616,10 +1622,16 @@ class PhaseB:
                     )
 
                     # ── Generar respuesta enhebrada (con historial del hilo) ──
+                    # Tier routing: si quien nos respondió está en la watchlist,
+                    # la respuesta es contenido de máxima exposición (autor de un
+                    # post con cientos de comentarios/upvotes) → tier quality.
+                    reply_author_key = (reply_author or "").strip().lower()
+                    followup_tier = "quality" if self._is_watchlist_author(reply_author_key) else "flash"
                     thread_history = self._build_thread_history(reply_comment, comments)
                     try:
                         followup_text = await self._generate_own_post_reply(
                             reply_author, reply_text, thread_history,
+                            tier=followup_tier,
                         )
                     except Exception as e:
                         logger.warning("Phase B: error generando follow-up: %s", e)
@@ -1709,8 +1721,9 @@ class PhaseB:
                         "kind": "thread_followup",
                     })
                     logger.info(
-                        "Phase B: thread follow-up publicado post_id=%s parent=%s (%d/%d).",
-                        post_id, reply_id, followups_done, self.max_followups_per_post,
+                        "Phase B: thread follow-up publicado post_id=%s parent=%s tier=%s author=%s (%d/%d).",
+                        post_id, reply_id, followup_tier, reply_author,
+                        followups_done, self.max_followups_per_post,
                     )
 
                     results.append({
@@ -2842,61 +2855,118 @@ class PhaseB:
             # Focus on posts with active discussion first (most comments), so
             # older high-engagement threads stay on the radar. Bound the pool so
             # the per-candidate comment scoring keeps the API GET count sane.
+            # v5.2: pool de hasta 30 posts (fetch_my_posts default 30) — los
+            # posts 11+ ya no quedan sin revisar para siempre.
             posts = sorted(
                 posts,
                 key=lambda p: int(p.get("comment_count") or p.get("comments_count") or 0),
                 reverse=True,
             )[:_OWN_POST_REPLY_SCORE_LIMIT]
 
-            # Score own posts by unreplied comment count; prioritize threads with pending discussion
-            scored_own_posts: List[tuple] = []
-            for idx, post in enumerate(posts):
-                post_id = post.get("id") or post.get("post_id")
-                if not post_id:
-                    logger.warning(f"Phase B: skipping post without id during scoring: {post}")
-                    continue
-                try:
-                    post_comments = self.api.fetch_post_comments(post_id)
-                except Exception as e:
-                    logger.warning(f"Phase B: error fetching comments for scoring post {post_id}: {e}")
-                    continue
-                unreplied = 0
-                for c in post_comments:
-                    author = self._get_author_name(c)
-                    if self._is_own_author(author):
-                        continue
-                    cid = c.get("id") or c.get("comment_id")
-                    if not cid:
-                        continue
-                    dedup_key = f"{post_id}:{cid}"
-                    if dedup_key in self._replied_comment_ids:
-                        continue
-                    if not (c.get("content") or c.get("text") or "").strip():
-                        continue
-                    unreplied += 1
-                logger.info(f"Phase B: own post {post_id} has {unreplied} unreplied comments")
-                scored_own_posts.append((unreplied, idx, post))
-            # Sort: most unreplied comments first; tiebreak by engagement rank
-            # (lower idx = higher comment count in the sorted pool).
-            scored_own_posts.sort(key=lambda x: (-x[0], x[1]))
-            # Límite de posts por ciclo configurable (phase_b_max_own_posts_per_cycle,
-            # default 6). Antes era 3 fijo: los top-3 absorbían todo el presupuesto
-            # diario y los posts con menos comentarios quedaban desatendidos
-            # indefinidamente (~218 pendientes en los posts fuera del top-3).
-            candidate_posts = [p for _, _, p in scored_own_posts[:self.max_own_posts_per_cycle]]
-            logger.info(f"Phase B: processing up to {len(candidate_posts)} own posts")
-
-            results: List[Dict[str, Any]] = []
-
-            for post in candidate_posts:
+            # ── Cola global de comentarios sin responder (v5.2+) ──
+            # Procesar post-por-post (6 × cap 10) hacía que un comentario nuevo
+            # esperara detrás de comentarios viejos de otros posts. Ahora UNA
+            # cola de TODOS los posts, ordenada: 1º autores watchlist, 2º
+            # recencia del comentario desc. Se procesan los primeros
+            # own_queue_per_cycle, con cap por post secundario.
+            queue: List[Tuple[str, Dict[str, Any], List[Dict[str, Any]]]] = []
+            posts_with_pending = 0
+            for post in posts:
                 post_id = post.get("id") or post.get("post_id")
                 if not post_id:
                     logger.warning(f"Phase B: skipping post without id: {post}")
                     continue
+                try:
+                    all_comments = self.api.fetch_post_comments(post_id)
+                except Exception as e:
+                    logger.warning(f"Phase B: error fetching comments for post {post_id}: {e}")
+                    continue
+                per_post = 0
+                for c in all_comments:
+                    if self._is_own_author(self._get_author_name(c)):
+                        continue
+                    cid = c.get("id") or c.get("comment_id")
+                    if not cid:
+                        continue
+                    if f"{post_id}:{cid}" in self._replied_comment_ids:
+                        continue
+                    if not (c.get("content") or c.get("text") or "").strip():
+                        continue
+                    queue.append((post_id, c, all_comments))
+                    per_post += 1
+                if per_post > 0:
+                    posts_with_pending += 1
 
-                logger.info(f"Phase B: processing own post_id={post_id}")
-                post_results = await self._process_own_post(post_id)
-                results.extend(post_results)
+            if not queue:
+                logger.info("Phase B: no hay comentarios sin responder en posts propios.")
+                span.set("results", 0)
+                return []
+
+            def _recency_key(c):
+                ts = c.get("created_at") or c.get("createdAt") or c.get("timestamp") or ""
+                if not ts:
+                    return datetime.min.replace(tzinfo=timezone.utc)
+                try:
+                    return datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                except (ValueError, TypeError):
+                    return datetime.min.replace(tzinfo=timezone.utc)
+
+            def _queue_sort_key(item):
+                _pid, c, _ = item
+                author = self._get_author_name(c)
+                wl = 0 if self._is_watchlist_author(author) else 1
+                return (wl, -_recency_key(c).timestamp())
+
+            queue.sort(key=_queue_sort_key)
+
+            # Cap por post (secundario): máx. max_own_comments_per_cycle por post
+            per_post_count: Dict[str, int] = {}
+            selected: List[Tuple[str, Dict[str, Any], List[Dict[str, Any]]]] = []
+            for item in queue:
+                pid = item[0]
+                if per_post_count.get(pid, 0) >= self.max_own_comments_per_cycle:
+                    continue
+                selected.append(item)
+                per_post_count[pid] = per_post_count.get(pid, 0) + 1
+                if len(selected) >= self.own_queue_per_cycle:
+                    break
+
+            watchlist_sel = sum(
+                1 for _, c, _ in selected
+                if self._is_watchlist_author(self._get_author_name(c))
+            )
+            logger.info(
+                "own-post queue: %d sin responder en %d posts; procesando %d (watchlist=%d)",
+                len(queue), posts_with_pending, len(selected), watchlist_sel,
+            )
+
+            results: List[Dict[str, Any]] = []
+
+            for post_id, comment, all_comments in selected:
+                if self.get_comments_today() >= self.max_comments_per_day:
+                    logger.info(
+                        "Phase B: límite diario alcanzado (%s/%s). Deteniendo cola own posts.",
+                        self.get_comments_today(), self.max_comments_per_day,
+                    )
+                    break
+                if len(results) >= self.max_replies_per_cycle:
+                    logger.info(
+                        "Phase B: límite por ciclo alcanzado (%s/%s). Deteniendo cola own posts.",
+                        len(results), self.max_replies_per_cycle,
+                    )
+                    break
+
+                result = await self._process_own_comment(
+                    post_id, comment, all_comments,
+                    limit_ok=len(results) < self.max_comments_per_post,
+                )
+                if result is None:
+                    continue
+                # Concession closures don't consume reply budget
+                if result.get("status") != "closed_concession":
+                    register_agent_reply(post_id)
+                    results.append(result)
+                    await asyncio.sleep(self.delay_between_comments)
 
             if not results:
                 logger.info("Phase B: no se respondió a ningún comentario en posts propios.")
@@ -2907,7 +2977,7 @@ class PhaseB:
     def _fetch_own_posts_for_replies(
         self,
         ranked_limit: int = 50,
-        fresh_limit: int = 10,
+        fresh_limit: int = 30,
     ) -> List[Dict[str, Any]]:
         """Own posts to consider for replies: high-engagement posts first (from
         the platform API, sort=top) merged with the newest posts (durable store)
@@ -3075,83 +3145,12 @@ class PhaseB:
                 )
                 break
 
-            comment_id = comment.get("id") or comment.get("comment_id")
-            comment_text = comment.get("content") or comment.get("text") or ""
-            author = self._get_author_name(comment) or "usuario"
-
-            # ── Inbound watchlist tracking: un referente comento en NUESTRO post ──
-            if self._is_watchlist_author(author):
-                self.record_watchlist_inbound(author, comment_id=str(comment_id or ""))
-
-            if not comment_id:
-                logger.warning(f"Phase B: comment without id on post {post_id}, skipping")
-                continue
-            # Fix 3: ignorar los propios replies del agente en el hilo
-            _own = self._get_author_name(comment)
-            if self._is_own_author(_own):
-                logger.debug("Phase B: skip own comment %s on post %s", comment_id, post_id)
-                continue
-
-            # ── Thread depth guard ─────────────────────────────────
-            parent_id = PhaseB._extract_parent_id(comment)
-            if parent_id and parent_id in self._agent_comment_ids.get(post_id, []):
-                depth = self._compute_thread_depth(comment, all_comments)
-                if depth >= MAX_CONVERSATION_DEPTH:
-                    logger.info(
-                        "Profundidad máxima alcanzada, salteando hilo "
-                        "(post_id=%s, comment_id=%s, profundidad=%s, max=%s)",
-                        post_id, comment_id, depth, MAX_CONVERSATION_DEPTH,
-                    )
-                    continue
-
-            dedup_key = f"{post_id}:{comment_id}"
-            if dedup_key in self._replied_comment_ids:
-                logger.info("Phase B: skip comment %s on post %s (already replied).", comment_id, post_id)
-                continue
-            if not comment_text.strip():
-                logger.info(f"Phase B: empty comment {comment_id} on post {post_id}, skipping")
-                continue
-            # ── Own-post reply detection for relevance bypass ──
-            own_post_ids = self._get_own_post_ids()
-            is_own_post_reply = (
-                str(post_id) in own_post_ids
-                or (parent_id is not None and str(parent_id) in own_post_ids)
-            )
-            # ── Ledger: observación del comentario dirigido a nosotros ──
-            from services import interlocutors
-            interlocutors.record_interaction(
-                comment.get("author"), on_our_post=True,
-            )
-            decision = self._decide_reply(
-                comment,
+            result = await self._process_own_comment(
+                post_id, comment, all_comments,
                 limit_ok=replied_count < self.max_comments_per_post,
-                is_own_post_reply=is_own_post_reply,
             )
-            if not decision.should_reply:
-                send_event("phase_b_reply_skip", {
-                    "post_id": post_id,
-                    "comment_id": comment_id,
-                    "reason": decision.reason,
-                    "score": decision.score,
-                    "snippet": comment_text[:60],
-                })
-                continue
-
-            _value_cls = self._classify_comment_value(comment_text)
-            self._stats["passed_value"] += 1
-
-            # ── Build thread history for conversational context ──
-            thread_history = ""
-            if parent_id:
-                thread_history = self._build_thread_history(comment, all_comments)
-
-            result = await self._post_own_reply(post_id, comment_id, author, comment_text, thread_history)
             if result is None:
                 continue
-
-            # ── Strategic follow: follow agents who engage in genuine debate on our posts ──
-            if author and not self._is_own_author(author) and _value_cls not in ("general",):
-                self._maybe_follow_author(author)
 
             # ── Re-check daily/cycle budget after each own-post reply (feed may still have margin) ──
             daily_comment_count = self.get_comments_today()
@@ -3227,6 +3226,103 @@ class PhaseB:
             logger.info("Phase B: no se respondió a ningún comentario en posts propios.")
 
         return results
+
+    async def _process_own_comment(
+        self,
+        post_id: str,
+        comment: Dict[str, Any],
+        all_comments: List[Dict[str, Any]],
+        limit_ok: bool = True,
+    ) -> Optional[Dict[str, Any]]:
+        """Procesa UN comentario de un post propio: guards, decisión y publicación.
+
+        Es el cuerpo del loop de _process_own_post extraído a método, usado
+        también por la cola global (_execute_own_post_replies). Devuelve el
+        result dict si se respondió/publicó, None si el comentario se saltea
+        por cualquier gate (own, dedup, profundidad, triage, generación).
+
+        El presupuesto (daily/cycle/per-post) lo gestiona el caller, no este
+        método: la cola global lo controla por ciclo completo.
+        """
+        comment_id = comment.get("id") or comment.get("comment_id")
+        comment_text = comment.get("content") or comment.get("text") or ""
+        author = self._get_author_name(comment) or "usuario"
+
+        # ── Inbound watchlist tracking: un referente comento en NUESTRO post ──
+        if self._is_watchlist_author(author):
+            self.record_watchlist_inbound(author, comment_id=str(comment_id or ""))
+
+        if not comment_id:
+            logger.warning(f"Phase B: comment without id on post {post_id}, skipping")
+            return None
+        # Fix 3: ignorar los propios replies del agente en el hilo
+        _own = self._get_author_name(comment)
+        if self._is_own_author(_own):
+            logger.debug("Phase B: skip own comment %s on post %s", comment_id, post_id)
+            return None
+
+        # ── Thread depth guard ─────────────────────────────────
+        parent_id = PhaseB._extract_parent_id(comment)
+        if parent_id and parent_id in self._agent_comment_ids.get(post_id, []):
+            depth = self._compute_thread_depth(comment, all_comments)
+            if depth >= MAX_CONVERSATION_DEPTH:
+                logger.info(
+                    "Profundidad máxima alcanzada, salteando hilo "
+                    "(post_id=%s, comment_id=%s, profundidad=%s, max=%s)",
+                    post_id, comment_id, depth, MAX_CONVERSATION_DEPTH,
+                )
+                return None
+
+        dedup_key = f"{post_id}:{comment_id}"
+        if dedup_key in self._replied_comment_ids:
+            logger.info("Phase B: skip comment %s on post %s (already replied).", comment_id, post_id)
+            return None
+        if not comment_text.strip():
+            logger.info(f"Phase B: empty comment {comment_id} on post {post_id}, skipping")
+            return None
+        # ── Own-post reply detection for relevance bypass ──
+        own_post_ids = self._get_own_post_ids()
+        is_own_post_reply = (
+            str(post_id) in own_post_ids
+            or (parent_id is not None and str(parent_id) in own_post_ids)
+        )
+        # ── Ledger: observación del comentario dirigido a nosotros ──
+        from services import interlocutors
+        interlocutors.record_interaction(
+            comment.get("author"), on_our_post=True,
+        )
+        decision = self._decide_reply(
+            comment,
+            limit_ok=limit_ok,
+            is_own_post_reply=is_own_post_reply,
+        )
+        if not decision.should_reply:
+            send_event("phase_b_reply_skip", {
+                "post_id": post_id,
+                "comment_id": comment_id,
+                "reason": decision.reason,
+                "score": decision.score,
+                "snippet": comment_text[:60],
+            })
+            return None
+
+        _value_cls = self._classify_comment_value(comment_text)
+        self._stats["passed_value"] += 1
+
+        # ── Build thread history for conversational context ──
+        thread_history = ""
+        if parent_id:
+            thread_history = self._build_thread_history(comment, all_comments)
+
+        result = await self._post_own_reply(post_id, comment_id, author, comment_text, thread_history)
+        if result is None:
+            return None
+
+        # ── Strategic follow: follow agents who engage in genuine debate on our posts ──
+        if author and not self._is_own_author(author) and _value_cls not in ("general",):
+            self._maybe_follow_author(author)
+
+        return result
 
     async def _post_own_reply(self, post_id: str, comment_id: str, author: str,
                               comment_text: str, thread_history: str = "") -> Optional[Dict[str, Any]]:
@@ -3520,7 +3616,8 @@ class PhaseB:
         from .value_log_utils import _build_thread_history
         return _build_thread_history(self, comment, all_comments)
 
-    async def _generate_own_post_reply(self, author: str, comment_text: str, thread_history: str = "") -> str:
+    async def _generate_own_post_reply(self, author: str, comment_text: str, thread_history: str = "",
+                                       tier: str = "flash") -> str:
         with Span("llm_generation", type="own_post") as span:
             lang_instruction = (
                 "Always respond in English. This is an English-speaking platform."
@@ -3613,7 +3710,7 @@ class PhaseB:
             )
             try:
                 reply = await self.llm.generate(
-                    tier="flash",
+                    tier=tier,
                     prompt=user_prompt,
                     system_prompt=system_prompt,
                     max_tokens=180,

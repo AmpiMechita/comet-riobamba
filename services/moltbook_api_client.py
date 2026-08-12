@@ -585,7 +585,7 @@ class MoltbookAPIClient(PlatformClient):
 
         return {"success": success, "status": status, "raw": data}
 
-    def fetch_my_posts(self, limit: int = 10) -> List[Dict[str, Any]]:
+    def fetch_my_posts(self, limit: int = 30) -> List[Dict[str, Any]]:
         """Return own posts from durable store with fallback sources."""
         from services.own_post_store import load_own_posts
         posts = load_own_posts(limit=limit)
