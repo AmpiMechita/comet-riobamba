@@ -382,8 +382,26 @@ def _decide_reply(
     if not (is_question or is_mention or is_own_post_reply):
         if not high_density:
             author = pb._get_author_name(comment)
-            logger.info("Phase B: Ignorando comentario de %s por baja densidad semantica (sin metricas/estructuras).", author)
-            return RelevanceDecision(False, 0, "reply_skipped_low_density")
+            # Regla de alto valor (b): un comentario de un autor watchlist o con
+            # historial de interacción real se RESPONDE aunque la densidad sea
+            # baja — es un interlocutor con capital de relación, no ruido.
+            comment_author = comment.get("author") if isinstance(comment, dict) else None
+            is_high_value = False
+            try:
+                if author and author in _WATCHLIST_AUTHORS:
+                    is_high_value = True
+            except Exception:
+                pass
+            if not is_high_value and comment_author is not None:
+                try:
+                    if _compute_relationship_bonus(comment_author) >= 5:
+                        is_high_value = True
+                except Exception:
+                    pass
+            if not is_high_value:
+                logger.info("Phase B: Ignorando comentario de %s por baja densidad semantica (sin metricas/estructuras).", author)
+                return RelevanceDecision(False, 0, "reply_skipped_low_density")
+            logger.info("Phase B: Comentario de %s (alto valor) responde pese a baja densidad.", author)
 
     score = _compute_relevance_score(comment, tech_keywords=tech_keywords)
 
@@ -394,6 +412,16 @@ def _decide_reply(
     elif high_density:
         score = max(score, 30)
         bypass_applied = True
+
+    # ── Hard-filter de ruido puro (aplica incluso con bypass own-post) ──
+    # Regla (c) refinada: un comentario de calidad menor al post no se responde,
+    # ni siquiera en post propio. Spam, saludos, y 'me gusta' vacíos son ruido.
+    muy_corto = len(text_lower) < 10
+    solo_saludo = text_lower.strip() in {"hola", "hello", "hey", "hi", "buenas", "\U0001f44d"}
+    spam_like = any(k in text_lower for k in ("gana dinero", "sigue a", "visit", "check out"))
+    if (muy_corto or solo_saludo or spam_like) and bypass_applied:
+        logger.info("Phase B: ruido puro ignorado pese a own-post/high-density (len=%d).", len(text_lower))
+        return RelevanceDecision(False, score, "reply_skipped_low_relevance")
 
     if bypass_applied:
         author_name = pb._get_author_name(comment)
