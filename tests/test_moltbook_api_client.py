@@ -747,3 +747,92 @@ def test_fetch_post_comments_error_returns_empty():
     client = _make_client()
     client._request = MagicMock(side_effect=ConnectionError("boom"))
     assert client.fetch_post_comments("post-1") == []
+
+
+# ── Circuit breaker: 4xx no-breaker vs fallos reales ────────────────
+
+
+def _request_with_status(client, status):
+    client.session = FakeSession(FakeResponse(status, {"ok": True}))
+    return client._request("GET", "/posts/x/comments")
+
+
+@pytest.mark.parametrize("status", [400, 404, 409, 410, 422])
+def test_4xx_no_breaker_status_does_not_open_breaker(status):
+    """400/404/409/410/422 son respuestas válidas del servidor: 5 seguidas
+    NO abren el breaker ni incrementan el contador de fallos."""
+    client = _make_client()
+    for _ in range(5):
+        result = _request_with_status(client, status)
+        assert result["status"] == status
+
+    stats = client.circuit.get_stats()
+    assert stats["state"] == "closed"
+    assert stats["failure_count"] == 0
+
+
+def test_404_five_times_keeps_breaker_closed():
+    """El caso que rompía prod: reconcile de comentarios borrados genera
+    404s por diseño → 5 seguidos deben dejar el breaker CLOSED."""
+    client = _make_client()
+    for _ in range(5):
+        _request_with_status(client, 404)
+
+    assert client.circuit.get_stats()["state"] == "closed"
+
+
+def test_500_opens_breaker():
+    """5xx = fallo de servicio real → 5 seguidos abren el breaker."""
+    client = _make_client()
+    for _ in range(5):
+        _request_with_status(client, 500)
+
+    assert client.circuit.get_stats()["state"] == "open"
+
+
+def test_403_opens_breaker():
+    """403 = key/permiso revocado, problema real → cuenta como fallo."""
+    client = _make_client()
+    for _ in range(5):
+        _request_with_status(client, 403)
+
+    assert client.circuit.get_stats()["state"] == "open"
+
+
+def test_429_does_not_open_breaker_and_preserves_retry_after():
+    """429 sigue excluido del breaker y preserva retry_after_seconds."""
+    client = _make_client()
+    client.session = FakeSession(FakeResponse(429, {"ok": False}, headers={"Retry-After": "17"}))
+    result = client._request("GET", "/posts/x/comments")
+
+    assert result["status"] == 429
+    assert result["retry_after_seconds"] == 17
+    stats = client.circuit.get_stats()
+    assert stats["state"] == "closed"
+    assert stats["failure_count"] == 0
+
+
+def test_401_opens_breaker():
+    """401 también cuenta (key revocada)."""
+    client = _make_client()
+    for _ in range(5):
+        _request_with_status(client, 401)
+
+    assert client.circuit.get_stats()["state"] == "open"
+
+
+def test_breaker_recovers_after_timeout_with_success():
+    """Tras abrirse, una petición exitosa en HALF_OPEN vuelve a CLOSED."""
+    from utils.resilience import CircuitState
+
+    client = _make_client()
+    for _ in range(5):
+        _request_with_status(client, 500)
+    assert client.circuit.get_stats()["state"] == "open"
+
+    # Simular paso del cooldown: forzar HALF_OPEN y luego un 200.
+    client.circuit._state = CircuitState.HALF_OPEN
+    client.session = FakeSession(FakeResponse(200, {"ok": True}))
+    client._request("GET", "/posts/x/comments")
+
+    assert client.circuit.get_stats()["state"] == "closed"

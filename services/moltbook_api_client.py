@@ -36,6 +36,11 @@ from services.platform_client import (
 
 logger = logging.getLogger("services.moltbook")
 
+# Estados HTTP que NO abren el circuit breaker: son respuestas válidas del
+# servidor (recurso inexistente, conflicto, etc.), no fallos de servicio.
+# 401/403 SÍ cuentan (key revocada = problema real); 429 ya está excluido.
+_NO_BREAKER_STATUSES = frozenset({400, 404, 409, 410, 422})
+
 
 @dataclass
 class APIResponse:
@@ -267,6 +272,8 @@ class MoltbookAPIClient(PlatformClient):
             )
         elif 200 <= status < 300 and record_success:
             self.circuit.record_success()
+        elif status in _NO_BREAKER_STATUSES:
+            logger.debug("MoltbookAPIClient: respuesta HTTP %s %s -> %s (no abre breaker)", method, url, status)
         elif status >= 400:
             logger.warning("MoltbookAPIClient: respuesta HTTP %s %s -> %s", method, url, status)
             self.circuit.record_failure()
