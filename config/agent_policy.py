@@ -11,7 +11,6 @@ class AgentPolicy:
     max_own_posts_to_scan_per_cycle: int = 3
     phase_a_max_attempts: int = 3
     phase_a_mode: str = "research"
-
     # ── Activity Budget (per day) ──────────────────────────────────
     max_comments_per_day: int = 150      # v5.2: libre albedrío — la comunidad decide
     max_feed_initiations_per_day: int = 10     # First comment in a new feed post
@@ -19,6 +18,9 @@ class AgentPolicy:
 
     # ── Per-cycle limits ───────────────────────────────────────────
     max_comment_replies_per_cycle: int = 30
+    phase_b_max_own_comments_per_cycle: int = 10   # v5.2+: cap de trabajo por post por ciclo
+                                                  # (un post de 300+ comentarios ya no puede
+                                                  # monopolizar el ciclo completo)
 
     # ── Per-post limits ────────────────────────────────────────────
     max_comments_per_post: int = 30            # Responses in own post (free-will)

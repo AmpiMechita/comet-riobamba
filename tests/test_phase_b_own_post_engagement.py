@@ -289,3 +289,122 @@ class TestOwnPostRegistry:
         ids = pb._get_own_post_ids()
         assert "aaaaaaaa-1111-2222-3333-444444444444" in ids, "Old post must be in own-post set for bypass"
         assert "bbbbbbbb-1111-2222-3333-444444444444" in ids
+
+
+class TestOwnPostPerCycleCap:
+    """v5.2+: acotar el trabajo por post por ciclo. Con el aplanado de replies
+    un post puede tener 300+ comentarios; procesarlos todos en un ciclo lo
+    extendía a 85 min (feed/follow-ups sin ejecutar, stop graceful mudo).
+    Máx. N comentarios accionables por post por ciclo, priorizando watchlist
+    y luego los más recientes; el resto queda pendiente para el próximo ciclo."""
+
+    POST = "dddddddd-eeee-4fff-8aaa-bbbbbbbbbbbb"
+
+    def _comment(self, cid, author="user", text="What about latency in the retry loop?",
+                 created="2026-08-12T10:00:00Z"):
+        return {
+            "id": cid, "author": {"name": author},
+            "content": text, "text": text, "created_at": created,
+        }
+
+    def _make_pb_with_cap(self, cap):
+        pb = _make_pb(
+            max_comments_per_post=50, max_comments_per_day=50, max_replies_per_cycle=50,
+            behavior_extra={"phase_b_max_own_comments_per_cycle": cap},
+        )
+        async def _fake_post_own_reply(post_id, comment_id, author, comment_text, thread_history=""):
+            # Replica el efecto del _post_own_reply real: marca el dedup durable
+            # (línea 3318 del orchestrator) para que el debate continuation y los
+            # ciclos siguientes lo vean.
+            dedup_key = f"{post_id}:{comment_id}"
+            pb._replied_comment_ids.add(dedup_key)
+            pb._dedup.mark_replied(dedup_key)
+            return {"status": "ok", "post_id": post_id, "comment_id": comment_id}
+        pb._post_own_reply = _fake_post_own_reply
+        pb._decide_reply = MagicMock(
+            return_value=MagicMock(should_reply=True, reason="test", score=0.9)
+        )
+        pb.api.fetch_post_comments.return_value = None  # set per test
+        return pb
+
+    @pytest.mark.asyncio
+    async def test_cap_limits_comments_per_post_per_cycle(self, _redirect_paths):
+        """10 comentarios accionables + cap 3 → solo se procesan 3 en este
+        ciclo; el resto queda sin responder (backlog para el próximo ciclo)."""
+        pb = self._make_pb_with_cap(3)
+        comments = [self._comment(f"c{i}", created=f"2026-08-12T10:{i:02d}:00Z") for i in range(10)]
+        pb.api.fetch_post_comments.return_value = comments
+
+        result = await pb._process_own_post(self.POST)
+
+        assert len(result) == 3, f"Cap 3 debería procesar 3 comentarios, got {len(result)}"
+        # El backlog no queda marcado como respondido.
+        replied = pb._replied_comment_ids
+        marked = [cid for cid in (f"c{i}" for i in range(10)) if f"{self.POST}:{cid}" in replied]
+        assert len(marked) == 3, f"Solo 3 deberían marcarse respondidos, got {marked}"
+
+    @pytest.mark.asyncio
+    async def test_watchlist_prioritized_even_if_old(self, _redirect_paths):
+        """Cap 1 con un comentario de watchlist viejo y uno normal reciente:
+        el watchlist gana (capital de relación > recencia)."""
+        pb = self._make_pb_with_cap(1)
+        pb._watchlist_authors = {"watchbot"}
+        comments = [
+            self._comment("old-watchlist", author="watchbot", created="2026-08-01T00:00:00Z"),
+            self._comment("fresh-normal", author="normal", created="2026-08-12T11:00:00Z"),
+        ]
+        pb.api.fetch_post_comments.return_value = comments
+
+        result = await pb._process_own_post(self.POST)
+
+        assert len(result) == 1
+        assert result[0]["comment_id"] == "old-watchlist", (
+            f"El watchlist debe tener prioridad, got {result[0].get('comment_id')}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_most_recent_prioritized_within_others(self, _redirect_paths):
+        """Cap 2: los 2 comentarios más recientes entran (ninguno es watchlist)."""
+        pb = self._make_pb_with_cap(2)
+        comments = [
+            self._comment("old-1", created="2026-08-01T00:00:00Z"),
+            self._comment("old-2", created="2026-08-02T00:00:00Z"),
+            self._comment("new-1", created="2026-08-12T09:00:00Z"),
+            self._comment("new-2", created="2026-08-12T10:00:00Z"),
+        ]
+        pb.api.fetch_post_comments.return_value = comments
+
+        result = await pb._process_own_post(self.POST)
+
+        processed = {r.get("comment_id") for r in result}
+        assert processed == {"new-1", "new-2"}, f"Deben procesarse los más recientes, got {processed}"
+
+    @pytest.mark.asyncio
+    async def test_cap_large_keeps_all_when_below_limit(self, _redirect_paths):
+        """3 comentarios con cap 10 → se procesan todos (sin corte innecesario)."""
+        pb = self._make_pb_with_cap(10)
+        comments = [self._comment(f"c{i}") for i in range(3)]
+        pb.api.fetch_post_comments.return_value = comments
+
+        result = await pb._process_own_post(self.POST)
+
+        assert len(result) == 3, f"3 < cap 10 debe procesar todos, got {len(result)}"
+
+    @pytest.mark.asyncio
+    async def test_backlog_processed_on_next_cycle(self, _redirect_paths):
+        """Dos ciclos consecutivos sobre el mismo post: el primer ciclo marca
+        3 como respondidos; el segundo procesa los 3 siguientes (el backlog
+        no se pierde, solo se reparte)."""
+        pb = self._make_pb_with_cap(3)
+        comments = [self._comment(f"c{i}", created=f"2026-08-12T10:{i:02d}:00Z") for i in range(10)]
+        pb.api.fetch_post_comments.return_value = comments
+
+        first = await pb._process_own_post(self.POST)
+        assert len(first) == 3
+
+        second = await pb._process_own_post(self.POST)
+        assert len(second) == 3, f"El backlog debe procesarse en el 2º ciclo, got {len(second)}"
+
+        first_ids = {r.get("comment_id") for r in first}
+        second_ids = {r.get("comment_id") for r in second}
+        assert not (first_ids & second_ids), "Los ciclos no deben repetir comentarios"

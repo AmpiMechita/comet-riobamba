@@ -68,6 +68,7 @@ behavior_cfg = {
     "max_feed_comments_per_post": _validate_bounded_int("AGENT_MAX_FEED_COMMENTS_PER_POST", _POLICY.max_feed_comments_per_post, min_val=0, max_val=50),
     "max_feed_replies_per_day": _validate_bounded_int("AGENT_MAX_FEED_REPLIES_PER_DAY", _POLICY.max_feed_replies_per_day, min_val=0, max_val=100),
     "max_comment_replies_per_cycle": _validate_bounded_int("AGENT_MAX_COMMENT_REPLIES_PER_CYCLE", _POLICY.max_comment_replies_per_cycle, min_val=0, max_val=50),
+    "phase_b_max_own_comments_per_cycle": _validate_bounded_int("AGENT_PHASE_B_MAX_OWN_COMMENTS_PER_CYCLE", _POLICY.phase_b_max_own_comments_per_cycle, min_val=1, max_val=200),
     "feed_budget_pct": int(os.getenv("AGENT_FEED_BUDGET_PCT", 40)),
     "whisper_mode": bool(int(os.getenv("AGENT_WHISPER_MODE", 0))),
     "auto_pause_after_failures": True,

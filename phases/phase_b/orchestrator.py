@@ -703,6 +703,14 @@ class PhaseB:
         self.max_replies_per_cycle = behavior.get("max_comment_replies_per_cycle", 2)
         self.max_feed_comments_per_post = behavior.get("max_feed_comments_per_post", 1)
         self.max_own_posts_per_cycle = behavior.get("phase_b_max_own_posts_per_cycle", 6)
+        # v5.2+: máx. comentarios "accionables" procesados por post por ciclo.
+        # El aplanado de replies anidados expone 300+ comentarios por post;
+        # sin este cap un solo post monopolizaba el ciclo (85 min) y dejaba
+        # sin ejecutar feed/follow-ups ni responder al stop graceful.
+        self.max_own_comments_per_cycle = behavior.get(
+            "phase_b_max_own_comments_per_cycle",
+            int(os.getenv("AGENT_PHASE_B_MAX_OWN_COMMENTS_PER_CYCLE", "10")),
+        )
         # ── Watchlist: autores de alta autoridad ───────────────────
         self._watchlist_authors: Set[str] = self._load_watchlist_authors()
         set_watchlist_authors(self._watchlist_authors)
@@ -3008,6 +3016,50 @@ class PhaseB:
         except Exception:
             pass  # Fall back to original order
 
+        # ── Cap de trabajo por post por ciclo (v5.2+) ──────────────
+        # Con el aplanado de replies, un post puede tener 300+ comentarios y
+        # monopolizar el ciclo entero (85 min): feed y follow-ups sin ejecutar,
+        # stop graceful mudo. Procesamos a lo sumo N comentarios "accionables"
+        # por post por ciclo, priorizando autores de watchlist y luego los más
+        # recientes; el resto queda pendiente y se atiende en el próximo ciclo.
+        all_comments = comments
+        if self.max_own_comments_per_cycle > 0 and len(comments) > self.max_own_comments_per_cycle:
+            actionable = []
+            for c in comments:
+                if self._is_own_author(self._get_author_name(c)):
+                    continue
+                cid = c.get("id") or c.get("comment_id")
+                if not cid:
+                    continue
+                if f"{post_id}:{cid}" in self._replied_comment_ids:
+                    continue
+                if not (c.get("content") or c.get("text") or "").strip():
+                    continue
+                actionable.append(c)
+
+            def _recency_key(c):
+                ts = c.get("created_at") or c.get("createdAt") or c.get("timestamp") or ""
+                if not ts:
+                    return datetime.min.replace(tzinfo=timezone.utc)
+                try:
+                    return datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                except (ValueError, TypeError):
+                    return datetime.min.replace(tzinfo=timezone.utc)
+
+            watchlist_c = [c for c in actionable
+                           if self._is_watchlist_author(self._get_author_name(c))]
+            watchlist_ids = {id(c) for c in watchlist_c}
+            others_c = [c for c in actionable if id(c) not in watchlist_ids]
+            watchlist_c.sort(key=_recency_key, reverse=True)
+            others_c.sort(key=_recency_key, reverse=True)
+            comments = (watchlist_c + others_c)[:self.max_own_comments_per_cycle]
+            logger.info(
+                "Phase B: own post %s — %d accionables, procesando %d este ciclo "
+                "(cap=%d, watchlist=%d primero, luego más recientes); %d quedan pendientes.",
+                post_id, len(actionable), len(comments), self.max_own_comments_per_cycle,
+                len(watchlist_c), len(actionable) - len(comments),
+            )
+
         for comment in comments:
             # ── Per-post limit (propios): máx. max_comments_per_post replies del agente en este post ──
             if replied_count >= self.max_comments_per_post:
@@ -3043,7 +3095,7 @@ class PhaseB:
             # ── Thread depth guard ─────────────────────────────────
             parent_id = PhaseB._extract_parent_id(comment)
             if parent_id and parent_id in self._agent_comment_ids.get(post_id, []):
-                depth = self._compute_thread_depth(comment, comments)
+                depth = self._compute_thread_depth(comment, all_comments)
                 if depth >= MAX_CONVERSATION_DEPTH:
                     logger.info(
                         "Profundidad máxima alcanzada, salteando hilo "
@@ -3091,7 +3143,7 @@ class PhaseB:
             # ── Build thread history for conversational context ──
             thread_history = ""
             if parent_id:
-                thread_history = self._build_thread_history(comment, comments)
+                thread_history = self._build_thread_history(comment, all_comments)
 
             result = await self._post_own_reply(post_id, comment_id, author, comment_text, thread_history)
             if result is None:
@@ -3136,6 +3188,9 @@ class PhaseB:
         if can_continue_thread(post_id):
             if replied_count < self.max_comments_per_post and replied_count < self.max_replies_per_cycle:
                 latest_other = None
+                # Solo dentro de los comentarios procesados EN ESTE CICLO
+                # (comments está recortado por el cap): el debate continuation
+                # no puede saltarse el cap eligiendo del backlog (all_comments).
                 for c in comments:
                     author = self._get_author_name(c)
                     if author and not self._is_own_author(author):
@@ -3154,10 +3209,10 @@ class PhaseB:
                             # VERIFICACIÓN SEMÁNTICA: Buscar si el agente ya respondió algo muy parecido en este hilo
                             agent_replies_in_thread = [
                                 c.get("content") or c.get("text") or "" 
-                                for c in comments 
+                                for c in all_comments 
                                 if self._is_own_author(self._get_author_name(c))
                             ]
-                            proposed_reply = await self._generate_own_post_reply(other_author, other_text, self._build_thread_history(latest_other, comments))
+                            proposed_reply = await self._generate_own_post_reply(other_author, other_text, self._build_thread_history(latest_other, all_comments))
                             if proposed_reply and not any(is_semantic_duplicate_reply(proposed_reply, prev) for prev in agent_replies_in_thread):
                                 result = await self._post_own_reply(post_id, other_id, other_author, other_text)
                                 if result:
