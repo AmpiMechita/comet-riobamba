@@ -57,12 +57,10 @@ def test_home_dashboard_success(monkeypatch):
         return {
             "status": 200,
             "data": {
-                "karma": 42,
-                "unread_notifications": 3,
-                "active_posts": 5,
+                "your_account": {"name": "comet_riobamba", "karma": 42, "unread_notification_count": 3},
                 "activity_on_your_posts": [
-                    {"id": "p1", "title": "Post 1", "new_notification_count": 2, "authors": ["user_a"]},
-                    {"id": "p2", "title": "Post 2", "new_notification_count": 0, "authors": []},
+                    {"post_id": "p1", "post_title": "Post 1", "new_notification_count": 2, "latest_commenters": ["user_a"]},
+                    {"post_id": "p2", "post_title": "Post 2", "new_notification_count": 0, "latest_commenters": []},
                 ],
                 "latest_moltbook_announcement": {"id": "ann-1", "title": "New features!"},
             },
@@ -71,8 +69,10 @@ def test_home_dashboard_success(monkeypatch):
     home = client.fetch_home_dashboard()
     assert home["karma"] == 42
     assert home["unread_notifications"] == 3
-    assert home["active_posts"] == 5
+    assert home["active_posts"] == 2
     assert len(home["activity_on_your_posts"]) == 2
+    assert home["activity_on_your_posts"][0]["title"] == "Post 1"
+    assert home["activity_on_your_posts"][0]["authors"] == ["user_a"]
     assert home["latest_moltbook_announcement"]["id"] == "ann-1"
 
 
