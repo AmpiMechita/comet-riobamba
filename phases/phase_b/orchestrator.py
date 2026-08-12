@@ -1451,6 +1451,16 @@ class PhaseB:
             results: List[Dict[str, Any]] = []
             posts_revisited = 0
 
+            # ── Instrumentación de diagnóstico (solo logs, no cambia lógica) ──
+            diag_posts_fetched = 0
+            diag_comments_inspected = 0
+            diag_replies_matched = 0
+            diag_discarded_dedup = 0
+            diag_discarded_depth = 0
+            diag_discarded_triage = 0
+            diag_broke_daily = False
+            diag_broke_cycle = False
+
             effective_cycle_limit = (
                 remaining_cycle_slots if remaining_cycle_slots is not None
                 else self.max_replies_per_cycle
@@ -1470,6 +1480,13 @@ class PhaseB:
                 if ts_dt is not None and ts_dt >= cutoff:
                     recent_post_ids.append(pid)
 
+            logger.info(
+                "Phase B: follow-ups — %s post(s) en ventana 48h (de %s comentados), "
+                "cycle_limit=%s, max_comments_per_day=%s.",
+                len(recent_post_ids), len(self._commented_post_ids),
+                effective_cycle_limit, self.max_comments_per_day,
+            )
+
             if not recent_post_ids:
                 logger.info("Phase B: sin posts revisitables para follow-ups (ninguno en 48 h).")
                 span.set("posted", 0)
@@ -1479,12 +1496,14 @@ class PhaseB:
 
             for post_id in recent_post_ids:
                 if self.get_comments_today() >= self.max_comments_per_day:
+                    diag_broke_daily = True
                     logger.info(
                         "Phase B: skip follow-ups — daily limit (%s/%s).",
                         self.get_comments_today(), self.max_comments_per_day,
                     )
                     break
                 if cycle_count >= effective_cycle_limit:
+                    diag_broke_cycle = True
                     logger.info(
                         "Phase B: skip follow-ups — cycle limit (%s/%s).",
                         cycle_count, effective_cycle_limit,
@@ -1511,6 +1530,8 @@ class PhaseB:
                     continue
                 if not comments:
                     continue
+                diag_posts_fetched += 1
+                diag_comments_inspected += len(comments)
 
                 our_id_set = {str(cid) for cid in our_comment_ids}
                 # Respuestas A NUESTROS comentarios (parent_id apunta a uno nuestro),
@@ -1521,14 +1542,17 @@ class PhaseB:
                     and str(c.get("parent_id") or "") in our_id_set
                     and not self._is_own_author(self._get_author_name(c))
                 ]
+                diag_replies_matched += len(replies_to_us)
                 if not replies_to_us:
                     continue
 
                 post_touched = False
                 for reply_comment in replies_to_us:
                     if self.get_comments_today() >= self.max_comments_per_day:
+                        diag_broke_daily = True
                         break
                     if cycle_count >= effective_cycle_limit:
+                        diag_broke_cycle = True
                         break
                     if followups_done >= self.max_followups_per_post:
                         logger.info(
@@ -1547,6 +1571,7 @@ class PhaseB:
 
                     # ── Dedup durable: nunca responder dos veces el mismo comentario ──
                     if reply_cap.has_replied_to_comment(f"{post_id}:{reply_id}"):
+                        diag_discarded_dedup += 1
                         logger.info(
                             "Phase B: skip follow-up a comentario %s en post %s (durable dedup).",
                             reply_id, post_id,
@@ -1556,6 +1581,7 @@ class PhaseB:
                     # ── Guard de profundidad: no seguir más allá de MAX_CONVERSATION_DEPTH ──
                     depth = self._compute_thread_depth(reply_comment, comments)
                     if depth >= MAX_CONVERSATION_DEPTH:
+                        diag_discarded_depth += 1
                         logger.info(
                             "Phase B: skip follow-up — profundidad %s >= max %s (post %s, comment %s).",
                             depth, MAX_CONVERSATION_DEPTH, post_id, reply_id,
@@ -1569,6 +1595,7 @@ class PhaseB:
                         author=reply_comment.get("author"),
                     )
                     if skip_triage:
+                        diag_discarded_triage += 1
                         logger.info(
                             "Phase B: skip follow-up a comentario %s (triage: %s).",
                             reply_id, triage_reason,
@@ -1694,6 +1721,16 @@ class PhaseB:
             logger.info(
                 "Phase B: thread follow-ups=%s (posts revisitados=%s)",
                 len(results), posts_revisited,
+            )
+            logger.info(
+                "Phase B: follow-up diagnóstico — ventana48h=%s, fetched=%s, "
+                "comentarios_inspected=%s, replies_matched=%s, "
+                "descartados(durable_dedup=%s, profundidad=%s, triage=%s), "
+                "corte(daily=%s, cycle=%s), publicado=%s.",
+                len(recent_post_ids), diag_posts_fetched,
+                diag_comments_inspected, diag_replies_matched,
+                diag_discarded_dedup, diag_discarded_depth, diag_discarded_triage,
+                diag_broke_daily, diag_broke_cycle, len(results),
             )
             span.set("posted", len(results))
             return results

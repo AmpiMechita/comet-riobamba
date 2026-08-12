@@ -375,7 +375,7 @@ class COMETRiobambaAgent:
                     if post.get("new_notification_count", 0) > 0:
                         pid = post.get("id") or post.get("post_id") or ""
                         title = post.get("post_title") or post.get("title", "?")
-                        commenters = post.get("latest_commenters", [])
+                        commenters = post.get("authors") or post.get("latest_commenters") or []
                         logger.info(
                             'Agent home: post "%s" has %s new comment(s) from %s',
                             title, post["new_notification_count"], ", ".join(commenters) or "unknown",
