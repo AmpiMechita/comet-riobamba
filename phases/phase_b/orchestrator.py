@@ -129,15 +129,20 @@ from core.tracer import Span
 from core.value_log import log_value_event
 from phases.deps import PhaseBDeps
 from prompts.value_classifier import build_classifier_prompt
-from prompts.prompt_templates import REPLY_TEMPLATE, DEBATE_CONTINUATION_TEMPLATE, OLLAMA_FALLBACK_REPLY, get_reply_depth_directive
+from prompts.prompt_templates import (
+    REPLY_TEMPLATE, DEBATE_CONTINUATION_TEMPLATE, OLLAMA_FALLBACK_REPLY,
+    get_reply_depth_directive, UNTRUSTED_DIRECTIVE, ABSTAIN_RULE,
+    detect_prompt_injection, log_injection_attempt,
+)
 from core.claims_tracker import ClaimsTracker
 from personality.modes import select_mode, get_mode_prompt
-from services.dual_scoring import log_dual_score
+from services.dual_scoring import log_dual_score, compute_dual_score
 from services.energy_knowledge_base import EnergyKnowledgeBase
 from services.moltbook_api_client import APIResponse, is_parent_not_found_404
 from services.dedup_store import DedupStore
 from services import reply_cap
 from services.persistence import enqueue_outbox, count_outbox_by_status
+from services.abstain_tracker import record_abstain
 from services.claim_checker import extract_claim, check_claim
 from services.own_post_store import is_valid_post_id
 from core.strategy_state import StrategyState
@@ -1334,10 +1339,11 @@ class PhaseB:
                 "Phase B: cycle summary — own-post replies=%s, thread follow-ups=%s, "
                 "feed replies=%s, upvotes=%s, follows=%s, semantic_candidates=%s, "
                 "claim-check failures=%s, total=%s, watchlist_inbound_today=%s, "
-                "outbox_failed=%s, queue_prefiltered=%s",
+                "outbox_failed=%s, queue_prefiltered=%s, abstained=%s",
                 own_count, followup_count, feed_count, self._upvotes_this_cycle,
                 self._follows_this_cycle, semantic_count, self._stats.get("claim_check_failed", 0), total,
                 inbound_wl, outbox_failed, self._stats.get("queue_prefiltered", 0),
+                self._stats.get("abstained", 0),
             )
             span.set("feed_replies", feed_count)
             span.set("own_replies", own_count)
@@ -1621,14 +1627,23 @@ class PhaseB:
                         )
                         continue
 
-                    # ── Guard de profundidad: no seguir más allá de MAX_CONVERSATION_DEPTH ──
+                    # ── Guard de profundidad: limite de turnos dinamico ──
+                    # Base 4; se extiende a 8 para watchlist/interlocutores con
+                    # pregunta abierta + aporte nuevo; se corta antes si el
+                    # hilo repite. El motivo queda en el log.
                     depth = self._compute_thread_depth(reply_comment, comments)
-                    if depth >= MAX_CONVERSATION_DEPTH:
-                        diag_discarded_depth += 1
+                    _author_key = (reply_author or "").strip().lower()
+                    _limit, _close_reason = self._thread_depth_limit(
+                        reply_comment, comments, _author_key,
+                        self._is_watchlist_author(_author_key),
+                    )
+                    if depth >= _limit:
                         logger.info(
-                            "Phase B: skip follow-up — profundidad %s >= max %s (post %s, comment %s).",
-                            depth, MAX_CONVERSATION_DEPTH, post_id, reply_id,
+                            "Phase B: thread closed: %s (post %s, comment %s, depth %s/%s)",
+                            _close_reason or "tope", post_id, reply_id, depth, _limit,
                         )
+                        if _close_reason:
+                            close_thread(post_id)
                         continue
 
                     # ── Triage de calidad + bonus de interlocutor ──
@@ -1660,7 +1675,7 @@ class PhaseB:
                     try:
                         followup_text = await self._generate_own_post_reply(
                             reply_author, reply_text, thread_history,
-                            tier=followup_tier,
+                            tier=followup_tier, post_id=post_id,
                         )
                     except Exception as e:
                         logger.warning("Phase B: error generando follow-up: %s", e)
@@ -1668,6 +1683,10 @@ class PhaseB:
 
                     followup_text = (followup_text or "").strip()
                     if not followup_text:
+                        continue
+                    # ABSTAIN: salida legitima — no publicar, no cuenta como fallo.
+                    if followup_text.upper().startswith("ABSTAIN"):
+                        logger.info("Phase B: follow-up ABSTAIN (comment %s en post %s)", reply_id, post_id)
                         continue
                     followup_text = clean_llm_output(followup_text)
 
@@ -2086,6 +2105,11 @@ class PhaseB:
                     continue
 
                 reply_text = (reply_text or "").strip()
+                # ABSTAIN: salida legitima — no publicar, no cuenta como fallo
+                # ni consume el limite de intentos LLM del ciclo.
+                if reply_text.upper().startswith("ABSTAIN"):
+                    logger.info("Phase B: skip feed reply — ABSTAIN (post %s)", post_id)
+                    continue
                 if not reply_text:
                     logger.warning("Phase B: respuesta vacía generada.")
                     _llm_attempts += 1
@@ -2542,6 +2566,53 @@ class PhaseB:
             parent_id = PhaseB._extract_parent_id(cmap[parent_id])
         return depth
 
+    def _thread_depth_limit(self, comment: Dict, all_comments: List[Dict],
+                            author_key: str, is_watchlist: bool) -> Tuple[int, Optional[str]]:
+        """Limite de turnos dinamico para la conversacion enhebrada.
+
+        Base 4. Se extiende a 8 solo si el intercambio vale la pena: autor
+        watchlist o interlocutor con historial (>=3 interacciones), el turno
+        anterior hizo una pregunta abierta, y el ultimo turno aporto algo
+        NUEVO (no repite semanticamente al anterior). Se corta ANTES de la
+        base si el hilo empieza a repetirse (duplicado semantico contra el
+        turno anterior). Devuelve (limite, motivo_de_cierre).
+        """
+        cur = (comment.get("content") or comment.get("text") or "").strip()
+        parent_id = PhaseB._extract_parent_id(comment)
+        cmap = {c.get("id"): c for c in all_comments if c.get("id")}
+        parent = cmap.get(parent_id) if parent_id else None
+        parent_text = (parent.get("content") or parent.get("text") or "").strip() if parent else ""
+        grandparent_text = ""
+        if parent:
+            gp_id = PhaseB._extract_parent_id(parent)
+            gp = cmap.get(gp_id) if gp_id else None
+            if gp:
+                grandparent_text = (gp.get("content") or gp.get("text") or "").strip()
+
+        # Repeticion: el turno actual repite al anterior -> cerrar ya.
+        if parent_text and cur and is_semantic_duplicate_reply(cur, parent_text, threshold=0.80):
+            return 1, "repetición"
+
+        base = 4
+        has_history = False
+        if author_key:
+            try:
+                from services.interlocutors import get_interaction_count
+                has_history = get_interaction_count(author_key) >= 3
+            except Exception:
+                pass
+        if not (is_watchlist or has_history):
+            return base, None
+        # Extension: el turno anterior pregunto y no repitio al anterior.
+        has_question = "?" in parent_text
+        aporte_nuevo = not (
+            parent_text and grandparent_text
+            and is_semantic_duplicate_reply(parent_text, grandparent_text, threshold=0.80)
+        )
+        if has_question and aporte_nuevo:
+            return 8, None
+        return base, "sin pregunta"
+
     async def _generate_reply_bestof(self, user_prompt: str, system_prompt: str,
                                      title: str, body: str, tier: str = "flash") -> str:
         """Best-of-2: genera 2 borradores y conserva el de mayor _score_reply_draft.
@@ -2635,6 +2706,8 @@ class PhaseB:
                 f"{lang_instruction}\n\n"
                 f"{COMMENT_STYLE_INSTRUCTIONS}"
             )
+            # ── Delimitador de contenido no confiable + derecho a abstenerse ──
+            system_prompt = system_prompt + "\n\n" + UNTRUSTED_DIRECTIVE + "\n\n" + ABSTAIN_RULE
 
             # ── Inject reply feedback strategy hint ───────────────────────
             try:
@@ -2730,6 +2803,22 @@ class PhaseB:
             except Exception:
                 pass
 
+            # ── Deteccion de prompt injection (telemetria, no bloqueo) ──
+            # El texto del post ajeno ya viaja en <untrusted_content>; si
+            # intenta redirigir al agente, se registra el intento.
+            try:
+                _inj_fragment = detect_prompt_injection(f"{title} {body}")
+                if _inj_fragment:
+                    logger.warning("prompt injection attempt from %s (post %s)", author, post.get("id"))
+                    log_injection_attempt(
+                        author=author,
+                        post_id=str(post.get("id") or ""),
+                        source="feed_reply",
+                        fragment=_inj_fragment,
+                    )
+            except Exception:
+                pass
+
             user_prompt = memory_note + REPLY_TEMPLATE.format(
                 title=title,
                 content=body[:1200],
@@ -2799,6 +2888,16 @@ class PhaseB:
                     )
                     reply = (reply or "").strip()
                 span.set("length", len(reply) if reply else 0)
+
+                # ── ABSTAIN: salida legitima, no inventar lo no fundamentado ──
+                # No publica, cuenta en abstained del ciclo y en el tracker
+                # diario (vigilancia de targeting, no fallo de generacion).
+                if reply.strip().upper().startswith("ABSTAIN"):
+                    self._stats["abstained"] = self._stats.get("abstained", 0) + 1
+                    record_abstain(True)
+                    logger.info("Phase B: feed reply ABSTAIN (post %s)", post.get("id"))
+                    return "ABSTAIN", None
+                record_abstain(False)
 
                 # ── Historical examples gate: block if repeated example ──
                 is_repeat, blocked_examples = is_example_recently_used(reply)
@@ -2910,8 +3009,17 @@ class PhaseB:
             # cola de TODOS los posts, ordenada: 1º autores watchlist, 2º
             # recencia del comentario desc. Se procesan los primeros
             # own_queue_per_cycle, con cap por post secundario.
+            # v5.4: el presupuesto es techo, no cuota — un comentario debe
+            # superar un piso de valor (AGENT_MIN_REPLY_VALUE_SCORE) para
+            # entrar, independiente de cuantos slots queden libres.
+            try:
+                min_value = float(os.getenv("AGENT_MIN_REPLY_VALUE_SCORE", "0") or "0")
+            except (TypeError, ValueError):
+                min_value = 0.0
             queue: List[Tuple[str, Dict[str, Any], List[Dict[str, Any]]]] = []
             posts_with_pending = 0
+            total_candidates = 0
+            queue_scores: List[float] = []
             for post in posts:
                 post_id = post.get("id") or post.get("post_id")
                 if not post_id:
@@ -2933,6 +3041,31 @@ class PhaseB:
                     if not queuable:
                         queue_filter_counts[reason] = queue_filter_counts.get(reason, 0) + 1
                         continue
+                    # ── Score de valor: se mide SIEMPRE (telemetria de la
+                    # distribucion para calibrar el umbral con datos); el
+                    # filtro solo aplica si el umbral esta seteado. ──
+                    try:
+                        value_score = compute_dual_score(
+                            (c.get("content") or c.get("text") or "")
+                        )["research_value_score"]
+                    except Exception:
+                        value_score = 0.0
+                    queue_scores.append(value_score)
+                    if min_value > 0:
+                        total_candidates += 1
+                        author_key = (self._get_author_name(c) or "").strip().lower()
+                        is_wl = self._is_watchlist_author(author_key)
+                        has_history = False
+                        if author_key:
+                            try:
+                                from services.interlocutors import get_interaction_count
+                                has_history = get_interaction_count(author_key) >= 3
+                            except Exception:
+                                pass
+                        floor = min_value if not (is_wl or has_history) else min_value * 0.5
+                        if value_score < floor:
+                            queue_filter_counts["below_value"] = queue_filter_counts.get("below_value", 0) + 1
+                            continue
                     queue.append((post_id, c, all_comments))
                     per_post += 1
                 if queue_filter_counts:
@@ -2949,6 +3082,20 @@ class PhaseB:
                 logger.info("Phase B: no hay comentarios sin responder en posts propios.")
                 span.set("results", 0)
                 return []
+
+            # ── Distribucion de scores del ciclo (telemetria para calibrar
+            # AGENT_MIN_REPLY_VALUE_SCORE con datos, no al voleo) ──
+            if queue_scores:
+                _sorted_scores = sorted(queue_scores)
+                _n = len(_sorted_scores)
+
+                def _pct(p: float) -> float:
+                    return _sorted_scores[int(p * (_n - 1))]
+
+                logger.info(
+                    "own-post queue scores — min=%.3f p25=%.3f mediana=%.3f p75=%.3f max=%.3f (n=%d)",
+                    _sorted_scores[0], _pct(0.25), _pct(0.5), _pct(0.75), _sorted_scores[-1], _n,
+                )
 
             def _recency_key(c):
                 ts = c.get("created_at") or c.get("createdAt") or c.get("timestamp") or ""
@@ -2984,8 +3131,9 @@ class PhaseB:
                 if self._is_watchlist_author(self._get_author_name(c))
             )
             logger.info(
-                "own-post queue: %d sin responder en %d posts; procesando %d (watchlist=%d)",
-                len(queue), posts_with_pending, len(selected), watchlist_sel,
+                "own-post queue: %d candidatos, %d superan el umbral (piso=%.2f), procesando %d (watchlist=%d)",
+                total_candidates if min_value > 0 else len(queue),
+                len(queue), min_value, len(selected), watchlist_sel,
             )
 
             results: List[Dict[str, Any]] = []
@@ -3405,11 +3553,17 @@ class PhaseB:
                 return None
 
             try:
-                reply_text = await self._generate_own_post_reply(author, comment_text, thread_history)
+                reply_text = await self._generate_own_post_reply(author, comment_text, thread_history, post_id=post_id)
             except Exception as e:
                 logger.error(f"Phase B: LLM error for comment {comment_id} on post {post_id}: {e}")
                 span.set("success", False)
                 return None
+
+            # ABSTAIN: salida legitima — no publicar, no cuenta como fallo.
+            if (reply_text or "").upper().startswith("ABSTAIN"):
+                logger.info("Phase B: own-post reply ABSTAIN (comment %s)", comment_id)
+                span.set("success", False)
+                return {"post_id": post_id, "comment_id": comment_id, "abstained": True}
 
             if not reply_text:
                 span.set("success", False)
@@ -3727,7 +3881,7 @@ class PhaseB:
         return _build_thread_history(self, comment, all_comments)
 
     async def _generate_own_post_reply(self, author: str, comment_text: str, thread_history: str = "",
-                                       tier: str = "flash") -> str:
+                                       tier: str = "flash", post_id: str = "") -> str:
         with Span("llm_generation", type="own_post") as span:
             lang_instruction = (
                 "Always respond in English. This is an English-speaking platform."
@@ -3777,6 +3931,20 @@ class PhaseB:
                 _depth_directive = ""
                 _mode_prompt = ""
 
+            # ── Deteccion de prompt injection (telemetria, no bloqueo) ──
+            try:
+                _inj_fragment = detect_prompt_injection(f"{comment_text} {thread_history}")
+                if _inj_fragment:
+                    logger.warning("prompt injection attempt from %s (post %s)", author, post_id)
+                    log_injection_attempt(
+                        author=author,
+                        post_id=str(post_id or ""),
+                        source="own_post_reply",
+                        fragment=_inj_fragment,
+                    )
+            except Exception:
+                pass
+
             if thread_history:
                 user_prompt = memory_note + DEBATE_CONTINUATION_TEMPLATE.format(
                     thread_history=thread_history,
@@ -3818,6 +3986,8 @@ class PhaseB:
                 f"{lang_instruction}\n\n"
                 f"{COMMENT_STYLE_INSTRUCTIONS}"
             )
+            # ── Delimitador de contenido no confiable + derecho a abstenerse ──
+            system_prompt = system_prompt + "\n\n" + UNTRUSTED_DIRECTIVE + "\n\n" + ABSTAIN_RULE
             try:
                 reply = await self.llm.generate(
                     tier=tier,
@@ -3828,6 +3998,14 @@ class PhaseB:
                 )
                 reply = (reply or "").strip()
                 span.set("length", len(reply) if reply else 0)
+
+                # ── ABSTAIN: salida legitima, no inventar lo no fundamentado ──
+                if reply.upper().startswith("ABSTAIN"):
+                    self._stats["abstained"] = self._stats.get("abstained", 0) + 1
+                    record_abstain(True)
+                    logger.info("Phase B: own-post reply ABSTAIN (author=%s)", author)
+                    return "ABSTAIN"
+                record_abstain(False)
 
                 # ── Historical examples gate: block if repeated example ──
                 is_repeat, blocked_examples = is_example_recently_used(reply)

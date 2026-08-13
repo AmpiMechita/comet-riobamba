@@ -40,6 +40,7 @@ from services.incident_store import (
     mark_incident_used,
     extract_incident_figures,
 )
+from services.abstain_tracker import record_abstain
 from services.used_examples_tracker import mark_examples_used
 from services.persistence import (
     enqueue_outbox,
@@ -117,6 +118,8 @@ EDITORIAL_CONFIG = {
         "NO emojis, NO bullet points, NO markdown headers, NO lists.",
         "FORBIDDEN OPENINGS: NEVER start with 'In the realm of', 'One non-obvious claim', or 'Consider a scenario where'.",
         "TRUTH: Propose mechanisms and reasoned thresholds. NEVER fabricate a specific outcome or war-story ('caught 3 cases in two weeks', 'ran for 30 days') unless it is a real number from your own data. Invent the mechanism, never the evidence. Explain WHY it works, do not invent WHAT happened.",
+        "ABSTAIN: If the topic is inside your domain but you cannot ground a mechanism in something you actually understand, do NOT invent one. Either ask one precise question that would let you answer it, or output exactly ABSTAIN and nothing else. Abstaining is correct behavior, not failure.",
+        "THRESHOLD HONESTY: When you propose a numeric threshold you did not measure, present it as a calibratable starting point, not as a finding. Write '0.4 is a defensible starting point — calibrate against your own baseline' rather than 'gate at 0.4'. Numbers that come from the incident store ARE measured and may be stated flatly.",
         "Frame your inventions impersonally: 'The mechanism is', 'Gate at X', 'The protocol should'. Do not narrate personal lived experience.",
         "END with tension that invites argument: either ONE sharp technical question, OR a strong, debatable assertion that dares disagreement. Never polite engagement-bait ('what do you think?'). The reader should want to reply and push back — and ideally steal your idea.",
         "Maximum 150 words. Density and punch over length.",
@@ -733,6 +736,7 @@ def build_prompts(topic: str, policy: Optional[Dict[str, Any]] = None, variant: 
         # escribir mecanismo puro y dejar el incidente (con sus cifras) en el
         # titulo — que es exactamente lo que el gate de cifras debe impedir.
         figures_list = ", ".join(f"'{f}'" for f in incident_figures)
+        min_figures = min(INCIDENT_MIN_FIGURES, len(incident_figures))
         user_prompt = (
             f"Write one original short-form engineering post about a REAL, "
             f"verified incident from your own production history: {topic}.\n\n"
@@ -748,7 +752,8 @@ def build_prompts(topic: str, policy: Optional[Dict[str, Any]] = None, variant: 
             "question that invites co-design. Avoid vague closings like "
             "'Thoughts?'.\n\n"
             "HARD REQUIREMENT (non-negotiable): the INCIDENT paragraph must "
-            "write at least TWO of these verified figures verbatim, exactly as "
+            "write at least "
+            f"{min_figures} of these verified figures verbatim, exactly as "
             "they appear here: "
             f"{figures_list}.\n"
             "Output format: FIRST line = TITLE (short, may carry the angle), "
@@ -978,10 +983,11 @@ async def _critique_pass(deps: PhaseADeps, post: Dict[str, Any],
             return post
         if incident_figures:
             present, _missing = _count_incident_figures(new_text, incident_figures)
-            if present < INCIDENT_MIN_FIGURES:
+            min_figures = min(INCIDENT_MIN_FIGURES, len(incident_figures))
+            if present < min_figures:
                 logger.info(
-                    "Phase A: auto-critique perdió cifras verificadas del incidente (%s/2) -> keeping pre-critique",
-                    present,
+                    "Phase A: auto-critique perdió cifras verificadas del incidente (%s/%s) -> keeping pre-critique",
+                    present, min_figures,
                 )
                 return post
         low_quality, lq_reason = _looks_low_quality(new_text, policy)
@@ -1579,6 +1585,15 @@ class PhaseAContentGeneration:
                     if attempt >= max_attempts:
                         generated_post = {"title": "", "body": "", "metadata": {"topic": topic}, "error": "empty_output", "attempts": attempt, "published": False, "error_type": "empty_output"}
                     continue
+                # ── ABSTAIN: salida legitima. NO publicar, NO contar como fallo
+                # de generacion; solo telemetria (abstained + tracker diario). ──
+                if raw_text.strip().upper().startswith("ABSTAIN"):
+                    record_abstain(True)
+                    _log_generation_attempt(topic, topic_source, attempt, max_attempts, "abstained")
+                    logger.info("Phase A: ABSTAIN (topic='%s', intento %s/%s) — no se publica", topic[:60], attempt, max_attempts)
+                    generated_post = {"title": "", "body": "", "metadata": {"topic": topic}, "error": "abstained", "attempts": attempt, "published": False, "error_type": "abstained"}
+                    break
+                record_abstain(False)
                 title, body = extract_title_and_body(raw_text)
                 title = _normalize_moltbook_title(title)
                 title = _truncate_title(title, max_chars=100)
@@ -1620,12 +1635,15 @@ class PhaseAContentGeneration:
                 # que nombra las cifras faltantes. Si agota reintentos, el
                 # incidente NO se marca usado (no se quema).
                 if _incident_figures:
+                    # Minimo efectivo: con 1 sola figura distintiva se exige ESA
+                    # (no puede degradarse a coincidencia). Con 0 no hay gate.
+                    _min_figures = min(INCIDENT_MIN_FIGURES, len(_incident_figures))
                     present, missing = _count_incident_figures(post_text, _incident_figures)
                     logger.info(
-                        "own_incident: cifras verificadas presentes %s/2 (faltan: %s)",
-                        present, ", ".join(missing) if missing else "-",
+                        "own_incident: cifras verificadas presentes %s/%s (faltan: %s)",
+                        present, _min_figures, ", ".join(missing) if missing else "-",
                     )
-                    if present < INCIDENT_MIN_FIGURES:
+                    if present < _min_figures:
                         reason = "missing_incident_figures"
                         logger.warning("Phase A: contenido invalido (reason=%s), reintentar...", reason)
                         _log_generation_attempt(topic, topic_source, attempt, max_attempts, f"validation_failed:{reason}")
@@ -1793,6 +1811,9 @@ class PhaseAContentGeneration:
             errors = {p.get("error", "unknown") for p in posts}
             if "pacing_blocked" in errors:
                 skip_reason = "pacing"
+            elif "abstained" in errors:
+                # Abstencion legitima: NO es un fallo de generacion.
+                skip_reason = "abstained"
             elif errors & {"model_error", "empty_output"}:
                 skip_reason = "generation_failed"
             elif errors & {"low_quality:below_min_quality_score"} or any(

@@ -235,6 +235,52 @@ class TestIncidentFigures:
     def test_min_figures_constant_is_two(self):
         assert INCIDENT_MIN_FIGURES == 2
 
+    # ── Cifras distintivas: enteros sueltos de 1-2 digitos no pasan el gate ──
+
+    def test_generic_small_ints_are_filtered_out(self):
+        inc = {
+            "id": "i1", "title": "t", "symptom": "", "root_cause": "", "fix": "",
+            "real_numbers": "1 in 3 calls failed with 2 retries and 1 metric",
+            "used": False,
+        }
+        assert extract_incident_figures(inc) == [], "'1','2','3' sueltos no son distintivos"
+
+    def test_abstain_incident_requires_38_percent_only(self):
+        inc = {
+            "id": "inc-20260813-abstain", "title": "t", "symptom": "", "root_cause": "", "fix": "",
+            "real_numbers": "2 posts with unverifiable data; 1 metric ('38%') without a source; 1 unconfirmed third-party historical incident.",
+            "used": False,
+        }
+        figures = extract_incident_figures(inc)
+        assert figures == ["38%"], f"debe quedar solo la cifra distintiva: {figures}"
+
+    def test_breaker_incident_keeps_247(self):
+        inc = {
+            "id": "inc-404", "title": "t", "symptom": "", "root_cause": "", "fix": "",
+            "real_numbers": "247 breaker openings in one day; 5 deleted comments could open the breaker.",
+            "used": False,
+        }
+        assert extract_incident_figures(inc) == ["247"]
+
+    def test_three_digit_and_unit_figures_kept(self):
+        inc = {
+            "id": "i2", "title": "t", "symptom": "", "root_cause": "", "fix": "",
+            "real_numbers": "316 comments on one post led to 85 min cycles; cap is now 10 comments/post/cycle.",
+            "used": False,
+        }
+        figures = extract_incident_figures(inc)
+        assert "316" in figures, "3 digitos: distintivo"
+        assert "85" in figures, "'85 min': unidad especifica, distintivo"
+        assert "10" not in figures, "'10 comments': unidad generica, no distintivo"
+
+    def test_compact_range_figure_kept(self):
+        inc = {
+            "id": "i3", "title": "t", "symptom": "", "root_cause": "", "fix": "",
+            "real_numbers": "Configured 12->10->6: the validator clamped to 10 and then silently fell back to the default 6.",
+            "used": False,
+        }
+        assert extract_incident_figures(inc) == ["12->10->6"]
+
 
 class TestBuildPromptsIncidentFigures:
     def test_prompt_hard_requirement_lists_figures(self):
@@ -244,7 +290,7 @@ class TestBuildPromptsIncidentFigures:
             incident_figures=["1,035", "0"],
         )
         assert "HARD REQUIREMENT (non-negotiable)" in user_prompt
-        assert "at least TWO of these verified figures" in user_prompt
+        assert "at least 2 of these verified figures" in user_prompt
         assert "'1,035'" in user_prompt
         assert "'0'" in user_prompt
         assert "Do NOT invent any additional number" in user_prompt
@@ -409,6 +455,162 @@ class TestIncidentFiguresGate:
         assert result["posts_published"] == 1
         records = incident_store.load_incidents()
         assert records[0]["used"] is True
+
+
+# ── Gate con UNA cifra distintiva: se exige ESA (no se degrada) ──
+
+_BREAKER_INCIDENT = {
+    "id": "inc-20260812-404-breaker",
+    "date": "2026-08-12",
+    "title": "Legitimate 404s that kept opening the circuit breaker",
+    "symptom": "The client kept failing under normal operation: 247 circuit breaker openings in a single day.",
+    "root_cause": "Every 4xx counted as a circuit failure, but 404s are produced by design when probing for already-deleted comments.",
+    "fix": "Stop counting 400/404/409/410/422 against the breaker; keep counting 401/403/5xx.",
+    "real_numbers": "247 breaker openings in one day; 5 deleted comments could open the breaker.",
+    "used": False,
+}
+
+_BREAKER_BODY_WITH = (
+    "Circuit breakers that open on expected misses\n\n"
+    "A production agent's circuit breaker opened 247 times in a single day of "
+    "normal operation: every 4xx counted as a service failure, and probing for "
+    "already-deleted comments produces 404s by design.\n\n"
+    "The fix is a classification contract: 400/404/409/410/422 never open the "
+    "breaker, while 401/403/5xx still do. A breaker that opens on expected "
+    "answers is not a safety mechanism; it is a door with a hair-trigger.\n\n"
+    "Does your breaker distinguish an expected miss from a broken service, or "
+    "does it count every 4xx as a wound?"
+)
+
+_BREAKER_BODY_WITHOUT = (
+    "Circuit breakers that count every miss\n\n"
+    "An agent's circuit breaker kept opening under normal operation because "
+    "every client error counted as a service failure, while probing for "
+    "already-deleted comments produces not-found responses by design.\n\n"
+    "The fix is a classification contract that treats expected misses "
+    "differently from real failures, so the breaker only trips when the "
+    "service itself is sick.\n\n"
+    "Does your breaker distinguish an expected miss from a broken service, or "
+    "does it count every client error as a wound?"
+)
+
+
+class TestSingleFigureGate:
+    @pytest.mark.asyncio
+    async def test_body_with_the_only_figure_passes_and_marks_used(self, tmp_path):
+        from phases.phase_a_content import PhaseAContentGeneration
+        from phases.deps import PhaseADeps
+
+        _seed([dict(_BREAKER_INCIDENT)])
+        deps = PhaseADeps(
+            model_cascade=AsyncMock(),
+            moltbook_client=MagicMock(),
+            behavior_cfg={"max_posts_per_day": 5},
+            posts_today=0,
+            get_posts_today=lambda: 0,
+        )
+        fake_now = datetime(2026, 7, 22, 12, 0, 0)
+        mock_call_model = AsyncMock(return_value=_BREAKER_BODY_WITH)
+        deps.moltbook_client.create_post = MagicMock(
+            return_value={"success": True, "status": 201, "id": "post-breaker", "raw": {}}
+        )
+        with (
+            patch("phases.phase_a_content.datetime") as mock_dt,
+            patch("phases.phase_a_content.behavior_cfg",
+                  {"max_posts_per_day": 5, "phase_a_mode": "research"}),
+            patch("services.persistence.load_agent_state", return_value={}),
+            patch("services.own_post_store.count_posts_since", return_value=0),
+            patch("phases.phase_a_content.choose_topic",
+                  return_value=(_BREAKER_INCIDENT["title"], "own_incident:inc-20260812-404-breaker")),
+            patch("phases.phase_a_content.load_topic_matrix", return_value=None),
+            patch.multiple("phases.phase_a_content",
+                           _is_allowed_topic=MagicMock(return_value=True),
+                           _is_topic_recently_used=MagicMock(return_value=False),
+                           is_similar_to_recent=MagicMock(return_value=False)),
+            patch("phases.phase_a_content.build_prompts", return_value=("sys", "user")),
+            patch("phases.phase_a_content.load_editorial_policy", return_value={}),
+            patch("phases.phase_a_content.call_model", new=mock_call_model),
+            patch.multiple("phases.phase_a_content",
+                           store_post_hash=MagicMock(),
+                           _save_published_post=MagicMock(),
+                           _track_topic_performance=MagicMock(),
+                           _record_topic_used=MagicMock(),
+                           mark_examples_used=MagicMock(),
+                           log_dual_score=MagicMock()),
+            patch("phases.phase_a_content.load_agenda") as mock_agenda,
+            patch("phases.phase_a_content.asyncio.sleep", new=AsyncMock()),
+        ):
+            mock_dt.now.return_value = fake_now
+            mock_dt.fromisoformat.side_effect = lambda s: datetime.fromisoformat(s)
+            mock_agenda.return_value = MagicMock()
+            phase_a = PhaseAContentGeneration(deps=deps)
+            phase_a._dry_run_flag_phase_a = Path("data/phase_a_dry_run.flag.does-not-exist-for-tests")
+            result = await phase_a.execute()
+
+        assert result["posts_published"] == 1, "la unica cifra distintiva (247) basta"
+        assert incident_store.load_incidents()[0]["used"] is True
+
+    @pytest.mark.asyncio
+    async def test_body_without_the_only_figure_rejected(self, tmp_path):
+        from phases.phase_a_content import PhaseAContentGeneration
+        from phases.deps import PhaseADeps
+
+        _seed([dict(_BREAKER_INCIDENT)])
+        deps = PhaseADeps(
+            model_cascade=AsyncMock(),
+            moltbook_client=MagicMock(),
+            behavior_cfg={"max_posts_per_day": 5},
+            posts_today=0,
+            get_posts_today=lambda: 0,
+        )
+        fake_now = datetime(2026, 7, 22, 12, 0, 0)
+        mock_call_model = AsyncMock(return_value=_BREAKER_BODY_WITHOUT)
+        with (
+            patch("phases.phase_a_content.datetime") as mock_dt,
+            patch("phases.phase_a_content.behavior_cfg",
+                  {"max_posts_per_day": 5, "phase_a_mode": "research", "whisper_mode": True}),
+            patch("phases.phase_a_content.EDITORIAL_CONFIG",
+                  {**EDITORIAL_CONFIG, "phase_a_max_attempts": 1}),
+            patch("services.persistence.load_agent_state", return_value={}),
+            patch("services.own_post_store.count_posts_since", return_value=0),
+            patch("phases.phase_a_content.choose_topic",
+                  return_value=(_BREAKER_INCIDENT["title"], "own_incident:inc-20260812-404-breaker")),
+            patch("phases.phase_a_content.load_topic_matrix", return_value=None),
+            patch.multiple("phases.phase_a_content",
+                           _is_allowed_topic=MagicMock(return_value=True),
+                           _is_topic_recently_used=MagicMock(return_value=False),
+                           build_prompts=MagicMock(return_value=("sys", "user"))),
+            patch("phases.phase_a_content.load_editorial_policy", return_value={}),
+            patch("phases.phase_a_content.is_similar_to_recent", return_value=False),
+            patch("phases.phase_a_content.call_model", new=mock_call_model),
+        ):
+            mock_dt.now.return_value = fake_now
+            mock_dt.fromisoformat.side_effect = lambda s: datetime.fromisoformat(s)
+            phase_a = PhaseAContentGeneration(deps=deps)
+            result = await phase_a.execute()
+
+        assert result["posts"][0].get("error") == "validation_failed:missing_incident_figures"
+        assert incident_store.load_incidents()[0]["used"] is False, "no se quema sin pasar"
+
+
+# ── Disciplina epistemica: umbrales calibratables, cifras de incidente planas ──
+
+class TestThresholdHonesty:
+    def test_core_principles_require_calibratable_thresholds(self):
+        from phases.phase_a_content import EDITORIAL_CONFIG as ec
+        joined = "\n".join(ec["core_principles"])
+        assert "calibratable starting point" in joined
+        assert "rather than 'gate at 0.4'" in joined
+        assert "incident store ARE measured and may be stated flatly" in joined
+
+    def test_incident_figures_are_stated_flat_not_calibratable(self):
+        _, user_prompt = build_prompts(
+            _BREAKER_INCIDENT["title"],
+            incident=_BREAKER_INCIDENT,
+            incident_figures=extract_incident_figures(_BREAKER_INCIDENT),
+        )
+        assert "verbatim" in user_prompt
+        assert "calibratable" not in user_prompt, "las cifras del store se afirman directas"
 
 
 # ── Prioridad alta en choose_topic (al nivel de watchlist_pairing) ──

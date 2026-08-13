@@ -141,6 +141,20 @@ def _isolate_runtime_state(tmp_path, monkeypatch):
         tmp_path / "unrepliable_comment_ids.json",
     )
 
+    # ── Abstain tracker (services/abstain_tracker.py) ──
+    # Sin redirect, los tests que ejercitan generacion escriben en el
+    # data/abstain_rate_today.json REAL (contaminando la vigilancia diaria).
+    monkeypatch.setattr(
+        "services.abstain_tracker.ABSTAIN_RATE_PATH",
+        tmp_path / "abstain_rate_today.json",
+    )
+
+    # ── Injection attempts log (prompts/prompt_templates.py) ──
+    monkeypatch.setattr(
+        "prompts.prompt_templates._INJECTION_ATTEMPTS_PATH",
+        tmp_path / "injection_attempts.jsonl",
+    )
+
     # ── DedupStore SQLite (services/dedup_store.py) — GLOBAL isolation ──
     # Causa raíz de la contaminación del store real: cualquier test que
     # construyera PhaseB() (→ DedupStore()) sin un fixture puntual escribía en

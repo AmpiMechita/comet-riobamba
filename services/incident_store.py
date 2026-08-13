@@ -29,19 +29,50 @@ INCIDENTS_PATH = BASE_DIR / "data/incidents.jsonl"
 REGISTER_MAX_TOPICS = 5
 
 # Tokens numericos verificados del incidente (ratios 9/50, rangos 80->30,
-# porcentajes, miles 1,035). Fuente de los strings obligatorios del gate.
-_FIGURE_TOKEN_RE = re.compile(r"\d[\d.,:xX+~\-→/>]*\d|\d")
+# porcentajes 38%, miles 1,035, unidades 85 min, 2h->1h). Fuente de los
+# strings obligatorios del gate. Se descartan enteros sueltos de 1-2 digitos
+# sin unidad ni formato propio: '1' y '2' aparecen por casualidad en casi
+# cualquier texto tecnico y el gate pasaria sin citar el incidente.
+_FIGURE_TOKEN_RE = re.compile(r"\d[\d.,:xX+~\-→/>h%]*\d[h%]?|\d")
+_NEXT_WORD_RE = re.compile(r"[A-Za-z]+")
+
+# Unidades/contextos que vuelven distintivo a un entero corto (1-2 digitos):
+# "85 min", "0 replies", "4 rejections". Unidades genericas (posts, comments,
+# days, metric) NO salvan: son coincidencia facil en cualquier texto tecnico.
+_DISTINCTIVE_UNITS = {
+    "min", "mins", "minute", "minutes", "h", "hours", "hour", "ms", "sec",
+    "seconds", "matches", "replies", "attempts", "rejections", "openings",
+    "apertures", "lines", "rows", "cycles", "slots", "writes", "tests",
+    "per", "of",
+}
+_SYMBOL_CHARS = "/,.:xX+~→>"
+
+
+def _is_distinctive_figure(token: str, next_word: str) -> bool:
+    """True si la cifra no puede aparecer por casualidad en otro contexto:
+    formato propio (ratio, rango, miles, decimal, %), 3+ digitos, o unidad
+    especifica adjunta."""
+    if any(ch in token for ch in _SYMBOL_CHARS):
+        return True
+    if token.endswith("%"):
+        return True
+    if len(token) >= 3:
+        return True
+    if next_word and next_word.lower() in _DISTINCTIVE_UNITS:
+        return True
+    return False
 
 
 def extract_incident_figures(incident: Optional[Dict], max_figures: int = 6) -> List[str]:
-    """Cifras verificadas del incidente como strings canonicos (ej. '410/410',
-    '80->30', '9/50', '1,035'). El gate de Phase A exige que el body del post
-    incluya textualmente al menos 2 de ellas: la diferenciacion del post son
-    estos numeros, no la narrativa.
+    """Cifras DISTINTIVAS del incidente como strings canonicos (ej. '410/410',
+    '80->30', '9/50', '38%', '1,035', '247', '85 min').
 
-    Fuentes: real_numbers (principal) y symptom (fallback). Solo se descartan
-    duplicados exactos: '0' dentro de '1,035' y '30' dentro de '80->30' son
-    hechos distintos y ambos se conservan (el conteo usa frontera no-digita)."""
+    El gate de Phase A exige que el body incluya al menos 2 de ellas (o la
+    unica que haya, si tras filtrar quedo una): la diferenciacion del post son
+    estos numeros, no la narrativa. Enteros sueltos de 1-2 digitos sin unidad
+    ni formato se descartan ('2', '1', '30' suelto) por no ser distintivos.
+
+    Fuentes: real_numbers (principal) y symptom (fallback)."""
     if not incident:
         return []
     sources = [
@@ -50,9 +81,16 @@ def extract_incident_figures(incident: Optional[Dict], max_figures: int = 6) -> 
     ]
     figures: List[str] = []
     for src in sources:
-        for m in _FIGURE_TOKEN_RE.findall(src):
-            token = m.strip()
-            if not token or token in figures:
+        for m in _FIGURE_TOKEN_RE.finditer(src):
+            token = m.group(0).strip()
+            if not token:
+                continue
+            rest = src[m.end():].lstrip()
+            nxt = _NEXT_WORD_RE.match(rest)
+            next_word = nxt.group(0) if nxt else ""
+            if not _is_distinctive_figure(token, next_word):
+                continue
+            if token in figures:
                 continue
             figures.append(token)
             if len(figures) >= max_figures:
