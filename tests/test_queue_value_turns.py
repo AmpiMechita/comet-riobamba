@@ -179,6 +179,112 @@ class TestQueueValueThreshold:
         assert "min=" in dist_lines[0] and "mediana=" in dist_lines[0] and "max=" in dist_lines[0]
 
 
+# ── Cap por post chequeado ANTES de generar ──────────────────────
+
+class TestPostCapPrefilter:
+    def test_queuable_rejects_post_at_cap(self):
+        queuable, reason = PhaseB._comment_queuable(
+            {"id": "c1", "content": "text"}, "post-1",
+            post_cap=1, post_count=1,
+        )
+        assert (queuable, reason) == (False, "post_cap_reached")
+
+    def test_queuable_accepts_post_below_cap(self):
+        queuable, reason = PhaseB._comment_queuable(
+            {"id": "c1", "content": "text"}, "post-1",
+            post_cap=30, post_count=29,
+        )
+        assert queuable is True
+        assert reason == ""
+
+    def test_queuable_without_cap_keeps_old_behavior(self):
+        queuable, reason = PhaseB._comment_queuable({"id": "c1", "content": "text"}, "post-1")
+        assert queuable is True
+
+    @pytest.mark.asyncio
+    async def test_comment_in_post_with_exhausted_cap_not_queued(self, _redirect_paths):
+        """Post con max_comments_per_post agotado: el comentario no entra a la
+        cola y NO se genera ninguna reply (el LLM no se llama)."""
+        pb = _make_pb(max_comments_per_post=1, max_comments_per_day=50, max_replies_per_cycle=5)
+        post = {"id": "top-12345678-aaaa-bbbb-cccc-ddddeeeeffff", "comment_count": 10}
+        pb._dedup.add_agent_comment(post["id"], "already-answered")
+        pb.api._request = MagicMock(return_value={"status": 200, "data": {"posts": [post]}})
+        pb.api.fetch_my_posts = MagicMock(return_value=[])
+        pb.api.fetch_post_comments.return_value = [
+            {"id": "c1", "author": {"name": "user1"},
+             "content": "What about error handling in the retry loop?", "text": "What about error handling in the retry loop?"},
+        ]
+        pb.api.create_comment.return_value = {"success": True, "id": "new", "status": 201}
+        pb._classify_and_log_value = AsyncMock()
+
+        await pb._execute_own_post_replies()
+
+        pb.api.create_comment.assert_not_called()
+        pb.llm.generate.assert_not_awaited()  # sin generar respuestas que moriran
+        assert pb._stats.get("queue_prefiltered", 0) >= 1
+
+
+# ── Fragmentos de busqueda semantica: rehidratar, no responder ──
+
+class TestSemanticSnippetRehydration:
+    def _pb(self):
+        pb = _make_pb()
+        pb._semantic_search_enabled = True
+        pb._derive_search_queries = lambda: ["q1"]
+        return pb
+
+    @pytest.mark.asyncio
+    async def test_hl_snippet_rehydrated_to_full_post(self):
+        """Snippet con ⟦HL⟧ se rehidrata con el post COMPLETO por id."""
+        pb = self._pb()
+        pb.api.semantic_search.return_value = [
+            {"id": "p1", "content": "⟦HL⟧reward⟦/HL⟧ ⟦HL⟧function⟦/HL⟧ defines the ⟦HL⟧social⟦/HL⟧ contract..."},
+        ]
+        pb.api.get_post.return_value = {
+            "id": "p1", "title": "My reward function is not a social contract",
+            "content": "The full real post body with plenty of technical depth for scoring.",
+        }
+
+        results = await pb._fetch_semantic_search_posts()
+
+        assert len(results) == 1
+        post = results[0]
+        assert post.get("_rehydrated") is True
+        assert "⟦HL⟧" not in str(post.get("content") or ""), "el post rehidratado no lleva marcadores"
+        pb.api.get_post.assert_called_once_with("p1")
+
+    @pytest.mark.asyncio
+    async def test_hl_snippet_discarded_when_rehydration_fails(self, caplog):
+        """Si no se puede rehidratar, el fragmento se descarta (responder a un
+        snippet seria incoherente)."""
+        import logging
+        pb = self._pb()
+        pb.api.semantic_search.return_value = [
+            {"id": "p2", "content": "⟦HL⟧short snippet⟦/HL⟧ only 129 chars"},
+        ]
+        pb.api.get_post.return_value = None
+
+        with caplog.at_level(logging.INFO, logger="phases.phase_b"):
+            results = await pb._fetch_semantic_search_posts()
+
+        assert results == []
+        assert any("rehidratar" in r.getMessage() for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_normal_post_without_marker_passes_through(self):
+        """Un post real sin marcadores entra directo (sin rehidratacion)."""
+        pb = self._pb()
+        pb.api.semantic_search.return_value = [
+            {"id": "p3", "content": "A normal post body without highlight markers."},
+        ]
+
+        results = await pb._fetch_semantic_search_posts()
+
+        assert len(results) == 1
+        assert results[0].get("_rehydrated") is None
+        pb.api.get_post.assert_not_called()
+
+
 def tmp_watchlist():
     """Autor watchlist temporal (config/phase_b_strategy.yaml de prueba)."""
     import yaml

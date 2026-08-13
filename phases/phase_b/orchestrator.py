@@ -484,6 +484,11 @@ _REPLIES_PER_POST_PATH = reply_cap._REPLIES_PER_POST_PATH
 
 _FEED_STALL_STATE_FILE = Path("data/phase_b_feed_stall.json")
 
+# Marcador de resaltado de resultados de busqueda semantica (⟦HL⟧...⟦/HL⟧):
+# un body que lo contiene es un SNIPPET, no un post real. Se rehidrata por id
+# o se descarta antes de evaluarlo como candidato.
+_HL_MARKER = "⟦HL⟧"
+
 
 def _load_feed_stall_count() -> int:
     try:
@@ -3032,12 +3037,19 @@ class PhaseB:
                     continue
                 per_post = 0
                 queue_filter_counts: Dict[str, int] = {}
+                # Cap propio del post (max_comments_per_post, mismo contador
+                # que el safety net): se chequea ANTES de generar, no al publicar.
+                _post_reply_count = self._get_agent_reply_count_in_post(post_id)
+                _post_cap = self.max_comments_per_post if len(post_id) > 10 else None
                 for c in all_comments:
                     if self._is_own_author(self._get_author_name(c)):
                         continue
                     # Pre-filtro: descartar sin id / vacios / borrados / ya
-                    # respondidos / unrepliable ANTES de generar (ahorra LLM).
-                    queuable, reason = PhaseB._comment_queuable(c, post_id)
+                    # respondidos / unrepliable / post con cap agotado ANTES
+                    # de generar (ahorra LLM).
+                    queuable, reason = PhaseB._comment_queuable(
+                        c, post_id, post_cap=_post_cap, post_count=_post_reply_count,
+                    )
                     if not queuable:
                         queue_filter_counts[reason] = queue_filter_counts.get(reason, 0) + 1
                         continue
@@ -3754,11 +3766,15 @@ class PhaseB:
         return any(marker in text for marker in cls._DELETED_CONTENT_MARKERS)
 
     @classmethod
-    def _comment_queuable(cls, comment: Any, post_id: str = "") -> tuple[bool, str]:
+    def _comment_queuable(cls, comment: Any, post_id: str = "",
+                          post_cap: Optional[int] = None,
+                          post_count: Optional[int] = None) -> tuple[bool, str]:
         """Pre-filtro de la cola: descarta comentarios que nunca se podran
-        responder — sin id, sin contenido, borrados, o ya respondidos /
-        unrepliable (padre borrado). Devuelve (queuable, reason) para poder
-        contar cuantos se filtran por ciclo y por motivo."""
+        responder — sin id, sin contenido, borrados, ya respondidos /
+        unrepliable (padre borrado), o en un post que agoto su cap propio
+        (max_comments_per_post, mismo contador que el safety net).
+        Devuelve (queuable, reason) para poder contar cuantos se filtran
+        por ciclo y por motivo."""
         if not isinstance(comment, dict):
             return False, "not_dict"
         cid = comment.get("id") or comment.get("comment_id")
@@ -3770,6 +3786,8 @@ class PhaseB:
         if cls._comment_is_deleted(comment):
             return False, "deleted"
         if post_id:
+            if post_cap is not None and post_count is not None and post_count >= post_cap:
+                return False, "post_cap_reached"
             key = f"{post_id}:{cid}"
             if reply_cap.has_replied_to_comment(key):
                 return False, "already_replied"
@@ -4098,6 +4116,8 @@ class PhaseB:
 
             seen_ids: Set[str] = set()
             results: List[Dict[str, Any]] = []
+            rehydrated_count = 0
+            discarded_count = 0
 
             for query in queries:
                 try:
@@ -4121,13 +4141,39 @@ class PhaseB:
                     if pid in self._commented_post_ids:
                         continue
 
+                    # ── Rehidratacion de fragmentos de busqueda ──
+                    # semantic_search devuelve snippets resaltados (marcadores
+                    # ⟦HL⟧...⟦/HL⟧, bodies de 119-286 chars): no son posts
+                    # reales. Si el resultado trae marcadores, se recupera el
+                    # post COMPLETO por id (get_post); si no se puede, se
+                    # descarta — responder a un fragmento seria incoherente.
+                    _body = str(post.get("content") or post.get("body") or post.get("text") or "")
+                    if _HL_MARKER in _body:
+                        try:
+                            full = self.api.get_post(pid)
+                        except Exception:
+                            full = None
+                        if full:
+                            full["_search_query"] = query
+                            full["_rehydrated"] = True
+                            results.append(full)
+                            rehydrated_count += 1
+                        else:
+                            discarded_count += 1
+                            logger.info(
+                                "Phase B: snippet con marcador de busqueda descartado "
+                                "(no se pudo rehidratar post %s)", pid,
+                            )
+                        continue
+
                     post["_search_query"] = query
                     results.append(post)
 
-            if results:
+            if results or rehydrated_count or discarded_count:
                 logger.info(
-                    "Phase B: semantic search returned %d unique posts from %d queries",
-                    len(results), len(queries),
+                    "Phase B: semantic search returned %d unique posts from %d queries "
+                    "(rehidratados=%d, fragmentos descartados=%d)",
+                    len(results), len(queries), rehydrated_count, discarded_count,
                 )
             update_today_metrics(semantic_searches_today=1)
             return results
