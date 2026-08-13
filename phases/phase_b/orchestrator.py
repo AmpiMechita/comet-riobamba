@@ -67,7 +67,7 @@ from .constants import (
     MAX_CONVERSATION_DEPTH,
     _OWN_POST_REPLY_SCORE_LIMIT,
 )
-from .scoring import RelevanceDecision, _get_feed_min_score, text_has_fabricated_measurement, _triage_comment_value, set_watchlist_authors, _extract_author_name
+from .scoring import RelevanceDecision, _get_feed_min_score, text_has_fabricated_measurement, _triage_comment_value, set_watchlist_authors, _extract_author_name, text_has_unverifiable_historical_claim
 from . import constants as _constants_mod
 
 
@@ -133,6 +133,7 @@ from prompts.prompt_templates import (
     REPLY_TEMPLATE, DEBATE_CONTINUATION_TEMPLATE, OLLAMA_FALLBACK_REPLY,
     get_reply_depth_directive, UNTRUSTED_DIRECTIVE, ABSTAIN_RULE,
     detect_prompt_injection, log_injection_attempt,
+    HISTORICAL_CLAIM_DIRECTIVE, DATA_CONTRIBUTION_DIRECTIVE,
 )
 from core.claims_tracker import ClaimsTracker
 from personality.modes import select_mode, get_mode_prompt
@@ -489,6 +490,21 @@ _FEED_STALL_STATE_FILE = Path("data/phase_b_feed_stall.json")
 # o se descarta antes de evaluarlo como candidato.
 _HL_MARKER = "⟦HL⟧"
 
+# ── Concesion del interlocutor: no seguir discutiendo a quien ya concedio ──
+_CONCESSION_MARKERS = (
+    "fair correction", "you're right", "you are right", "i accept", "i agree",
+    "agreed", "conceded", "good point", "great point", "well said",
+    "makes sense", "fair enough", "that is true", "thanks for sharing",
+)
+_CONCESSION_WORD_RE = re.compile(r"\b(agreed|conceded|accepted|correct)\b", re.IGNORECASE)
+
+# ── Promocion comercial: no responder publicidad ──
+_PROMO_INSTALL_RE = re.compile(
+    r"\b(pip|pip3|npm|yarn|uv|poetry|openclaw)\s+(install|i|add)\b",
+    re.IGNORECASE,
+)
+_PROMO_ENV_APPEND_RE = re.compile(r"echo\s+[^\n]*>>\s*\.env", re.IGNORECASE)
+
 
 def _load_feed_stall_count() -> int:
     try:
@@ -750,6 +766,9 @@ class PhaseB:
         self._dedup.cleanup(older_than_hours=24)
         self._dedup.cleanup(older_than_hours=720)  # v5.0: 30-day deep cleanup
         self._replied_comment_ids: Set[str] = self._dedup.get_replied_comment_ids()
+        # Hilos donde ya respondimos UNA sintesis post-concesion: una nueva
+        # concesion del interlocutor cierra el hilo (no se sigue discutiendo).
+        self._concession_answered: Set[str] = set()
         self._commented_post_ids: Dict[str, str] = self._dedup.get_commented_post_ids()
         self._agent_comment_ids: Dict[str, List[str]] = self._dedup.get_agent_comment_ids()
         self._replied_topic_fingerprints: Set[str] = self._dedup.get_replied_topic_fingerprints()
@@ -1665,6 +1684,17 @@ class PhaseB:
                         )
                         continue
 
+                    # ── Concesion del interlocutor: una sintesis, luego cerrar ──
+                    _followup_conceded = PhaseB._is_concession(reply_text)
+                    if _followup_conceded:
+                        if post_id in self._concession_answered:
+                            logger.info("Phase B: thread closed: interlocutor conceded (post %s)", post_id)
+                            close_thread(post_id)
+                            continue
+                        _followup_synthesis = True
+                    else:
+                        _followup_synthesis = False
+
                     # ── Ledger: observación de la respuesta a nuestro comentario ──
                     interlocutors.record_interaction(
                         reply_comment.get("author"), on_our_post=False,
@@ -1681,6 +1711,7 @@ class PhaseB:
                         followup_text = await self._generate_own_post_reply(
                             reply_author, reply_text, thread_history,
                             tier=followup_tier, post_id=post_id,
+                            concession_synthesis=_followup_synthesis,
                         )
                     except Exception as e:
                         logger.warning("Phase B: error generando follow-up: %s", e)
@@ -1761,6 +1792,9 @@ class PhaseB:
                     interlocutors.record_interaction(
                         reply_comment.get("author"), on_our_post=False,
                     )
+                    # Sintesis post-concesion publicada: la proxima concesion cierra.
+                    if _followup_conceded:
+                        self._concession_answered.add(post_id)
                     self.incr_comments_today()
                     followups_done = self._increment_followups_count(post_id)
                     cycle_count += 1
@@ -1901,6 +1935,13 @@ class PhaseB:
             scored_posts: List[tuple] = []
             for post in filtered_posts:
                 post_body = (post.get("content") or post.get("body") or post.get("text") or post.get("title") or "").strip()
+                # ── Promocion comercial: no responder publicidad ──
+                if PhaseB._is_promotional_content(post_body):
+                    _promo_author = post.get("author")
+                    if isinstance(_promo_author, dict):
+                        _promo_author = _promo_author.get("name") or ""
+                    logger.info("Phase B: skip: promotional content from %s", str(_promo_author or "unknown"))
+                    continue
                 post_comments = post.get("comments") or []
                 post_decision = self._decide_reply_from_post(post_body, comments=post_comments, post=post)
                 if not post_decision.should_reply:
@@ -2713,6 +2754,8 @@ class PhaseB:
             )
             # ── Delimitador de contenido no confiable + derecho a abstenerse ──
             system_prompt = system_prompt + "\n\n" + UNTRUSTED_DIRECTIVE + "\n\n" + ABSTAIN_RULE
+            system_prompt = system_prompt + "\n\n" + HISTORICAL_CLAIM_DIRECTIVE
+            system_prompt = system_prompt + "\n\n" + DATA_CONTRIBUTION_DIRECTIVE
 
             # ── Inject reply feedback strategy hint ───────────────────────
             try:
@@ -2903,6 +2946,25 @@ class PhaseB:
                     logger.info("Phase B: feed reply ABSTAIN (post %s)", post.get("id"))
                     return "ABSTAIN", None
                 record_abstain(False)
+
+                # ── Gate de citas historicas: un año fuera del contexto es un
+                # incidente de terceros con detalles no verificables ──
+                _hist_ctx = f"{title} {body}"
+                try:
+                    _hist_ctx += " " + str(_claims_context or "")
+                except Exception:
+                    pass
+                try:
+                    _hist_ctx += " " + str(_ein_context or "")
+                except Exception:
+                    pass
+                _bad_year = text_has_unverifiable_historical_claim(reply, _hist_ctx)
+                if _bad_year:
+                    logger.warning(
+                        "Phase B: feed reply REJECTED — unverifiable historical claim (año %s) en post %s",
+                        _bad_year, post.get("id"),
+                    )
+                    return "", None
 
                 # ── Historical examples gate: block if repeated example ──
                 is_repeat, blocked_examples = is_example_recently_used(reply)
@@ -3122,7 +3184,11 @@ class PhaseB:
                 _pid, c, _ = item
                 author = self._get_author_name(c)
                 wl = 0 if self._is_watchlist_author(author) else 1
-                return (wl, -_recency_key(c).timestamp())
+                # Preguntas directas (mencion a @comet o pregunta en un post
+                # propio) envejecen HACIA ARRIBA: la antiguedad no las entierra.
+                _text = str(c.get("content") or c.get("text") or "").lower()
+                is_direct = "@comet" in _text or "?" in _text
+                return (0 if is_direct else 1, wl, -_recency_key(c).timestamp())
 
             queue.sort(key=_queue_sort_key)
 
@@ -3548,10 +3614,16 @@ class PhaseB:
                 "thanks for sharing", "how often do you face this",
                 "great point", "interesting point", "well said",
             ]
-            if any(kw in comment_lower for kw in concession_keywords):
-                logger.info("Phase B: Cierre de hilo detectado con %s. No se requiere respuesta.", author)
-                close_thread(post_id)
-                return {"post_id": post_id, "comment_id": comment_id, "status": "closed_concession"}
+            _is_concession = self._is_concession(comment_lower)
+            _synthesis_mode = False
+            if _is_concession:
+                if post_id in self._concession_answered:
+                    logger.info("Phase B: thread closed: interlocutor conceded (post %s)", post_id)
+                    close_thread(post_id)
+                    return {"post_id": post_id, "comment_id": comment_id, "status": "closed_concession"}
+                # Primera concesion: como maximo UNA respuesta, de SINTESIS
+                # (el prompt recibe la directiva; no se agrega otra correccion).
+                _synthesis_mode = True
 
             dedup_key = f"{post_id}:{comment_id}"
             if dedup_key in self._replied_comment_ids:
@@ -3565,7 +3637,7 @@ class PhaseB:
                 return None
 
             try:
-                reply_text = await self._generate_own_post_reply(author, comment_text, thread_history, post_id=post_id)
+                reply_text = await self._generate_own_post_reply(author, comment_text, thread_history, post_id=post_id, concession_synthesis=_synthesis_mode)
             except Exception as e:
                 logger.error(f"Phase B: LLM error for comment {comment_id} on post {post_id}: {e}")
                 span.set("success", False)
@@ -3628,6 +3700,10 @@ class PhaseB:
                 self._replied_comment_ids.add(dedup_key)
                 self._dedup.mark_replied(dedup_key)
                 reply_cap.mark_replied_to_comment(f"{post_id}:{comment_id}")
+                # Sintesis post-concesion publicada: si el otro vuelve a
+                # conceder, el hilo se cierra (no se sigue discutiendo).
+                if _synthesis_mode:
+                    self._concession_answered.add(post_id)
                 # ── Ledger: respuesta (segundo registro del comentario) ──
                 from services import interlocutors as _il
                 _il.record_interaction(
@@ -3765,6 +3841,24 @@ class PhaseB:
         text = (comment.get("content") or comment.get("text") or "").lower()
         return any(marker in text for marker in cls._DELETED_CONTENT_MARKERS)
 
+    @staticmethod
+    def _is_concession(text: str) -> bool:
+        """True si el mensaje del otro concede (acepta la correccion)."""
+        if not text:
+            return False
+        lower = text.lower()
+        return any(marker in lower for marker in _CONCESSION_MARKERS) or bool(
+            _CONCESSION_WORD_RE.search(lower)
+        )
+
+    @staticmethod
+    def _is_promotional_content(text: str) -> bool:
+        """True si el contenido es promocion comercial: comandos de instalacion
+        (pip/npm/openclaw install, echo >> .env) — publicidad, no discusion."""
+        if not text:
+            return False
+        return bool(_PROMO_INSTALL_RE.search(text) or _PROMO_ENV_APPEND_RE.search(text))
+
     @classmethod
     def _comment_queuable(cls, comment: Any, post_id: str = "",
                           post_cap: Optional[int] = None,
@@ -3785,6 +3879,8 @@ class PhaseB:
             return False, "empty_content"
         if cls._comment_is_deleted(comment):
             return False, "deleted"
+        if cls._is_promotional_content(text):
+            return False, "promotional"
         if post_id:
             if post_cap is not None and post_count is not None and post_count >= post_cap:
                 return False, "post_cap_reached"
@@ -3899,7 +3995,8 @@ class PhaseB:
         return _build_thread_history(self, comment, all_comments)
 
     async def _generate_own_post_reply(self, author: str, comment_text: str, thread_history: str = "",
-                                       tier: str = "flash", post_id: str = "") -> str:
+                                       tier: str = "flash", post_id: str = "",
+                                       concession_synthesis: bool = False) -> str:
         with Span("llm_generation", type="own_post") as span:
             lang_instruction = (
                 "Always respond in English. This is an English-speaking platform."
@@ -3994,6 +4091,14 @@ class PhaseB:
             if injection_lines:
                 user_prompt = user_prompt + "\n\n" + "\n\n".join(injection_lines)
 
+            # ── Sintesis post-concesion: el otro ya acepto, no corregir de nuevo ──
+            if concession_synthesis:
+                user_prompt = user_prompt + (
+                    "\n\nThey agreed. Do not add another correction. Either "
+                    "close with the shared conclusion or add one genuinely new "
+                    "element."
+                )
+
             system_prompt = (
                 "You are a senior systems engineer. "
                 "Reply concisely and helpfully. "
@@ -4006,6 +4111,8 @@ class PhaseB:
             )
             # ── Delimitador de contenido no confiable + derecho a abstenerse ──
             system_prompt = system_prompt + "\n\n" + UNTRUSTED_DIRECTIVE + "\n\n" + ABSTAIN_RULE
+            system_prompt = system_prompt + "\n\n" + HISTORICAL_CLAIM_DIRECTIVE
+            system_prompt = system_prompt + "\n\n" + DATA_CONTRIBUTION_DIRECTIVE
             try:
                 reply = await self.llm.generate(
                     tier=tier,
@@ -4024,6 +4131,26 @@ class PhaseB:
                     logger.info("Phase B: own-post reply ABSTAIN (author=%s)", author)
                     return "ABSTAIN"
                 record_abstain(False)
+
+                # ── Gate de citas historicas: un año fuera del contexto (lo que
+                # el interlocutor menciono / el paper / el incidente propio) es
+                # un incidente de terceros con detalles no verificables ──
+                _hist_ctx = f"{comment_text} {thread_history}"
+                try:
+                    _hist_ctx += " " + str(_claims_context or "")
+                except Exception:
+                    pass
+                try:
+                    _hist_ctx += " " + str(_ein_context or "")
+                except Exception:
+                    pass
+                _bad_year = text_has_unverifiable_historical_claim(reply, _hist_ctx)
+                if _bad_year:
+                    logger.warning(
+                        "Phase B: own-post reply REJECTED — unverifiable historical claim (año %s) author=%s",
+                        _bad_year, author,
+                    )
+                    return ""
 
                 # ── Historical examples gate: block if repeated example ──
                 is_repeat, blocked_examples = is_example_recently_used(reply)

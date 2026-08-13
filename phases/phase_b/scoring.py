@@ -51,6 +51,37 @@ def text_has_fabricated_measurement(text: str, is_own_incident: bool = False) ->
     return bool(_FABRICATION_PATTERN.search(text))
 
 
+# ── Gate de citas historicas ────────────────────────────────────
+# COMET solo puede invocar un hecho fechado (año 19xx/20xx) si esta GROUNDED
+# en el contexto provisto: incidentes propios, paper/fuente del prompt, o algo
+# que el interlocutor menciono. Un año sin fuente en el contexto es un
+# incidente historico de terceros con detalles no verificables.
+_HISTORICAL_YEAR_RE = re.compile(r"\b(?:19|20)\d{2}\b")
+
+
+def extract_historical_years(text: str) -> Set[str]:
+    """Años 19xx/20xx presentes en el texto."""
+    if not text:
+        return set()
+    return set(_HISTORICAL_YEAR_RE.findall(text))
+
+
+def text_has_unverifiable_historical_claim(text: str, context: str,
+                                           is_own_incident: bool = False) -> Optional[str]:
+    """Devuelve el primer año del texto que NO esta en el contexto, o None.
+
+    is_own_incident=True exime: las fechas del modo own_incident son propias
+    y verificadas del store."""
+    if is_own_incident or not text:
+        return None
+    years = extract_historical_years(text)
+    if not years:
+        return None
+    context_years = extract_historical_years(context or "")
+    missing = years - context_years
+    return sorted(missing)[0] if missing else None
+
+
 @dataclass
 class RelevanceDecision:
     should_reply: bool

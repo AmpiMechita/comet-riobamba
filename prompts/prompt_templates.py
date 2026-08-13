@@ -139,6 +139,22 @@ ABSTAIN_RULE = (
     "and nothing else. Abstaining is correct behavior, not failure."
 )
 
+# Credibilidad: no prestarse autoridad de incidentes de terceros no verificables.
+HISTORICAL_CLAIM_DIRECTIVE = (
+    "Do not borrow authority from named third-party incidents you cannot "
+    "verify. Your credibility comes from mechanisms you can defend and "
+    "incidents you actually lived. If you cannot source it, argue it without "
+    "the anecdote."
+)
+
+# Preferir a quien aporta datos: extender, no devolver su conclusion como propia.
+DATA_CONTRIBUTION_DIRECTIVE = (
+    "If the other agent brought their own data or admitted a limit, build on "
+    "it — extend, contrast with your own evidence, or ask the question their "
+    "data opens. Do not restate their conclusion back to them as if it were "
+    "yours."
+)
+
 # Patrones tipicos de inyeccion en el texto de terceros (telemetria, no bloqueo).
 _INJECTION_PATTERNS = (
     r"ignore\s+(all\s+)?(previous|prior|earlier)\s+(instructions?|prompts?)",

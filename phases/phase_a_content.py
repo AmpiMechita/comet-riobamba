@@ -48,7 +48,7 @@ from services.persistence import (
     store_post_hash,
     load_topic_engagement,
 )
-from phases.phase_b.scoring import text_has_fabricated_measurement
+from phases.phase_b.scoring import text_has_fabricated_measurement, text_has_unverifiable_historical_claim
 
 logger = logging.getLogger("phases.phase_a_content")
 
@@ -120,6 +120,7 @@ EDITORIAL_CONFIG = {
         "TRUTH: Propose mechanisms and reasoned thresholds. NEVER fabricate a specific outcome or war-story ('caught 3 cases in two weeks', 'ran for 30 days') unless it is a real number from your own data. Invent the mechanism, never the evidence. Explain WHY it works, do not invent WHAT happened.",
         "ABSTAIN: If the topic is inside your domain but you cannot ground a mechanism in something you actually understand, do NOT invent one. Either ask one precise question that would let you answer it, or output exactly ABSTAIN and nothing else. Abstaining is correct behavior, not failure.",
         "THRESHOLD HONESTY: When you propose a numeric threshold you did not measure, present it as a calibratable starting point, not as a finding. Write '0.4 is a defensible starting point — calibrate against your own baseline' rather than 'gate at 0.4'. Numbers that come from the incident store ARE measured and may be stated flatly.",
+        "HISTORICAL CLAIMS: Do not borrow authority from named third-party incidents you cannot verify. Your credibility comes from mechanisms you can defend and incidents you actually lived. If you cannot source it, argue it without the anecdote.",
         "Frame your inventions impersonally: 'The mechanism is', 'Gate at X', 'The protocol should'. Do not narrate personal lived experience.",
         "END with tension that invites argument: either ONE sharp technical question, OR a strong, debatable assertion that dares disagreement. Never polite engagement-bait ('what do you think?'). The reader should want to reply and push back — and ideally steal your idea.",
         "Maximum 150 words. Density and punch over length.",
@@ -477,7 +478,8 @@ def _paper_title_and_arxiv_id(topic: str) -> Tuple[Optional[str], Optional[str]]
 
 
 def validate_post_text(text: str, required_citation: Optional[str] = None,
-                       is_own_incident: bool = False) -> Tuple[bool, str]:
+                       is_own_incident: bool = False,
+                       historical_context: str = "") -> Tuple[bool, str]:
     if not text or not isinstance(text, str): return False, "empty_or_invalid"
     length = len(text)
     if length < EDITORIAL_CONFIG["min_length_chars"]: return False, "too_short"
@@ -495,6 +497,11 @@ def validate_post_text(text: str, required_citation: Optional[str] = None,
     # own_incident queda exento del guard anti-fabricacion: su primera persona
     # esta respaldada por numeros verificados del store (incidents.jsonl).
     if text_has_fabricated_measurement(text, is_own_incident=is_own_incident): return False, "fabricated_measurement"
+    # Gate de citas historicas: un año 19xx/20xx que no esta en el contexto
+    # (paper, incidente propio, o lo que el interlocutor menciono) es un
+    # incidente de terceros con detalles no verificables.
+    if text_has_unverifiable_historical_claim(text, historical_context, is_own_incident=is_own_incident):
+        return False, "unverifiable_historical_claim"
     if required_citation:
         # La cita verificable debe estar en el body (tolerando el sufijo de
         # version: '2607.18045' == '2607.18045v1'). Sin ancla, no hay evidencia.
@@ -976,8 +983,11 @@ async def _critique_pass(deps: PhaseADeps, post: Dict[str, Any],
             return post
         new_text = _truncate_to_limit(body, EDITORIAL_CONFIG["max_length_chars"])
         required_citation = _extract_arxiv_id(post.get("metadata", {}).get("topic", ""))
+        _historical_ctx = str(post.get("metadata", {}).get("historical_context")
+                              or post.get("metadata", {}).get("topic", "") or "")
         is_valid, reason = validate_post_text(new_text, required_citation=required_citation,
-                                              is_own_incident=bool(incident_figures))
+                                              is_own_incident=bool(incident_figures),
+                                              historical_context=_historical_ctx)
         if not is_valid:
             logger.info("Phase A: auto-critique invalid (%s) -> keeping pre-critique", reason)
             return post
@@ -1162,6 +1172,7 @@ _RETRY_CORRECTION_HINTS: Dict[str, str] = {
     "mentions_llm": "El intento anterior menciono 'LLM' o 'large language model' explicitamente. Evita esa jerga meta sobre el modelo.",
     "missing_arxiv_citation": "El intento anterior no cito la fuente arXiv del paper en el cuerpo. Incluí el identificador textualmente (formato arXiv:XXXX.XXXXXv1, tal cual viene en el tema del post) en el PRIMER parrafo, junto con el nombre del paper. Es la evidencia verificable del post.",
     "missing_incident_figures": "El intento anterior no incluyó al menos dos de las cifras verificadas del incidente EN EL BODY (el título no cuenta). Abrí el PRIMER parrafo del body con el incidente y escribí los numeros reales textualmente, tal cual aparecen entre comillas en el HARD REQUIREMENT. La diferenciacion del post son esos numeros: sin ellos es un post generico.",
+    "unverifiable_historical_claim": "Remove the dated third-party example. Make the same point from the mechanism itself, or from your own verified incidents.",
 }
 
 
@@ -1600,7 +1611,17 @@ class PhaseAContentGeneration:
                 body = _normalize_moltbook_body(body)
                 post_text = _truncate_to_limit(body, EDITORIAL_CONFIG["max_length_chars"])
                 required_citation = _extract_arxiv_id(topic)
-                is_valid, reason = validate_post_text(post_text, required_citation=required_citation, is_own_incident=bool(_incident_figures))
+                # Contexto historico del gate de citas: el topic (paper anclado)
+                # + los hechos del incidente propio (si lo hay). Un año fuera de
+                # esto es un incidente de terceros no verificable.
+                _historical_ctx = topic or ""
+                if _incident:
+                    _historical_ctx += " " + " ".join(
+                        str(_incident.get(k) or "") for k in ("symptom", "root_cause", "fix", "real_numbers")
+                    )
+                is_valid, reason = validate_post_text(post_text, required_citation=required_citation,
+                                                      is_own_incident=bool(_incident_figures),
+                                                      historical_context=_historical_ctx)
                 if not is_valid and reason == "missing_arxiv_citation" and required_citation:
                     # Tema anclado a arXiv: la cita faltante NO rechaza ni consume
                     # reintentos (la cita se valida al final, asi que el candidato
@@ -1612,7 +1633,9 @@ class PhaseAContentGeneration:
                     source_line = f"Source: {src_label} (arXiv:{required_citation})"
                     room = EDITORIAL_CONFIG["max_length_chars"] - len(source_line) - 2
                     injected = (_truncate_to_limit(post_text, room) + "\n\n" + source_line).strip()
-                    injected_ok, _ = validate_post_text(injected, required_citation=required_citation, is_own_incident=bool(_incident_figures))
+                    injected_ok, _ = validate_post_text(injected, required_citation=required_citation,
+                                                        is_own_incident=bool(_incident_figures),
+                                                        historical_context=_historical_ctx)
                     if injected_ok:
                         _log_generation_attempt(topic, topic_source, attempt, max_attempts, "success_arxiv_injected")
                         post_text = injected
@@ -1678,7 +1701,7 @@ class PhaseAContentGeneration:
                         generated_post = {"title": title, "body": post_text, "metadata": {"topic": topic, "validation_reason": low_quality_reason}, "attempts": attempt, "published": False, "error": f"low_quality:{low_quality_reason}"}
                     continue
                 _log_generation_attempt(topic, topic_source, attempt, max_attempts, "success")
-                candidate_post = {"title": title, "body": post_text, "metadata": {"topic": topic, "generated_at": datetime.now(UTC).isoformat() + "Z", "attempts": attempt, "policy_tone": policy.get("style_policy", {}).get("tone", "natural_directo")}, "published": False}
+                candidate_post = {"title": title, "body": post_text, "metadata": {"topic": topic, "generated_at": datetime.now(UTC).isoformat() + "Z", "attempts": attempt, "policy_tone": policy.get("style_policy", {}).get("tone", "natural_directo"), "historical_context": _historical_ctx}, "published": False}
                 if not bestof_enabled:
                     generated_post = candidate_post
                     break
