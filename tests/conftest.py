@@ -80,6 +80,14 @@ def _isolate_runtime_state(tmp_path, monkeypatch):
         tmp_path / "generation_attempts.jsonl",
     )
 
+    # ── Incident store (services/incident_store.py) ──
+    # Sin esto, los tests que ejercitan execute() real de Fase A leerian/escribirian
+    # el data/incidents.jsonl REAL (get_incident_by_id, mark_incident_used).
+    monkeypatch.setattr(
+        "services.incident_store.INCIDENTS_PATH",
+        tmp_path / "incidents.jsonl",
+    )
+
     # ── Rejected-posts log (phases/phase_a_content.py) ──
     # Sin esto, los tests que ejercitan execute() real de Fase A escriben en
     # el data/rejected_posts.jsonl REAL cuando un cuerpo generado cae en un gate.

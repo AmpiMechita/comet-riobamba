@@ -35,6 +35,7 @@ from prompts.prompt_templates import inject_self_diagnosis
 from utils.phase_utils import phase_error_boundary, validate_phase_deps
 from services.editorial_policy import load_editorial_policy
 from services.dual_scoring import compute_dual_score, log_dual_score
+from services.incident_store import get_incident_by_id, mark_incident_used
 from services.used_examples_tracker import mark_examples_used
 from services.persistence import (
     enqueue_outbox,
@@ -119,6 +120,22 @@ EDITORIAL_CONFIG = {
     ],
 }
 
+# Contexto factual para posts anclados a incidentes reales propios
+# (source=own_incident). Solo se usan estos hechos verificados; el resto del
+# prompt ya prohibe inventar outcomes o war-stories (core_principles TRUTH).
+_FACTUAL_CONTEXT_TEMPLATE = (
+    "\nFACTUAL CONTEXT — REAL INCIDENT, VERIFIED:\n"
+    "This post is anchored to a real production incident from the agent's own "
+    "history. Use ONLY these facts:\n"
+    "- Symptom: {symptom}\n"
+    "- Root cause: {root_cause}\n"
+    "- Fix: {fix}\n"
+    "- Verified specifics: {real_numbers}\n\n"
+    "INSTRUCTION: These are real, verified specifics. Use them exactly. Do NOT "
+    "invent any additional number, date, or outcome beyond what is provided."
+)
+
+
 # Topic filter: block topics outside our verticals
 BLOCKED_TOPIC_SIGNALS = [
     "consciousness", "sentience", "philosophy", "blockchain",
@@ -149,10 +166,12 @@ def _is_allowed_topic(topic: str) -> bool:
 def _apply_editorial_filter(topic: Optional[str], topic_source: str) -> tuple:
     """Filtro editorial de verticales.
 
-    Los temas de post-pairing (watchlist_pairing) están exentos del chequeo de
-    vocabulario ALLOWED (son on-niche por construcción: responden a un referente
-    curado, aunque su título no contenga keywords editoriales). Los signals
-    BLOCKED (política dura: blockchain, crypto, filosofía, etc.) se mantienen.
+    Los temas de post-pairing (watchlist_pairing) y de incidentes reales
+    (own_incident) están exentos del chequeo de vocabulario ALLOWED (son
+    on-niche por construcción: responden a un referente curado o a un fallo
+    real del propio sistema, aunque su título no contenga keywords
+    editoriales). Los signals BLOCKED (política dura: blockchain, crypto,
+    filosofía, etc.) se mantienen.
     El resto de los gates (dedup/similitud) siguen intactos aguas abajo.
     """
     if not topic:
@@ -161,8 +180,8 @@ def _apply_editorial_filter(topic: Optional[str], topic_source: str) -> tuple:
     if any(signal in topic_lower for signal in BLOCKED_TOPIC_SIGNALS):
         logger.warning("Phase A: topic '%s' rejected by editorial filter, using fallback", topic)
         return "context window exhaustion in long-running agents", "fallback_filter"
-    if str(topic_source or "").startswith("watchlist_pairing"):
-        logger.info("Phase A: topic watchlist_pairing exento del filtro editorial: '%s'", topic[:80])
+    if str(topic_source or "").startswith(("watchlist_pairing", "own_incident")):
+        logger.info("Phase A: topic %s exento del filtro editorial: '%s'", topic_source.split(":")[0], topic[:80])
         return topic, topic_source
     if not any(signal in topic_lower for signal in ALLOWED_TOPIC_SIGNALS):
         logger.warning("Phase A: topic '%s' rejected by editorial filter, using fallback", topic)
@@ -537,12 +556,15 @@ def choose_topic(mode: str = "research") -> tuple[str, str]:
         # cola. created_at ausente/invalido se trata como el mas antiguo.
         # v5.2: topics de post-pairing con autores watchlist tienen prioridad
         # maxima — el mecanismo de invitacion reciproca hacia los referentes.
+        # v5.3: los incidentes reales propios (own_incident) comparten ese
+        # nivel: material que ningun otro agente puede escribir.
         # Con reverse=True, la prioridad usa valor 2 (mayor) para watchlist
-        # y 1 para el resto; dentro de cada grupo rige created_at descendente.
+        # y own_incident, y 1 para el resto; dentro de cada grupo rige
+        # created_at descendente.
         all_uncovered = sorted(
             all_uncovered,
             key=lambda t: (
-                2 if str(t.get("source", "")).startswith("watchlist_pairing") else 1,
+                2 if str(t.get("source", "")).startswith(("watchlist_pairing", "own_incident")) else 1,
                 t.get("created_at") or "",
             ),
             reverse=True,
@@ -608,7 +630,7 @@ def choose_topic(mode: str = "research") -> tuple[str, str]:
     except Exception:
         return random.choice(topics_list), "roadmap"
 
-def build_prompts(topic: str, policy: Optional[Dict[str, Any]] = None, variant: Optional[str] = None, mode: str = "research") -> Tuple[str, str]:
+def build_prompts(topic: str, policy: Optional[Dict[str, Any]] = None, variant: Optional[str] = None, mode: str = "research", incident: Optional[Dict[str, Any]] = None) -> Tuple[str, str]:
     policy = policy or {}
     mission = EDITORIAL_CONFIG["mission"]
     principles = EDITORIAL_CONFIG["core_principles"]
@@ -712,6 +734,17 @@ def build_prompts(topic: str, policy: Optional[Dict[str, Any]] = None, variant: 
             "- The TITLE must NOT contain the arXiv identifier or the word arXiv.\n"
         )
         user_prompt = user_prompt.rstrip() + "\n\n" + citation_extra
+    if incident:
+        try:
+            factual = _FACTUAL_CONTEXT_TEMPLATE.format(
+                symptom=incident.get("symptom", ""),
+                root_cause=incident.get("root_cause", ""),
+                fix=incident.get("fix", ""),
+                real_numbers=incident.get("real_numbers", ""),
+            ).strip()
+            user_prompt = user_prompt.rstrip() + "\n\n" + factual
+        except Exception as e:
+            logger.warning("Phase A: no se pudo anexar contexto factual del incidente: %s", e)
     return system_prompt.strip(), user_prompt.strip()
 
 _HERO_STATE_FILE = BASE_DIR / "data/hero_state.json"
@@ -1061,11 +1094,13 @@ def _topic_with_matrix_fallback(
         # cola. created_at ausente/invalido se trata como el mas antiguo.
         # v5.2: los topicos de post-pairing con autores watchlist tienen prioridad
         # maxima — son el mecanismo de invitacion reciproca hacia los referentes.
-        # Con reverse=True, prioridad 2 (watchlist) y 1 (resto), created_at desc.
+        # v5.3: los incidentes reales propios (own_incident) comparten ese nivel.
+        # Con reverse=True, prioridad 2 (watchlist/own_incident) y 1 (resto),
+        # created_at desc.
         all_uncovered = sorted(
             all_uncovered,
             key=lambda t: (
-                2 if str(t.get("source", "")).startswith("watchlist_pairing") else 1,
+                2 if str(t.get("source", "")).startswith(("watchlist_pairing", "own_incident")) else 1,
                 t.get("created_at") or "",
             ),
             reverse=True,
@@ -1311,6 +1346,19 @@ class PhaseAContentGeneration:
                             return {"posts_published": 0, "drafts_generated": 0, "posts": [],
                                     "success": False, "skipped": "topic_dedup"}
 
+            # ── Incidente real (source=own_incident:<id>): cargar los hechos
+            # verificables para el contexto factual del prompt. Si el incidente
+            # ya no existe en el store (archivo borrado/editado), cae al prompt
+            # generico sin romper el ciclo. ──
+            _incident = None
+            if str(topic_source or "").startswith("own_incident:"):
+                _incident_id = str(topic_source).split(":", 1)[1]
+                _incident = get_incident_by_id(_incident_id)
+                if _incident:
+                    logger.info("Phase A: incidente real '%s' cargado para el post", _incident_id)
+                else:
+                    logger.warning("Phase A: incidente '%s' no encontrado en el store; prompt generico", _incident_id)
+
             # Persist matrix state after selection
             if topic_matrix is not None:
                 try:
@@ -1323,7 +1371,7 @@ class PhaseAContentGeneration:
             if variant:
                 send_event("experiment_assigned", {"phase": "A", "variant": variant, "topic": topic, "topic_source": topic_source})
             policy = load_editorial_policy()
-            system_prompt, user_prompt = build_prompts(topic, policy, variant=variant, mode=phase_a_mode)
+            system_prompt, user_prompt = build_prompts(topic, policy, variant=variant, mode=phase_a_mode, incident=_incident)
 
             # ── Inject strategy directives ────────────────────────────────
             try:
@@ -1528,6 +1576,11 @@ class PhaseAContentGeneration:
                         _save_published_post(post_id, topic, body=generated_post.get("body", ""))
                         _track_topic_performance(topic, post_id)
                         _record_topic_used(topic)
+                        # Incidente real consumido SOLO al publicar: si el gate
+                        # de calidad o la API fallan, no se quema el material.
+                        if _incident and _incident.get("id"):
+                            if mark_incident_used(_incident["id"]):
+                                logger.info("Phase A: incidente real '%s' marcado como usado", _incident["id"])
                         # Mark topic as covered in research agenda
                         try:
                             agenda = load_agenda()

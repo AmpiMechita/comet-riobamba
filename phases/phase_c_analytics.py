@@ -694,6 +694,18 @@ class PhaseCAnalytics:
         except Exception as e:
             logger.warning("Phase C: postmortem registration failed: %s", e)
 
+        # ── Incidentes reales propios (data/incidents.jsonl) como topics de
+        # prioridad alta. Mismo patron que los post-mortems: idempotente,
+        # sin LLM. Solo se registran incidentes no usados ('used': False);
+        # Phase A los marca usados al publicar para no repetirlos. ──
+        try:
+            from services.incident_store import register_incidents
+            added = register_incidents()
+            if added:
+                logger.info("Phase C: %d incidente(s) reales agregados a la agenda", added)
+        except Exception as e:
+            logger.warning("Phase C: incident registration failed: %s", e)
+
         # Check if analytics should run (time-based gate)
         if not self._should_run_analytics(state):
             logger.info(f"Phase C: analytics skipped (next run in ~{(self.analytics_interval - (datetime.now() - datetime.fromisoformat(state['last_analytics_run'])).total_seconds())/3600:.1f}h)")
