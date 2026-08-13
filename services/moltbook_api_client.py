@@ -41,6 +41,33 @@ logger = logging.getLogger("services.moltbook")
 # 401/403 SÍ cuentan (key revocada = problema real); 429 ya está excluido.
 _NO_BREAKER_STATUSES = frozenset({400, 404, 409, 410, 422})
 
+# Mensajes del servidor para un 404 determinista de padre inexistente: el
+# comentario padre fue borrado y nunca va a volver. Reintentar es quemar LLM.
+_PARENT_NOT_FOUND_MARKERS = (
+    "parent comment not found",
+    "parent comment does not exist",
+    "parent not found",
+)
+
+
+def is_parent_not_found_404(result: Any) -> bool:
+    """True si el resultado de create_comment es un 404 determinista de padre
+    inexistente (el comentario padre fue borrado). Se usa para marcar el
+    comentario como unrepliable y NO reintentar ni encolar."""
+    if not isinstance(result, dict):
+        return False
+    status = result.get("status") or result.get("status_code") or 0
+    if status != 404:
+        return False
+    text = str(result.get("error") or "") + " " + str(result.get("message") or "")
+    raw = result.get("raw")
+    if isinstance(raw, dict):
+        text += " " + " ".join(
+            str(raw.get(k) or "") for k in ("message", "error", "statusCode")
+        )
+    lowered = text.lower()
+    return any(marker in lowered for marker in _PARENT_NOT_FOUND_MARKERS)
+
 
 @dataclass
 class APIResponse:

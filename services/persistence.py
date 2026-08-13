@@ -340,6 +340,24 @@ def mark_outbox(outbox_id: int, status: str, last_error: Optional[str] = None) -
         )
 
 
+def count_outbox_by_status(status: str) -> int:
+    """Conteo de entradas en outbox con un status dado (0 si la tabla no existe).
+
+    Usado para visibilidad: un atasco de fallos (outbox_failed=N) se ve al
+    instante en el cycle summary en vez de descubrirse dias despues.
+    """
+    try:
+        init_db()
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM outbox WHERE status = ?", (status,)
+            ).fetchone()
+        return int(row[0]) if row else 0
+    except Exception as e:
+        logger.warning("persistence: no se pudo contar outbox status=%s: %s", status, e)
+        return 0
+
+
 def update_outbox_backoff(outbox_id: int, last_error: str, retry_attempt: int,
                           min_backoff: int = 60, max_backoff: int = 3600,
                           explicit_delay_seconds: Optional[int] = None) -> None:

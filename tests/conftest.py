@@ -133,6 +133,14 @@ def _isolate_runtime_state(tmp_path, monkeypatch):
         tmp_path / "replied_comment_ids_durable.json",
     )
 
+    # ── Unrepliable namespace (services/reply_cap.py) ──
+    # Comentarios con padre borrado (404). Sin redirect, los tests escriben en
+    # el data/unrepliable_comment_ids.json REAL.
+    monkeypatch.setattr(
+        "services.reply_cap._UNREPLIABLE_IDS_PATH",
+        tmp_path / "unrepliable_comment_ids.json",
+    )
+
     # ── DedupStore SQLite (services/dedup_store.py) — GLOBAL isolation ──
     # Causa raíz de la contaminación del store real: cualquier test que
     # construyera PhaseB() (→ DedupStore()) sin un fixture puntual escribía en

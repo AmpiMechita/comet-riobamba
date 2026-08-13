@@ -38,6 +38,12 @@ def _isolate_db():
     """Usa una DB temporal aislada para cada test."""
     import services.persistence as _p
     _original = _p.DB_PATH
+    # Los helpers mutan config.behavior_cfg directo (max_comments_per_day=0,
+    # max_posts_per_day=1...). Sin snapshot, esa mutacion se filtra al resto
+    # de la suite y rompe tests que corren despues (p.ej. el outbox retry
+    # que decide el budget por behavior_cfg).
+    import config.config as _cfg
+    _orig_behavior = dict(_cfg.behavior_cfg)
     _p.DB_PATH = TEST_DB
     if TEST_DB.exists():
         TEST_DB.unlink()
@@ -45,6 +51,8 @@ def _isolate_db():
     if TEST_DB.exists():
         TEST_DB.unlink()
     _p.DB_PATH = _original
+    _cfg.behavior_cfg.clear()
+    _cfg.behavior_cfg.update(_orig_behavior)
 
 
 # ── Tests: AgentState._check_daily_reset ────────────────────────

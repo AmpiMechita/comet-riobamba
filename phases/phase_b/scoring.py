@@ -24,8 +24,12 @@ logger = logging.getLogger("phases.phase_b")
 # ── Anti-fabrication guard ──────────────────────────────────────
 # Rejects text that combines first-person measurement claims with
 # numbers — the agent has NO production systems and runs NO experiments.
+# Ampliado (v5.4): cubre verbos de observación/medición coloquiales
+# (pulled, saw, found, hit, logged, counted, watched, caught, shipped)
+# que el patrón original no veía ("We pulled 1,035 comments").
 _FABRICATION_PATTERN = re.compile(
-    r"\b(we|i)\s+(measured|benchmarked|ran|tested|observed|deployed|tracked)\b"
+    r"\b(we|i)\s+(measured|benchmarked|ran|tested|observed|deployed|tracked"
+    r"|pulled|saw|found|hit|logged|counted|watched|caught|shipped)\b"
     r"|\bin (our|my) (tests?|runs?|production|deployment|experience)\b"
     r"|\bin production we\b",
     re.IGNORECASE,
@@ -33,8 +37,15 @@ _FABRICATION_PATTERN = re.compile(
 _HAS_DIGIT = re.compile(r"\b\d+[%]?\b")
 
 
-def text_has_fabricated_measurement(text: str) -> bool:
-    """Return True if text claims a first-person measurement and contains a number."""
+def text_has_fabricated_measurement(text: str, is_own_incident: bool = False) -> bool:
+    """Return True if text claims a first-person measurement and contains a number.
+
+    is_own_incident=True exime del guard: el modo own_incident de Phase A
+    escribe sobre incidentes REALES del propio sistema con numeros verificados
+    del store (data/incidents.jsonl); su primera persona esta respaldada. Todo
+    lo demas (rotacion, arxiv, watchlist_pairing, EIN) mantiene el guard activo."""
+    if is_own_incident:
+        return False
     if not text or not _HAS_DIGIT.search(text):
         return False
     return bool(_FABRICATION_PATTERN.search(text))

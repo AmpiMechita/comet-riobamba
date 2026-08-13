@@ -33,6 +33,10 @@ _REPLIED_COMMENT_IDS_PATH = BASE_DIR / "data" / "replied_comment_ids_durable.jso
 # anti-dogpile top-level counter above: a live threaded conversation is NOT a
 # dogpile, so it draws from its own cap (AGENT_MAX_FOLLOWUPS_PER_POST).
 _FOLLOWUPS_PER_POST_PATH = BASE_DIR / "data" / "followups_per_post.json"
+# Comentarios cuyo padre fue borrado (404 "Parent comment not found" al
+# responder): determinista, NUNCA se podran publicar. Namespace separado del
+# dedup de respuestas para que la cola los descarte sin re-generar contenido.
+_UNREPLIABLE_IDS_PATH = BASE_DIR / "data" / "unrepliable_comment_ids.json"
 
 
 def get_cap() -> int:
@@ -191,4 +195,35 @@ def mark_replied_to_comment(comment_id: str, path: Optional[Path] = None) -> boo
         return True
     except Exception as e:
         logger.warning("reply_cap: dedup mark failed for %s: %s", comment_id, e)
+        return False
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Unrepliable comments (parent deleted — 404 deterministic)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def is_unrepliable_comment(comment_id: str, path: Optional[Path] = None) -> bool:
+    """True si este comment_id ya se marco como unrepliable (padre borrado:
+    responder devolvio 404 'Parent comment not found'). Nunca vuelve a la cola."""
+    if not comment_id:
+        return False
+    try:
+        return str(comment_id) in _load_comment_ids(path or _UNREPLIABLE_IDS_PATH)
+    except Exception as e:
+        logger.debug("reply_cap: unrepliable check failed for %s: %s", comment_id, e)
+        return False
+
+
+def mark_unrepliable_comment(comment_id: str, path: Optional[Path] = None) -> bool:
+    """Marca un comment_id como unrepliable (padre inexistente). Atomic, idempotente."""
+    if not comment_id:
+        return False
+    try:
+        ids = _load_comment_ids(path or _UNREPLIABLE_IDS_PATH)
+        ids.add(str(comment_id))
+        _save_comment_ids(ids, path or _UNREPLIABLE_IDS_PATH)
+        return True
+    except Exception as e:
+        logger.warning("reply_cap: unrepliable mark failed for %s: %s", comment_id, e)
         return False

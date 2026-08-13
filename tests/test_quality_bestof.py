@@ -90,7 +90,7 @@ class TestPhaseABestOfN:
             patch("phases.phase_a_content.is_similar_to_recent", return_value=False),
             patch("phases.phase_a_content.call_model", new=mock_call_model),
             patch("phases.phase_a_content._critique_pass",
-                  new=AsyncMock(side_effect=lambda deps, post, policy: post)),
+                  new=AsyncMock(side_effect=lambda deps, post, policy, incident_figures=None: post)),
         ):
             mock_dt.now.return_value = fake_now
             mock_dt.fromisoformat.side_effect = lambda s: datetime.fromisoformat(s)
@@ -189,7 +189,7 @@ class TestPhaseABestOfN:
             patch("phases.phase_a_content.compute_dual_score", side_effect=_dual_stub),
             patch("phases.phase_a_content.call_model", new=mock_call_model),
             patch("phases.phase_a_content._critique_pass",
-                  new=AsyncMock(side_effect=lambda deps, post, policy: post)),
+                  new=AsyncMock(side_effect=lambda deps, post, policy, incident_figures=None: post)),
         ):
             mock_dt.now.return_value = fake_now
             mock_dt.fromisoformat.side_effect = lambda s: datetime.fromisoformat(s)

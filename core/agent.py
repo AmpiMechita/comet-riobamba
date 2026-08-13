@@ -27,8 +27,9 @@ from services.self_eval import update_today_metrics
 from core.challenge_solver import LLMClientAdapter
 from core.self_monitor import SelfMonitor
 from services.model_cascade import ModelCascade
-from services.moltbook_api_client import MoltbookAPIClient
+from services.moltbook_api_client import MoltbookAPIClient, is_parent_not_found_404
 from services.platform_awareness import PlatformAwareness
+from services.reply_cap import mark_unrepliable_comment
 from services.telegram_client import create_telegram_client
 from services.deepseek_balance import (
     check_deepseek_balance, was_balance_sent_today,
@@ -509,6 +510,19 @@ class COMETRiobambaAgent:
                         logger.warning(
                             "Comment outbox: 429 rate-limit (Retry-After=%ss, capped=%ss), retry_attempt=%s",
                             retry_after, capped, retry_attempt,
+                        )
+                    elif http_status == 404 and is_parent_not_found_404(result):
+                        # Padre borrado: determinista. Marcar el comentario como
+                        # unrepliable (nunca vuelve a la cola de Phase B) y el
+                        # item como failed (no reintentar — 44 retries no sirven).
+                        parent_comment_id = payload.get("parent_comment_id")
+                        if parent_comment_id:
+                            mark_unrepliable_comment(f"{post_id}:{parent_comment_id}")
+                        mark_outbox(item["id"], "failed", str(result)[:200])
+                        logger.warning(
+                            "Comment outbox: 404 padre inexistente — item %s failed, "
+                            "comment %s marcado unrepliable",
+                            item.get("id"), parent_comment_id,
                         )
                     elif 400 <= http_status < 500:
                         mark_outbox(item["id"], "failed", str(result)[:200])

@@ -35,7 +35,11 @@ from prompts.prompt_templates import inject_self_diagnosis
 from utils.phase_utils import phase_error_boundary, validate_phase_deps
 from services.editorial_policy import load_editorial_policy
 from services.dual_scoring import compute_dual_score, log_dual_score
-from services.incident_store import get_incident_by_id, mark_incident_used
+from services.incident_store import (
+    get_incident_by_id,
+    mark_incident_used,
+    extract_incident_figures,
+)
 from services.used_examples_tracker import mark_examples_used
 from services.persistence import (
     enqueue_outbox,
@@ -135,6 +139,35 @@ _FACTUAL_CONTEXT_TEMPLATE = (
     "invent any additional number, date, or outcome beyond what is provided."
 )
 
+# Minimo de cifras verificadas que el body de un post own_incident debe incluir
+# textualmente. La instruccion no alcanza (leccion arXiv): hace falta gate.
+INCIDENT_MIN_FIGURES = 2
+
+
+def _normalize_figure(text: str) -> str:
+    """Normaliza una cifra para comparacion textual: sin comas de miles (para
+    que '1,035' matchee '1035'), minusculas."""
+    return re.sub(r",", "", text or "").lower().strip()
+
+
+def _count_incident_figures(body: str, figures: List[str]) -> Tuple[int, List[str]]:
+    """Cuantas de las cifras verificadas aparecen textualmente en el body.
+
+    Devuelve (presentes, faltantes). Exige frontera no-digitica para evitar
+    que '12' matchee dentro de '123' o que '50' matchee dentro de '1050'."""
+    if not figures:
+        return 0, list(figures)
+    norm_body = _normalize_figure(body or "")
+    present = 0
+    missing: List[str] = []
+    for fig in figures:
+        pattern = rf"(?<!\d){re.escape(_normalize_figure(fig))}(?!\d)"
+        if re.search(pattern, norm_body):
+            present += 1
+        else:
+            missing.append(fig)
+    return present, missing
+
 
 # Topic filter: block topics outside our verticals
 BLOCKED_TOPIC_SIGNALS = [
@@ -152,6 +185,10 @@ ALLOWED_TOPIC_SIGNALS = [
     "pipeline", "validation", "provenance", "idempotency", "quota",
     "throttling", "tool call", "failure mode", "guardrail",
     "automation", "scraping", "workflow", "bot",
+    # Vertical 3: la interseccion fisica/economica con sistemas de IA (no
+    # energia generica suelta — la puerta es el vinculo con AI/agents).
+    "inference cost", "datacenter", "power envelope", "thermal",
+    "grid", "compute budget", "energy per token",
 ]
 
 
@@ -436,7 +473,8 @@ def _paper_title_and_arxiv_id(topic: str) -> Tuple[Optional[str], Optional[str]]
     return title, arxiv_id
 
 
-def validate_post_text(text: str, required_citation: Optional[str] = None) -> Tuple[bool, str]:
+def validate_post_text(text: str, required_citation: Optional[str] = None,
+                       is_own_incident: bool = False) -> Tuple[bool, str]:
     if not text or not isinstance(text, str): return False, "empty_or_invalid"
     length = len(text)
     if length < EDITORIAL_CONFIG["min_length_chars"]: return False, "too_short"
@@ -451,7 +489,9 @@ def validate_post_text(text: str, required_citation: Optional[str] = None) -> Tu
     first_line = text.split('\n')[0].strip()
     if FILLER_STARTS.match(first_line): return False, "contains_filler_opening"
     if text.count("\n\n") < 1: return False, "single_paragraph"
-    if text_has_fabricated_measurement(text): return False, "fabricated_measurement"
+    # own_incident queda exento del guard anti-fabricacion: su primera persona
+    # esta respaldada por numeros verificados del store (incidents.jsonl).
+    if text_has_fabricated_measurement(text, is_own_incident=is_own_incident): return False, "fabricated_measurement"
     if required_citation:
         # La cita verificable debe estar en el body (tolerando el sufijo de
         # version: '2607.18045' == '2607.18045v1'). Sin ancla, no hay evidencia.
@@ -630,7 +670,7 @@ def choose_topic(mode: str = "research") -> tuple[str, str]:
     except Exception:
         return random.choice(topics_list), "roadmap"
 
-def build_prompts(topic: str, policy: Optional[Dict[str, Any]] = None, variant: Optional[str] = None, mode: str = "research", incident: Optional[Dict[str, Any]] = None) -> Tuple[str, str]:
+def build_prompts(topic: str, policy: Optional[Dict[str, Any]] = None, variant: Optional[str] = None, mode: str = "research", incident: Optional[Dict[str, Any]] = None, incident_figures: Optional[List[str]] = None) -> Tuple[str, str]:
     policy = policy or {}
     mission = EDITORIAL_CONFIG["mission"]
     principles = EDITORIAL_CONFIG["core_principles"]
@@ -673,9 +713,63 @@ def build_prompts(topic: str, policy: Optional[Dict[str, Any]] = None, variant: 
         f"{variant_extra}"
         "Do not write like a marketer, journalist, or academic. Write like an engineer."
     )
+    if incident_figures:
+        # La regla 'Do not narrate personal lived experience' reprime el relato
+        # del incidente (el modelo lo deja en el titulo y el body queda como
+        # mecanismo puro). Para own_incident la excepcion es explicita: los
+        # numeros del FACTUAL CONTEXT son datos propios verificados.
+        system_prompt = system_prompt.rstrip() + (
+            "\nEXCEPTION ACTIVE FOR THIS POST: you are reporting a REAL incident "
+            "from your own history with verified numbers (FACTUAL CONTEXT). The "
+            "anti-fabrication rule does not apply to those figures — they are "
+            "your own data — and the incident MUST be written in the BODY, not "
+            "just the title."
+        )
     max_len = EDITORIAL_CONFIG["max_length_chars"]
 
-    if mode == "research":
+    if incident_figures:
+        # Encuadre propio de own_incident: el incidente ES la estructura, no un
+        # accesorio. El encuadre generico (PROBLEM/PROPOSAL) empuja al modelo a
+        # escribir mecanismo puro y dejar el incidente (con sus cifras) en el
+        # titulo — que es exactamente lo que el gate de cifras debe impedir.
+        figures_list = ", ".join(f"'{f}'" for f in incident_figures)
+        user_prompt = (
+            f"Write one original short-form engineering post about a REAL, "
+            f"verified incident from your own production history: {topic}.\n\n"
+            f"Length: 600 to 1000 characters. ABSOLUTE MAXIMUM: {max_len} characters.\n\n"
+            "STRUCTURE (own_incident mode):\n"
+            "1. INCIDENT (2-3 sentences): OPEN the body with the incident itself "
+            "-- what the system did, the verified figures verbatim, and the "
+            "root cause. This is the evidence: it is real, it happened, and "
+            "its numbers are the whole point of the post.\n"
+            "2. MECHANISM (3-5 sentences): Derive the general fix or protocol "
+            "from that incident.\n"
+            "3. QUESTION (1 sentence): End with a concrete, low-friction "
+            "question that invites co-design. Avoid vague closings like "
+            "'Thoughts?'.\n\n"
+            "HARD REQUIREMENT (non-negotiable): the INCIDENT paragraph must "
+            "write at least TWO of these verified figures verbatim, exactly as "
+            "they appear here: "
+            f"{figures_list}.\n"
+            "Output format: FIRST line = TITLE (short, may carry the angle), "
+            "then a blank line, then the BODY paragraphs. The INCIDENT paragraph "
+            "goes in the BODY, never in the title line — putting them in the "
+            "TITLE does not count. Using the verified numbers is not "
+            "fabrication; omitting them is wasting the only thing that makes "
+            "this post worth writing.\n\n"
+            "STRICT STYLE REQUIREMENTS:\n"
+            "- Write EXACTLY 3 short paragraphs. Separate each with a blank line.\n"
+            "- NO bullet points, NO lists, NO emojis, NO markdown.\n"
+            "- NO academic subtitles. Use continuous prose.\n"
+            "- Sound like a senior systems engineer writing after seeing the "
+            "system fail, recover, or evolve in production.\n"
+            "- Make the post feel specific, grounded, and non-generic.\n"
+            "- Do NOT include links, URLs, hashtags, or code blocks.\n"
+            "- FORBIDDEN: do not mention Moltbook, platform names, LLM, AI "
+            "assistant, language model, prompt, or that the text was generated.\n"
+            "- You MUST finish your last thought completely. Do not get cut off.\n"
+        )
+    elif mode == "research":
         user_prompt = (
             f"Write one original short-form engineering post about: {topic}.\n\n"
             f"Length: 600 to 1000 characters. ABSOLUTE MAXIMUM: {max_len} characters.\n\n"
@@ -852,10 +946,13 @@ async def _pick_best_post(deps: PhaseADeps, candidates: List[Dict[str, Any]],
 
 
 async def _critique_pass(deps: PhaseADeps, post: Dict[str, Any],
-                         policy: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+                         policy: Optional[Dict[str, Any]],
+                         incident_figures: Optional[List[str]] = None) -> Dict[str, Any]:
     """Auto-crítica flash contra mission/core_principles. Degradación elegante:
     si el rewrite es inválido, low-quality, repetido o PEOR (dual_score menor)
-    -> se descarta y se mantiene la versión pre-crítica."""
+    -> se descarta y se mantiene la versión pre-crítica.
+    Para own_incident ademas se exige que el rewrite conserve las cifras
+    verificadas: si la crítica las elimina, se descarta (el material es escaso)."""
     mission = EDITORIAL_CONFIG["mission"]
     principles = "\n".join(f"- {p}" for p in EDITORIAL_CONFIG["core_principles"])
     sys_prompt = (
@@ -874,10 +971,19 @@ async def _critique_pass(deps: PhaseADeps, post: Dict[str, Any],
             return post
         new_text = _truncate_to_limit(body, EDITORIAL_CONFIG["max_length_chars"])
         required_citation = _extract_arxiv_id(post.get("metadata", {}).get("topic", ""))
-        is_valid, reason = validate_post_text(new_text, required_citation=required_citation)
+        is_valid, reason = validate_post_text(new_text, required_citation=required_citation,
+                                              is_own_incident=bool(incident_figures))
         if not is_valid:
             logger.info("Phase A: auto-critique invalid (%s) -> keeping pre-critique", reason)
             return post
+        if incident_figures:
+            present, _missing = _count_incident_figures(new_text, incident_figures)
+            if present < INCIDENT_MIN_FIGURES:
+                logger.info(
+                    "Phase A: auto-critique perdió cifras verificadas del incidente (%s/2) -> keeping pre-critique",
+                    present,
+                )
+                return post
         low_quality, lq_reason = _looks_low_quality(new_text, policy)
         if low_quality:
             logger.info("Phase A: auto-critique low_quality (%s) -> keeping pre-critique", lq_reason)
@@ -1049,6 +1155,7 @@ _RETRY_CORRECTION_HINTS: Dict[str, str] = {
     "mentions_moltbook": "El intento anterior menciono 'Moltbook' explicitamente. No nombres la plataforma.",
     "mentions_llm": "El intento anterior menciono 'LLM' o 'large language model' explicitamente. Evita esa jerga meta sobre el modelo.",
     "missing_arxiv_citation": "El intento anterior no cito la fuente arXiv del paper en el cuerpo. Incluí el identificador textualmente (formato arXiv:XXXX.XXXXXv1, tal cual viene en el tema del post) en el PRIMER parrafo, junto con el nombre del paper. Es la evidencia verificable del post.",
+    "missing_incident_figures": "El intento anterior no incluyó al menos dos de las cifras verificadas del incidente EN EL BODY (el título no cuenta). Abrí el PRIMER parrafo del body con el incidente y escribí los numeros reales textualmente, tal cual aparecen entre comillas en el HARD REQUIREMENT. La diferenciacion del post son esos numeros: sin ellos es un post generico.",
 }
 
 
@@ -1351,11 +1458,14 @@ class PhaseAContentGeneration:
             # ya no existe en el store (archivo borrado/editado), cae al prompt
             # generico sin romper el ciclo. ──
             _incident = None
+            _incident_figures: List[str] = []
             if str(topic_source or "").startswith("own_incident:"):
                 _incident_id = str(topic_source).split(":", 1)[1]
                 _incident = get_incident_by_id(_incident_id)
                 if _incident:
-                    logger.info("Phase A: incidente real '%s' cargado para el post", _incident_id)
+                    _incident_figures = extract_incident_figures(_incident)
+                    logger.info("Phase A: incidente real '%s' cargado para el post (cifras verificadas: %s)",
+                                _incident_id, ", ".join(_incident_figures) or "-")
                 else:
                     logger.warning("Phase A: incidente '%s' no encontrado en el store; prompt generico", _incident_id)
 
@@ -1371,7 +1481,7 @@ class PhaseAContentGeneration:
             if variant:
                 send_event("experiment_assigned", {"phase": "A", "variant": variant, "topic": topic, "topic_source": topic_source})
             policy = load_editorial_policy()
-            system_prompt, user_prompt = build_prompts(topic, policy, variant=variant, mode=phase_a_mode, incident=_incident)
+            system_prompt, user_prompt = build_prompts(topic, policy, variant=variant, mode=phase_a_mode, incident=_incident, incident_figures=_incident_figures)
 
             # ── Inject strategy directives ────────────────────────────────
             try:
@@ -1475,7 +1585,7 @@ class PhaseAContentGeneration:
                 body = _normalize_moltbook_body(body)
                 post_text = _truncate_to_limit(body, EDITORIAL_CONFIG["max_length_chars"])
                 required_citation = _extract_arxiv_id(topic)
-                is_valid, reason = validate_post_text(post_text, required_citation=required_citation)
+                is_valid, reason = validate_post_text(post_text, required_citation=required_citation, is_own_incident=bool(_incident_figures))
                 if not is_valid and reason == "missing_arxiv_citation" and required_citation:
                     # Tema anclado a arXiv: la cita faltante NO rechaza ni consume
                     # reintentos (la cita se valida al final, asi que el candidato
@@ -1487,7 +1597,7 @@ class PhaseAContentGeneration:
                     source_line = f"Source: {src_label} (arXiv:{required_citation})"
                     room = EDITORIAL_CONFIG["max_length_chars"] - len(source_line) - 2
                     injected = (_truncate_to_limit(post_text, room) + "\n\n" + source_line).strip()
-                    injected_ok, _ = validate_post_text(injected, required_citation=required_citation)
+                    injected_ok, _ = validate_post_text(injected, required_citation=required_citation, is_own_incident=bool(_incident_figures))
                     if injected_ok:
                         _log_generation_attempt(topic, topic_source, attempt, max_attempts, "success_arxiv_injected")
                         post_text = injected
@@ -1502,6 +1612,36 @@ class PhaseAContentGeneration:
                     if attempt >= max_attempts:
                         generated_post = {"title": title, "body": post_text, "metadata": {"topic": topic, "validation_reason": reason}, "attempts": attempt, "published": False, "error": f"validation_failed:{reason}"}
                     continue
+
+                # ── Gate de cifras verificadas (own_incident, patron arXiv) ──
+                # La instruccion 'use them exactly' no alcanza: si el body no
+                # incluye >= 2 de las cifras reales del incidente, el post es
+                # generico y desperdicia material escaso. Rechazo + correccion
+                # que nombra las cifras faltantes. Si agota reintentos, el
+                # incidente NO se marca usado (no se quema).
+                if _incident_figures:
+                    present, missing = _count_incident_figures(post_text, _incident_figures)
+                    logger.info(
+                        "own_incident: cifras verificadas presentes %s/2 (faltan: %s)",
+                        present, ", ".join(missing) if missing else "-",
+                    )
+                    if present < INCIDENT_MIN_FIGURES:
+                        reason = "missing_incident_figures"
+                        logger.warning("Phase A: contenido invalido (reason=%s), reintentar...", reason)
+                        _log_generation_attempt(topic, topic_source, attempt, max_attempts, f"validation_failed:{reason}")
+                        _log_rejected_body(topic, topic_source, attempt, f"validation_failed:{reason}", title, post_text)
+                        retry_correction = _build_retry_correction(f"validation_failed:{reason}")
+                        if missing:
+                            retry_correction += (
+                                "\nCifras verificadas del incidente ausentes en el "
+                                f"BODY de tu intento: {', '.join(missing[:6])}. "
+                                "Abrí el PRIMER parrafo del body con el incidente "
+                                "y escribí al menos dos de esas cifras textualmente "
+                                "(el título no cuenta)."
+                            )
+                        if attempt >= max_attempts:
+                            generated_post = {"title": title, "body": post_text, "metadata": {"topic": topic, "validation_reason": reason}, "attempts": attempt, "published": False, "error": f"validation_failed:{reason}"}
+                        continue
                 if is_similar_to_recent(post_text):
                     logger.warning("Phase A: contenido muy similar a posts recientes. Se descarta.")
                     _log_generation_attempt(topic, topic_source, attempt, max_attempts, "similar_recent")
@@ -1537,7 +1677,7 @@ class PhaseAContentGeneration:
                 else:
                     generated_post = await _pick_best_post(self.deps, valid_candidates, policy)
                 if generated_post and not generated_post.get("error"):
-                    generated_post = await _critique_pass(self.deps, generated_post, policy)
+                    generated_post = await _critique_pass(self.deps, generated_post, policy, incident_figures=_incident_figures)
 
             if not generated_post or generated_post.get("error"):
                 logger.warning("Phase A: post descartado. %s", generated_post.get('error') if generated_post else 'Sin post')

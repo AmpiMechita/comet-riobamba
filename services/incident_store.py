@@ -17,6 +17,7 @@ Reglas de contenido (curacion humana, no automatizable):
 
 import json
 import logging
+import re
 from typing import Dict, List, Optional
 
 from config import BASE_DIR
@@ -26,6 +27,37 @@ logger = logging.getLogger("services.incident_store")
 INCIDENTS_PATH = BASE_DIR / "data/incidents.jsonl"
 
 REGISTER_MAX_TOPICS = 5
+
+# Tokens numericos verificados del incidente (ratios 9/50, rangos 80->30,
+# porcentajes, miles 1,035). Fuente de los strings obligatorios del gate.
+_FIGURE_TOKEN_RE = re.compile(r"\d[\d.,:xX+~\-→/>]*\d|\d")
+
+
+def extract_incident_figures(incident: Optional[Dict], max_figures: int = 6) -> List[str]:
+    """Cifras verificadas del incidente como strings canonicos (ej. '410/410',
+    '80->30', '9/50', '1,035'). El gate de Phase A exige que el body del post
+    incluya textualmente al menos 2 de ellas: la diferenciacion del post son
+    estos numeros, no la narrativa.
+
+    Fuentes: real_numbers (principal) y symptom (fallback). Solo se descartan
+    duplicados exactos: '0' dentro de '1,035' y '30' dentro de '80->30' son
+    hechos distintos y ambos se conservan (el conteo usa frontera no-digita)."""
+    if not incident:
+        return []
+    sources = [
+        str(incident.get("real_numbers") or ""),
+        str(incident.get("symptom") or ""),
+    ]
+    figures: List[str] = []
+    for src in sources:
+        for m in _FIGURE_TOKEN_RE.findall(src):
+            token = m.strip()
+            if not token or token in figures:
+                continue
+            figures.append(token)
+            if len(figures) >= max_figures:
+                return figures
+    return figures
 
 
 def load_incidents() -> List[Dict]:

@@ -134,10 +134,10 @@ from core.claims_tracker import ClaimsTracker
 from personality.modes import select_mode, get_mode_prompt
 from services.dual_scoring import log_dual_score
 from services.energy_knowledge_base import EnergyKnowledgeBase
-from services.moltbook_api_client import APIResponse
+from services.moltbook_api_client import APIResponse, is_parent_not_found_404
 from services.dedup_store import DedupStore
 from services import reply_cap
-from services.persistence import enqueue_outbox
+from services.persistence import enqueue_outbox, count_outbox_by_status
 from services.claim_checker import extract_claim, check_claim
 from services.own_post_store import is_valid_post_id
 from core.strategy_state import StrategyState
@@ -208,7 +208,10 @@ def _get_ein_context(text: str) -> str:
             "",
             "CONTEXT FROM EIN DATABASE:",
         ] + parts + [
-            "ANALYZE the post above in light of these verified claims.",
+            "The following is raw evidence (patents, funding, technical signals). "
+            "Do NOT report it as news and do NOT mention it unless it directly "
+            "supports a mechanism you are proposing about AI or agent systems. "
+            "If it does not, ignore it entirely.",
             "",
         ]
         return "\n".join(lines)
@@ -1321,13 +1324,20 @@ class PhaseB:
             self._stats["follows"] = self._follows_this_cycle
             semantic_count = self._stats.get("semantic_candidates", 0)
             inbound_wl = self.get_watchlist_inbound_today()
+            # ── Visibilidad del outbox: un atasco de fallos (padres borrados,
+            # 4xx) se ve al instante, no 3 dias despues. ──
+            try:
+                outbox_failed = count_outbox_by_status("failed")
+            except Exception:
+                outbox_failed = 0
             logger.info(
                 "Phase B: cycle summary — own-post replies=%s, thread follow-ups=%s, "
                 "feed replies=%s, upvotes=%s, follows=%s, semantic_candidates=%s, "
-                "claim-check failures=%s, total=%s, watchlist_inbound_today=%s",
+                "claim-check failures=%s, total=%s, watchlist_inbound_today=%s, "
+                "outbox_failed=%s, queue_prefiltered=%s",
                 own_count, followup_count, feed_count, self._upvotes_this_cycle,
                 self._follows_this_cycle, semantic_count, self._stats.get("claim_check_failed", 0), total,
-                inbound_wl,
+                inbound_wl, outbox_failed, self._stats.get("queue_prefiltered", 0),
             )
             span.set("feed_replies", feed_count)
             span.set("own_replies", own_count)
@@ -1341,6 +1351,8 @@ class PhaseB:
                 "upvotes": self._upvotes_this_cycle,
                 "follows": self._follows_this_cycle,
                 "semantic_candidates": semantic_count,
+                "outbox_failed": outbox_failed,
+                "queue_prefiltered": self._stats.get("queue_prefiltered", 0),
                 "feed_replies": feed_results,
                 "thread_followup_replies": followup_results,
                 "own_post_replies": own_results,
@@ -1472,6 +1484,7 @@ class PhaseB:
             diag_discarded_dedup = 0
             diag_discarded_depth = 0
             diag_discarded_triage = 0
+            diag_discarded_prefilter = 0
             diag_broke_daily = False
             diag_broke_cycle = False
 
@@ -1578,8 +1591,24 @@ class PhaseB:
                     reply_id = reply_comment.get("id") or reply_comment.get("comment_id")
                     if not reply_id:
                         continue
+
+                    # ── Pre-filtro: sin contenido / borrado / unrepliable se
+                    # descartan ANTES de generar (ahorra LLM) ──
+                    queuable, qreason = PhaseB._comment_queuable(reply_comment)
+                    if not queuable:
+                        diag_discarded_prefilter += 1
+                        logger.info(
+                            "Phase B: skip follow-up a comentario %s (pre-filter: %s).",
+                            reply_id, qreason,
+                        )
+                        continue
                     reply_text = (reply_comment.get("content") or reply_comment.get("text") or "").strip()
-                    if not reply_text:
+                    if reply_cap.is_unrepliable_comment(f"{post_id}:{reply_id}"):
+                        diag_discarded_prefilter += 1
+                        logger.info(
+                            "Phase B: skip follow-up a comentario %s en post %s (unrepliable).",
+                            reply_id, post_id,
+                        )
                         continue
                     reply_author = self._get_author_name(reply_comment) or "usuario"
 
@@ -1682,6 +1711,17 @@ class PhaseB:
                         followup_comment_id = getattr(resp, "id", None)
 
                     if not success:
+                        # 404 de padre inexistente: determinista — marcar el
+                        # comentario unrepliable y no encolar (reintentar seria
+                        # quemar LLM en algo que jamas se publicara).
+                        if is_parent_not_found_404(resp):
+                            reply_cap.mark_unrepliable_comment(f"{post_id}:{reply_id}")
+                            logger.warning(
+                                "Phase B: follow-up a comentario %s en post %s unrepliable "
+                                "(parent 404) — marcado, sin outbox.",
+                                reply_id, post_id,
+                            )
+                            continue
                         logger.warning(
                             "Phase B: follow-up falló post_id=%s parent=%s status=%s.",
                             post_id, reply_id, status,
@@ -1746,11 +1786,12 @@ class PhaseB:
             logger.info(
                 "Phase B: follow-up diagnóstico — ventana48h=%s, fetched=%s, "
                 "comentarios_inspected=%s, replies_matched=%s, "
-                "descartados(durable_dedup=%s, profundidad=%s, triage=%s), "
+                "descartados(durable_dedup=%s, profundidad=%s, triage=%s, prefilter=%s), "
                 "corte(daily=%s, cycle=%s), publicado=%s.",
                 len(recent_post_ids), diag_posts_fetched,
                 diag_comments_inspected, diag_replies_matched,
                 diag_discarded_dedup, diag_discarded_depth, diag_discarded_triage,
+                diag_discarded_prefilter,
                 diag_broke_daily, diag_broke_cycle, len(results),
             )
             span.set("posted", len(results))
@@ -2882,18 +2923,25 @@ class PhaseB:
                     logger.warning(f"Phase B: error fetching comments for post {post_id}: {e}")
                     continue
                 per_post = 0
+                queue_filter_counts: Dict[str, int] = {}
                 for c in all_comments:
                     if self._is_own_author(self._get_author_name(c)):
                         continue
-                    cid = c.get("id") or c.get("comment_id")
-                    if not cid:
-                        continue
-                    if f"{post_id}:{cid}" in self._replied_comment_ids:
-                        continue
-                    if not (c.get("content") or c.get("text") or "").strip():
+                    # Pre-filtro: descartar sin id / vacios / borrados / ya
+                    # respondidos / unrepliable ANTES de generar (ahorra LLM).
+                    queuable, reason = PhaseB._comment_queuable(c, post_id)
+                    if not queuable:
+                        queue_filter_counts[reason] = queue_filter_counts.get(reason, 0) + 1
                         continue
                     queue.append((post_id, c, all_comments))
                     per_post += 1
+                if queue_filter_counts:
+                    breakdown = ", ".join(f"{k}={v}" for k, v in sorted(queue_filter_counts.items()))
+                    self._stats["queue_prefiltered"] = self._stats.get("queue_prefiltered", 0) + sum(queue_filter_counts.values())
+                    logger.info(
+                        "Phase B: own-post queue pre-filter descartó %d comentario(s) (%s) en post %s",
+                        sum(queue_filter_counts.values()), breakdown, post_id,
+                    )
                 if per_post > 0:
                     posts_with_pending += 1
 
@@ -3488,6 +3536,27 @@ class PhaseB:
                     "error": error,
                 }
 
+            # 404 "Parent comment not found": el padre fue borrado y NUNCA va a
+            # volver. Marcar el comentario como unrepliable (no vuelve a la cola,
+            # no se regenera) y NO encolar al outbox: reintentar es quemar LLM.
+            if is_parent_not_found_404(result):
+                reply_cap.mark_unrepliable_comment(f"{post_id}:{comment_id}")
+                logger.warning(
+                    "Phase B: comment %s on post %s unrepliable (parent 404) — "
+                    "marcado, sin outbox.",
+                    comment_id, post_id,
+                )
+                span.set("success", False)
+                return {
+                    "post_id": post_id,
+                    "comment_id": comment_id,
+                    "content": reply_text,
+                    "success": False,
+                    "already_existed": False,
+                    "error": error,
+                    "unrepliable": True,
+                }
+
             logger.warning(
                 "Phase B: failed to reply to comment %s on post %s: %s",
                 comment_id, post_id, error,
@@ -3512,6 +3581,47 @@ class PhaseB:
             return author
         return ""
 
+    # ── Pre-filtro de cola (no generar respuestas que no se pueden publicar) ──
+
+    _DELETED_CONTENT_MARKERS = (
+        "[deleted]", "[removed]", "deleted comment", "comment removed",
+        "message deleted", "this comment was deleted",
+    )
+
+    @classmethod
+    def _comment_is_deleted(cls, comment: Any) -> bool:
+        """True si el comentario fue borrado/removido (flag o marcador de texto)."""
+        if not isinstance(comment, dict):
+            return False
+        for flag in ("deleted", "is_deleted", "removed", "is_removed"):
+            if comment.get(flag) is True:
+                return True
+        text = (comment.get("content") or comment.get("text") or "").lower()
+        return any(marker in text for marker in cls._DELETED_CONTENT_MARKERS)
+
+    @classmethod
+    def _comment_queuable(cls, comment: Any, post_id: str = "") -> tuple[bool, str]:
+        """Pre-filtro de la cola: descarta comentarios que nunca se podran
+        responder — sin id, sin contenido, borrados, o ya respondidos /
+        unrepliable (padre borrado). Devuelve (queuable, reason) para poder
+        contar cuantos se filtran por ciclo y por motivo."""
+        if not isinstance(comment, dict):
+            return False, "not_dict"
+        cid = comment.get("id") or comment.get("comment_id")
+        if not cid:
+            return False, "no_id"
+        text = (comment.get("content") or comment.get("text") or "").strip()
+        if not text:
+            return False, "empty_content"
+        if cls._comment_is_deleted(comment):
+            return False, "deleted"
+        if post_id:
+            key = f"{post_id}:{cid}"
+            if reply_cap.has_replied_to_comment(key):
+                return False, "already_replied"
+            if reply_cap.is_unrepliable_comment(key):
+                return False, "unrepliable"
+        return True, ""
 
     # ── Watchlist helpers ──────────────────────────────────────────
 
