@@ -100,6 +100,9 @@ class ModelCascade:
         # usage de la ultima llamada exitosa por proveedor (para telemetria de
         # tokens/costo): {"provider": {"input_tokens": n, "output_tokens": n}}
         self._last_usage: Dict[str, Dict[str, int]] = {}
+        # stats acumuladas por tier (para el log de ciclo de classify):
+        # {"classify": {"calls": n, "cost": 0.0, "provider": "cloudflare"}}
+        self._tier_stats: Dict[str, Dict[str, Any]] = {}
 
         # ── Degraded mode: tier cascade (tier_premium → tier_fallback) exhausted ──
         # In-memory mirror of the persisted degraded state; the source of truth is
@@ -120,6 +123,7 @@ class ModelCascade:
         "openrouter": "openrouter",
         "cerebras": "cerebras",
         "groq": "groq",
+        "classify": "cloudflare",      # Clasificaciones (claim/value/juez): GRATIS
         "default": "ollama_local",
         # Backward-compat aliases (legacy tier names → new provider names).
         "opus": "tier_premium",
@@ -425,6 +429,18 @@ class ModelCascade:
                 on_open=self._alert_circuit_open,
             )
 
+    def _accumulate_tier_stats(self, tier: str, provider_name: str, cost_usd: float) -> None:
+        """Acumula llamadas/costo por tier funcional (p.ej. 'classify') para el
+        log de ciclo. Los proveedores gratis cotizan 0.0."""
+        stats = self._tier_stats.setdefault(tier, {"calls": 0, "cost": 0.0, "provider": provider_name})
+        stats["calls"] += 1
+        stats["cost"] = round(stats["cost"] + (cost_usd or 0.0), 6)
+        stats["provider"] = provider_name
+
+    def get_tier_stats(self, tier: str) -> Dict[str, Any]:
+        """Stats acumuladas del tier (calls, cost, provider). Vacias si nunca se uso."""
+        return dict(self._tier_stats.get(tier, {"calls": 0, "cost": 0.0, "provider": ""}))
+
     async def generate(
         self,
         prompt: str,
@@ -473,6 +489,20 @@ class ModelCascade:
                 return 1  # gratis (Gemini/OpenRouter/Cloudflare/Cerebras)
             return 2      # otros pagos (Anthropic premium/opus)
         fallback_pool = sorted(fallback_pool, key=_fallback_priority)
+        if tier == "classify":
+            # Clasificaciones: NUNCA deben escalar a Anthropic ni tier_quality
+            # (explicit_only ya queda fuera del pool). Cadena: gratis primero,
+            # tier_flash como ultimo recurso barato.
+            fallback_pool = [
+                p for p in self.providers
+                if p.name != provider_name and not p.explicit_only
+                and (not p.paid or p.name == "tier_flash")
+            ]
+
+            def _classify_priority(p: ProviderConfig) -> int:
+                return 1 if p.name == "tier_flash" else 0
+
+            fallback_pool = sorted(fallback_pool, key=_classify_priority)
         if preferred:
             ordered_providers = [preferred] + fallback_pool
         else:
@@ -550,6 +580,7 @@ class ModelCascade:
                     input_tokens = int(usage.get("input_tokens", 0) or 0)
                     output_tokens = int(usage.get("output_tokens", 0) or 0)
                     cost_usd = _estimate_cost_usd(provider.name, input_tokens, output_tokens)
+                    self._accumulate_tier_stats(tier, provider.name, cost_usd)
                     self._append_telemetry_jsonl({
                         "ts": datetime.now(timezone.utc).isoformat(),
                         "caller": caller,

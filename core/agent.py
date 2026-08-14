@@ -687,6 +687,17 @@ class COMETRiobambaAgent:
             if isinstance(c, dict) and c.get("insights_generated"):
                 summary_lines.append(f"🧠 Fase C: {c['insights_generated']} insight(s)")
 
+        # ── Telemetria del tier classify: llamadas de clasificacion del ciclo ──
+        try:
+            _classify = self.model_cascade.get_tier_stats("classify")
+            if _classify.get("calls"):
+                summary_lines.append(
+                    f" classify: {_classify['calls']} llamadas "
+                    f"(provider={_classify.get('provider', '?')}, costo=${_classify.get('cost', 0.0):.4f})"
+                )
+        except Exception:
+            pass
+
         summary = "\n".join(summary_lines)
         logger.info(summary)
 

@@ -944,7 +944,7 @@ async def _pick_best_post(deps: PhaseADeps, candidates: List[Dict[str, Any]],
     )
     judge_user = f"Choose the best of these posts:\n\n{numbered}\n\nBest candidate number:"
     try:
-        raw = await call_model(deps, judge_system, judge_user, tier="flash")
+        raw = await call_model(deps, judge_system, judge_user, tier="classify")
         idx = _parse_candidate_index(raw, len(candidates))
     except Exception as e:
         logger.warning("Phase A: best-of-N judge error (%s) -> fallback dual_score", e)

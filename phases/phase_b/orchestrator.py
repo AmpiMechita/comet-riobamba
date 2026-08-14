@@ -2236,7 +2236,7 @@ class PhaseB:
                     try:
                         check_result = await check_claim(
                             claim, reply_text, self.llm,
-                            tier=getattr(self, "_claim_checker_tier", "fallback"),
+                            tier=getattr(self, "_claim_checker_tier", "flash"),
                         )
                     except Exception:
                         check_result = {
@@ -2904,7 +2904,7 @@ class PhaseB:
             try:
                 claim = await extract_claim(
                     post_text, post_text, self.llm,
-                    tier=getattr(self, "_claim_checker_tier", "fallback"),
+                    tier=getattr(self, "_claim_checker_tier", "flash"),
                 )
             except Exception:
                 pass

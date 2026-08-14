@@ -178,8 +178,10 @@ class ChallengeSolver:
 
 
     async def _generate_with_captcha_fallback(self, prompt: str, system_prompt: str) -> str:
-        """Intenta premium (Anthropic) primero, luego cerebras si falla."""
-        for _tier in ["premium", "cerebras"]:
+        """Extraccion de la expresion del CAPTCHA: gratis (classify) primero,
+        tier_flash como ultimo recurso. Una expresion matematica no necesita un
+        modelo de frontera; Anthropic queda fuera del camino de clasificacion."""
+        for _tier in ["classify", "flash"]:
             try:
                 response = await self.model_cascade.generate(
                     prompt=prompt,
@@ -193,7 +195,7 @@ class ChallengeSolver:
                     return response
             except Exception as _e:
                 logger.warning(f"ChallengeSolver: tier={_tier} fallido: {_e}. Intentando siguiente...")
-        raise Exception("Todos los tiers CAPTCHA fallaron (premium, cerebras)")
+        raise Exception("Todos los tiers CAPTCHA fallaron (classify, flash)")
 
     async def _solve_with_llm(self, text: str) -> Optional[str]:
         if not self.model_cascade:
