@@ -80,12 +80,14 @@ def record_published_comment(post_id: str, comment_id: str, value_score: float,
 
 
 def refresh_comment_votes(api: Any, post_id: str, comment_ids: List[str],
-                          path: Optional[Path] = None) -> int:
+                          path: Optional[Path] = None, max_pages: int = 6) -> int:
     """Actualiza los upvotes de nuestros comentarios en UN post.
 
-    Fetch de los comentarios (ya aplanados) y lectura del campo upvotes de
-    cada comment_id propio registrado en el ledger. Devuelve cuantos se
-    actualizaron (o 0 si el fetch falla)."""
+    Fetch paginado (offset por 50) con deteccion defensiva: si la API ignora
+    el offset (vuelve la misma primera pagina), se corta. Actualiza solo los
+    comment_id registrados en el ledger y loguea cuantos no se localizaron
+    (nuestros comentarios pueden quedar fuera de las primeras 50 top-level
+    en posts con cientos de comentarios). Devuelve cuantos se actualizaron."""
     ids = [str(c) for c in comment_ids if c]
     if not ids:
         return 0
@@ -93,21 +95,38 @@ def refresh_comment_votes(api: Any, post_id: str, comment_ids: List[str],
     wanted = {i for i in ids if i in records}
     if not wanted:
         return 0
-    try:
-        comments = api.fetch_post_comments(post_id) or []
-    except Exception as e:
-        logger.warning("comment_votes: fetch de %s fallo: %s", post_id, e)
-        return 0
     now = datetime.now(timezone.utc).isoformat()
     updated = 0
-    for c in comments:
-        cid = c.get("id") or c.get("comment_id")
-        if cid and str(cid) in wanted:
-            rec = records[str(cid)]
-            rec["upvotes"] = int(c.get("upvotes") or 0)
-            rec["checked_at"] = now
-            wanted.discard(str(cid))
-            updated += 1
+    found: set = set()
+    prev_ids: Optional[set] = None
+    for page in range(max_pages):
+        try:
+            comments = api.fetch_post_comments(post_id, offset=page * 50) or []
+        except TypeError:
+            # cliente sin soporte de offset: una sola pagina
+            comments = api.fetch_post_comments(post_id) or []
+        if not comments:
+            break
+        current_ids = {str(c.get("id") or c.get("comment_id")) for c in comments}
+        if page > 0 and prev_ids is not None and current_ids == prev_ids:
+            break  # la API ignora el offset: no hay mas paginas
+        prev_ids = current_ids
+        for c in comments:
+            cid = c.get("id") or c.get("comment_id")
+            if cid and str(cid) in wanted:
+                rec = records[str(cid)]
+                rec["upvotes"] = int(c.get("upvotes") or 0)
+                rec["checked_at"] = now
+                found.add(str(cid))
+                updated += 1
+        if not (wanted - found):
+            break
+    missing = wanted - found
+    if missing:
+        logger.warning(
+            "comment_votes: %d de %d sin localizar en post %s (fuera de la ventana de fetch)",
+            len(missing), len(wanted), post_id,
+        )
     if updated:
         _save(records, path)
     return updated

@@ -1292,6 +1292,10 @@ class PhaseB:
             feed_results: List[Dict[str, Any]] = []
             own_results: List[Dict[str, Any]] = []
 
+            # ── Baseline del ciclo: queue_prefiltered acumula entre ciclos,
+            # el summary reporta el DELTA (no 135 mil comentarios falsos) ──
+            self._cycle_prefiltered_baseline = self._stats.get("queue_prefiltered", 0)
+
             # ── Feed budget reservation ─────────────────────────────
             feed_budget_pct = int(self.deps.behavior_cfg.get("feed_budget_pct", 40))
             feed_reserved = max(0, int(self.max_comments_per_day * feed_budget_pct / 100))
@@ -1372,12 +1376,13 @@ class PhaseB:
                 "feed replies=%s, upvotes=%s, follows=%s, semantic_candidates=%s, "
                 "claim-check failures=%s, total=%s, watchlist_inbound_today=%s, "
                 "outbox_failed=%s, queue_prefiltered=%s, abstained=%s, "
-                "comment votes=%s (comentarios con votos=%s, por-score=%s)",
+                "comment votes: %s upvotes (%s revisados de %s registrados, por-score=%s)",
                 own_count, followup_count, feed_count, self._upvotes_this_cycle,
                 self._follows_this_cycle, semantic_count, self._stats.get("claim_check_failed", 0), total,
-                inbound_wl, outbox_failed, self._stats.get("queue_prefiltered", 0),
+                inbound_wl, outbox_failed,
+                max(0, self._stats.get("queue_prefiltered", 0) - getattr(self, "_cycle_prefiltered_baseline", 0)),
                 self._stats.get("abstained", 0),
-                _votes.get("total_upvotes", 0), _votes.get("with_votes", 0),
+                _votes.get("total_upvotes", 0), _votes.get("with_votes", 0), _votes.get("total", 0),
                 _votes.get("by_score", {}),
             )
             span.set("feed_replies", feed_count)

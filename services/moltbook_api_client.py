@@ -622,14 +622,17 @@ class MoltbookAPIClient(PlatformClient):
         logger.info("fetch_my_posts: %d posts propios", len(posts))
         return posts
 
-    def fetch_post_comments(self, post_id: str) -> List[Dict[str, Any]]:
+    def fetch_post_comments(self, post_id: str, offset: int = 0) -> List[Dict[str, Any]]:
         if not post_id:
             return []
 
         path = f"/posts/{post_id}/comments"
 
         try:
-            result = self._request("GET", path, params={"limit": 50})
+            params = {"limit": 50}
+            if offset:
+                params["offset"] = offset
+            result = self._request("GET", path, params=params)
             if 200 <= result["status"] < 300:
                 data = result["data"]
                 items = self._pick_list(data, "items", "comments", "data")
