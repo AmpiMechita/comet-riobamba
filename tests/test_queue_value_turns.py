@@ -179,6 +179,85 @@ class TestQueueValueThreshold:
         assert "min=" in dist_lines[0] and "mediana=" in dist_lines[0] and "max=" in dist_lines[0]
 
 
+    @pytest.mark.asyncio
+    async def test_first_interaction_gets_lowered_floor(self, _redirect_paths, monkeypatch):
+        """Enganche temprano: autor SIN historial con comentario de 0.3 entra
+        (piso rebajado 0.4->0.2) aunque no supere el umbral normal."""
+        monkeypatch.setenv("AGENT_MIN_REPLY_VALUE_SCORE", "0.4")
+        pb = _make_pb(max_comments_per_day=50, max_replies_per_cycle=5)
+        pb._get_own_post_ids = lambda: {"top-12345678-aaaa-bbbb-cccc-ddddeeeeffff"}
+        post = {"id": "top-12345678-aaaa-bbbb-cccc-ddddeeeeffff", "comment_count": 10}
+        pb.api._request = MagicMock(return_value={"status": 200, "data": {"posts": [post]}})
+        pb.api.fetch_my_posts = MagicMock(return_value=[])
+        pb.api.fetch_post_comments.return_value = [
+            {"id": "c1", "author": {"name": "newcomer"},
+             "content": "What about error handling in the retry loop?", "text": "What about error handling in the retry loop?"},
+        ]
+        pb.api.create_comment.return_value = {"success": True, "id": "new", "status": 201}
+        pb._classify_and_log_value = AsyncMock()
+
+        await pb._execute_own_post_replies()
+
+        pb.api.create_comment.assert_called_once(), "la primera interaccion no muere en el umbral"
+
+    @pytest.mark.asyncio
+    async def test_returning_author_below_floor_still_filtered(self, _redirect_paths, monkeypatch):
+        """Autor con 1-2 interacciones previas (no historial 3+) y score 0.3:
+        piso normal 0.4 -> no entra."""
+        from services.interlocutors import record_interaction
+        record_interaction({"name": "returning"}, on_our_post=True)
+        monkeypatch.setenv("AGENT_MIN_REPLY_VALUE_SCORE", "0.4")
+        pb = _make_pb(max_comments_per_day=50, max_replies_per_cycle=5)
+        pb._get_own_post_ids = lambda: {"top-12345678-aaaa-bbbb-cccc-ddddeeeeffff"}
+        post = {"id": "top-12345678-aaaa-bbbb-cccc-ddddeeeeffff", "comment_count": 10}
+        pb.api._request = MagicMock(return_value={"status": 200, "data": {"posts": [post]}})
+        pb.api.fetch_my_posts = MagicMock(return_value=[])
+        pb.api.fetch_post_comments.return_value = [
+            {"id": "c1", "author": {"name": "returning"},
+             "content": "What about error handling in the retry loop?", "text": "What about error handling in the retry loop?"},
+        ]
+        pb.api.create_comment.return_value = {"success": True, "id": "new", "status": 201}
+        pb._classify_and_log_value = AsyncMock()
+
+        await pb._execute_own_post_replies()
+
+        pb.api.create_comment.assert_not_called()
+        assert pb._stats.get("queue_prefiltered", 0) >= 1
+
+    @pytest.mark.asyncio
+    async def test_first_interaction_bot_like_still_filtered(self, _redirect_paths, monkeypatch):
+        """Primera interaccion con texto clasificable como basura: el piso
+        rebajado no aplica (no abrir la puerta a bots)."""
+        monkeypatch.setenv("AGENT_MIN_REPLY_VALUE_SCORE", "0.4")
+        pb = _make_pb(max_comments_per_day=50, max_replies_per_cycle=5)
+        pb._get_own_post_ids = lambda: {"top-12345678-aaaa-bbbb-cccc-ddddeeeeffff"}
+        post = {"id": "top-12345678-aaaa-bbbb-cccc-ddddeeeeffff", "comment_count": 10}
+        pb.api._request = MagicMock(return_value={"status": 200, "data": {"posts": [post]}})
+        pb.api.fetch_my_posts = MagicMock(return_value=[])
+        pb.api.fetch_post_comments.return_value = [
+            {"id": "c1", "author": {"name": "spammy_newcomer"},
+             "content": "ok thanks", "text": "ok thanks"},
+        ]
+        pb.api.create_comment.return_value = {"success": True, "id": "new", "status": 201}
+        pb._classify_and_log_value = AsyncMock()
+
+        await pb._execute_own_post_replies()
+
+        pb.api.create_comment.assert_not_called()
+
+    def test_watchlist_cap_default_amplified(self):
+        """El techo por autor referente se amplio (3 -> 15) y sigue siendo
+        configurable por env."""
+        import os
+        os.environ.pop("AGENT_MAX_PER_WATCHLIST_AUTHOR_DAY", None)
+        pb = _make_pb()
+        assert pb._watchlist_max_per_author_day == 15, "techo ampliado por default"
+        os.environ["AGENT_MAX_PER_WATCHLIST_AUTHOR_DAY"] = "8"
+        pb2 = _make_pb()
+        assert pb2._watchlist_max_per_author_day == 8
+        os.environ.pop("AGENT_MAX_PER_WATCHLIST_AUTHOR_DAY", None)
+
+
 # ── Cap por post chequeado ANTES de generar ──────────────────────
 
 class TestPostCapPrefilter:

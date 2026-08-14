@@ -750,7 +750,7 @@ class PhaseB:
         self._watchlist_authors: Set[str] = self._load_watchlist_authors()
         set_watchlist_authors(self._watchlist_authors)
         self._watchlist_max_per_author_day: int = int(os.getenv(
-            "AGENT_MAX_PER_WATCHLIST_AUTHOR_DAY", "3"))
+            "AGENT_MAX_PER_WATCHLIST_AUTHOR_DAY", "15"))
         self._watchlist_author_count_today: Dict[str, int] = {}
         self._watchlist_count_path: Path = BASE_DIR / "data" / "watchlist_count_today.json"
         self._load_watchlist_count()
@@ -3154,14 +3154,38 @@ class PhaseB:
                         total_candidates += 1
                         author_key = (self._get_author_name(c) or "").strip().lower()
                         is_wl = self._is_watchlist_author(author_key)
-                        has_history = False
+                        interaction_count = 0
                         if author_key:
                             try:
                                 from services.interlocutors import get_interaction_count
-                                has_history = get_interaction_count(author_key) >= 3
+                                interaction_count = get_interaction_count(author_key)
                             except Exception:
                                 pass
-                        floor = min_value if not (is_wl or has_history) else min_value * 0.5
+                        has_history = interaction_count >= 3
+                        if is_wl or has_history:
+                            floor = min_value * 0.5
+                        elif interaction_count == 0:
+                            # ── Enganche temprano: primera interaccion de un
+                            # autor sin historial → piso rebajado UNA vez (el
+                            # momento del enganche no debe morir en el umbral).
+                            # Solo si el comentario no es basura clasificable.
+                            try:
+                                _skip_triage, _triage_reason = _triage_comment_value(
+                                    (c.get("content") or c.get("text") or ""),
+                                    tech_keywords=self._TECH_KEYWORDS,
+                                    author=c.get("author"),
+                                )
+                            except Exception:
+                                _skip_triage, _triage_reason = True, "triage_error"
+                            if _skip_triage:
+                                floor = min_value
+                                queue_filter_counts["first_interaction_triage"] = (
+                                    queue_filter_counts.get("first_interaction_triage", 0) + 1
+                                )
+                            else:
+                                floor = min_value * 0.5
+                        else:
+                            floor = min_value
                         if value_score < floor:
                             queue_filter_counts["below_value"] = queue_filter_counts.get("below_value", 0) + 1
                             continue

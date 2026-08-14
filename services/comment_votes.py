@@ -134,13 +134,23 @@ def refresh_comment_votes(api: Any, post_id: str, comment_ids: List[str],
 
 def refresh_all_comment_votes(api: Any, agent_comment_ids: Dict[str, List[str]],
                               max_posts: int = 20, path: Optional[Path] = None) -> Dict[str, int]:
-    """Actualiza los upvotes de nuestros comentarios en todos los posts con
-    agent comments (acotado a los primeros max_posts). Devuelve {posts, updated}."""
-    posts = [(pid, cids) for pid, cids in (agent_comment_ids or {}).items() if cids]
+    """Actualiza los upvotes de nuestros comentarios registrados en el ledger.
+
+    Prioriza los posts que tienen comentarios en el ledger (no los primeros N
+    del dedup store, que pueden ser posts viejos sin entradas). Devuelve
+    {posts, updated}."""
+    records = _load(path)
+    by_post: Dict[str, List[str]] = {}
+    for cid, rec in records.items():
+        pid = str(rec.get("post_id") or "")
+        if pid:
+            by_post.setdefault(pid, []).append(str(cid))
+    if not by_post:
+        return {"posts": 0, "updated": 0}
     updated = 0
-    for post_id, comment_ids in posts[:max_posts]:
-        updated += refresh_comment_votes(api, str(post_id), comment_ids, path=path)
-    return {"posts": min(len(posts), max_posts), "updated": updated}
+    for pid, cids in list(by_post.items())[:max_posts]:
+        updated += refresh_comment_votes(api, pid, cids, path=path)
+    return {"posts": min(len(by_post), max_posts), "updated": updated}
 
 
 def votes_summary(path: Optional[Path] = None) -> Dict[str, Any]:
