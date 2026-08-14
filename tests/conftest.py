@@ -155,6 +155,14 @@ def _isolate_runtime_state(tmp_path, monkeypatch):
         tmp_path / "injection_attempts.jsonl",
     )
 
+    # ── Comment votes ledger (services/comment_votes.py) ──
+    # Sin redirect, los tests que publican comentarios escriben en el
+    # data/comment_votes.jsonl REAL (contaminando la medicion de retorno).
+    monkeypatch.setattr(
+        "services.comment_votes._VOTES_PATH",
+        tmp_path / "comment_votes.jsonl",
+    )
+
     # ── DedupStore SQLite (services/dedup_store.py) — GLOBAL isolation ──
     # Causa raíz de la contaminación del store real: cualquier test que
     # construyera PhaseB() (→ DedupStore()) sin un fixture puntual escribía en

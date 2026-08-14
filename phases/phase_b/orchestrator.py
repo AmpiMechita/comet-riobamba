@@ -1359,15 +1359,26 @@ class PhaseB:
                 outbox_failed = count_outbox_by_status("failed")
             except Exception:
                 outbox_failed = 0
+            # ── Retorno por comentario: refresh de upvotes del ledger ──
+            try:
+                from services.comment_votes import refresh_all_comment_votes, votes_summary
+                refresh_all_comment_votes(self.api, self._agent_comment_ids)
+                _votes = votes_summary()
+            except Exception as e:
+                logger.debug("Phase B: comment_votes refresh failed: %s", e)
+                _votes = {"total": 0, "with_votes": 0, "total_upvotes": 0, "by_score": {}}
             logger.info(
                 "Phase B: cycle summary — own-post replies=%s, thread follow-ups=%s, "
                 "feed replies=%s, upvotes=%s, follows=%s, semantic_candidates=%s, "
                 "claim-check failures=%s, total=%s, watchlist_inbound_today=%s, "
-                "outbox_failed=%s, queue_prefiltered=%s, abstained=%s",
+                "outbox_failed=%s, queue_prefiltered=%s, abstained=%s, "
+                "comment votes=%s (comentarios con votos=%s, por-score=%s)",
                 own_count, followup_count, feed_count, self._upvotes_this_cycle,
                 self._follows_this_cycle, semantic_count, self._stats.get("claim_check_failed", 0), total,
                 inbound_wl, outbox_failed, self._stats.get("queue_prefiltered", 0),
                 self._stats.get("abstained", 0),
+                _votes.get("total_upvotes", 0), _votes.get("with_votes", 0),
+                _votes.get("by_score", {}),
             )
             span.set("feed_replies", feed_count)
             span.set("own_replies", own_count)
@@ -1795,6 +1806,15 @@ class PhaseB:
                     # Sintesis post-concesion publicada: la proxima concesion cierra.
                     if _followup_conceded:
                         self._concession_answered.add(post_id)
+                    # ── Ledger de retorno del follow-up ──
+                    try:
+                        from services.comment_votes import record_published_comment
+                        record_published_comment(
+                            post_id, str(followup_comment_id or ""),
+                            compute_dual_score(followup_text)["research_value_score"],
+                        )
+                    except Exception as e:
+                        logger.debug("Phase B: comment_votes record failed (followup): %s", e)
                     self.incr_comments_today()
                     followups_done = self._increment_followups_count(post_id)
                     cycle_count += 1
@@ -3704,6 +3724,16 @@ class PhaseB:
                 # conceder, el hilo se cierra (no se sigue discutiendo).
                 if _synthesis_mode:
                     self._concession_answered.add(post_id)
+                # ── Ledger de retorno: registrar el comentario publicado con
+                # su score de valor para medir upvotes por comentario ──
+                try:
+                    from services.comment_votes import record_published_comment
+                    record_published_comment(
+                        post_id, str(own_comment_id or ""),
+                        compute_dual_score(reply_text)["research_value_score"],
+                    )
+                except Exception as e:
+                    logger.debug("Phase B: comment_votes record failed: %s", e)
                 # ── Ledger: respuesta (segundo registro del comentario) ──
                 from services import interlocutors as _il
                 _il.record_interaction(
