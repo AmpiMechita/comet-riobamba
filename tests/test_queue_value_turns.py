@@ -245,13 +245,12 @@ class TestQueueValueThreshold:
 
         pb.api.create_comment.assert_not_called()
 
-    def test_watchlist_cap_default_amplified(self):
-        """El techo por autor referente se amplio (3 -> 15) y sigue siendo
-        configurable por env."""
+    def test_watchlist_cap_default_is_three(self):
+        """El freno anti-reply-guy vuelve a 3 al dia (configurable por env)."""
         import os
         os.environ.pop("AGENT_MAX_PER_WATCHLIST_AUTHOR_DAY", None)
         pb = _make_pb()
-        assert pb._watchlist_max_per_author_day == 15, "techo ampliado por default"
+        assert pb._watchlist_max_per_author_day == 3, "default 3"
         os.environ["AGENT_MAX_PER_WATCHLIST_AUTHOR_DAY"] = "8"
         pb2 = _make_pb()
         assert pb2._watchlist_max_per_author_day == 8

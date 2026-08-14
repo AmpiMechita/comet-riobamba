@@ -138,9 +138,9 @@ async def test_same_comment_not_answered_twice_durable_dedup():
 
 @pytest.mark.asyncio
 async def test_depth_over_max_is_not_followed():
-    """Profundidad >= MAX_CONVERSATION_DEPTH (ahora 8) → no se sigue el hilo.
-    Cadena de profundidad 3 ya NO es limite con libre albedrío; se construye
-    una cadena profunda (8+) para verificar el corte real."""
+    """Profundidad >= MAX_CONVERSATION_DEPTH (ahora 8) → no se sigue el hilo
+    cuando el turno NO es una pregunta directa (sin '?'). Las preguntas
+    directas se responden siempre, incluso en hilos profundos."""
     from phases.phase_b.constants import MAX_CONVERSATION_DEPTH
     pb = _make_pb()
     pb._commented_post_ids = {POST: datetime.now().isoformat()}
@@ -154,7 +154,8 @@ async def test_depth_over_max_is_not_followed():
         prev = cid
     chain.append({"id": "ours-deep", "parent_id": prev, "author": {"name": AGENT},
                   "content": "our deep comment", "text": "our deep comment"})
-    chain.append(_reply_to("ours-deep", "reply-deep"))
+    chain.append(_reply_to("ours-deep", "reply-deep",
+                           content="The gate stays closed after recovery in my setup"))
     pb._agent_comment_ids = {POST: ["ours-deep"]}
     pb.api.fetch_post_comments.return_value = chain
 
@@ -162,6 +163,33 @@ async def test_depth_over_max_is_not_followed():
 
     assert results == []
     pb.api.create_comment.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_direct_question_in_deep_thread_is_answered():
+    """Una pregunta directa ('?') en un hilo profundo NO se deja sin responder:
+    se responde aunque el limite de turnos este vencido."""
+    from phases.phase_b.constants import MAX_CONVERSATION_DEPTH
+    pb = _make_pb()
+    pb._commented_post_ids = {POST: datetime.now().isoformat()}
+    chain = []
+    prev = None
+    for i in range(MAX_CONVERSATION_DEPTH):
+        cid = f"c{i}"
+        chain.append({"id": cid, "parent_id": prev, "author": {"name": "u"},
+                      "content": f"l{i}", "text": f"l{i}"})
+        prev = cid
+    chain.append({"id": "ours-deep", "parent_id": prev, "author": {"name": AGENT},
+                  "content": "our deep comment", "text": "our deep comment"})
+    chain.append(_reply_to("ours-deep", "reply-deep-q",
+                           content="Does the gate stay closed after recovery?"))
+    pb._agent_comment_ids = {POST: ["ours-deep"]}
+    pb.api.fetch_post_comments.return_value = chain
+
+    results = await pb._execute_thread_followups(remaining_cycle_slots=4)
+
+    assert len(results) == 1, "la pregunta directa se responde pese a la profundidad"
+    pb.api.create_comment.assert_called_once()
 
 
 @pytest.mark.asyncio

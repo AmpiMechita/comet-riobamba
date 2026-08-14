@@ -750,7 +750,7 @@ class PhaseB:
         self._watchlist_authors: Set[str] = self._load_watchlist_authors()
         set_watchlist_authors(self._watchlist_authors)
         self._watchlist_max_per_author_day: int = int(os.getenv(
-            "AGENT_MAX_PER_WATCHLIST_AUTHOR_DAY", "15"))
+            "AGENT_MAX_PER_WATCHLIST_AUTHOR_DAY", "3"))
         self._watchlist_author_count_today: Dict[str, int] = {}
         self._watchlist_count_path: Path = BASE_DIR / "data" / "watchlist_count_today.json"
         self._load_watchlist_count()
@@ -1671,20 +1671,28 @@ class PhaseB:
                     # Base 4; se extiende a 8 para watchlist/interlocutores con
                     # pregunta abierta + aporte nuevo; se corta antes si el
                     # hilo repite. El motivo queda en el log.
-                    depth = self._compute_thread_depth(reply_comment, comments)
-                    _author_key = (reply_author or "").strip().lower()
-                    _limit, _close_reason = self._thread_depth_limit(
-                        reply_comment, comments, _author_key,
-                        self._is_watchlist_author(_author_key),
-                    )
-                    if depth >= _limit:
+                    # NUNCA cerrar un hilo con pregunta directa a COMET sin
+                    # responderla (mention @comet o pregunta en post propio).
+                    _c_text = (reply_comment.get("content") or reply_comment.get("text") or "")
+                    _is_direct_q = PhaseB._is_direct_question(_c_text)
+                    if _is_direct_q:
                         logger.info(
-                            "Phase B: thread closed: %s (post %s, comment %s, depth %s/%s)",
-                            _close_reason or "tope", post_id, reply_id, depth, _limit,
+                            "Phase B: thread close: answered_direct_q (post %s, comment %s) — pregunta directa, se responde en vez de cerrar",
+                            post_id, reply_id,
                         )
-                        if _close_reason:
-                            close_thread(post_id)
-                        continue
+                    else:
+                        depth = self._compute_thread_depth(reply_comment, comments)
+                        _author_key = (reply_author or "").strip().lower()
+                        _limit, _close_reason = self._thread_depth_limit(
+                            reply_comment, comments, _author_key,
+                            self._is_watchlist_author(_author_key),
+                        )
+                        if depth >= _limit:
+                            await self._close_thread_decision(
+                                post_id, reply_comment, comments, reply_author,
+                                _close_reason or "tope",
+                            )
+                            continue
 
                     # ── Triage de calidad + bonus de interlocutor ──
                     skip_triage, triage_reason = _triage_comment_value(
@@ -1704,8 +1712,8 @@ class PhaseB:
                     _followup_conceded = PhaseB._is_concession(reply_text)
                     if _followup_conceded:
                         if post_id in self._concession_answered:
-                            logger.info("Phase B: thread closed: interlocutor conceded (post %s)", post_id)
                             close_thread(post_id)
+                            logger.info("Phase B: thread close: let_stand (post %s, interlocutor conceded de nuevo)", post_id)
                             continue
                         _followup_synthesis = True
                     else:
@@ -1757,6 +1765,13 @@ class PhaseB:
                             "Phase B: skip follow-up — too short or truncated (len=%d).",
                             len(followup_text.strip()),
                         )
+                        continue
+
+                    # Sintesis de concesion sin insight unificador (CLOSE): no
+                    # publicar — el ultimo punto queda parado.
+                    if _followup_synthesis and followup_text.strip().upper().startswith("CLOSE"):
+                        close_thread(post_id)
+                        logger.info("Phase B: thread close: let_stand (post %s, sin sintesis genuina)", post_id)
                         continue
 
                     # ── Publicar ENHEBRADO: parent = comentario que nos respondió ──
@@ -2685,6 +2700,127 @@ class PhaseB:
             return 8, None
         return base, "sin pregunta"
 
+    async def _close_thread_decision(self, post_id: str, reply_comment: Dict,
+                                     comments: List[Dict], author: str,
+                                     close_reason: str) -> str:
+        """Fin natural del hilo: un cierre de sintesis SOLO si hay una idea que
+        unifica; si no, let_stand — no se publica nada y el ultimo punto queda
+        parado. Nunca wrap-ups del tipo 'great discussion/thanks'.
+
+        Devuelve el motivo real del cierre: 'synthesized' | 'let_stand'."""
+        thread_history = self._build_thread_history(reply_comment, comments)
+        cur = (reply_comment.get("content") or reply_comment.get("text") or "").strip()
+        close_prompt = (
+            f"Thread summary:\n{thread_history[-1500:]}\n\n"
+            f"Last message: {cur[:600]}\n\n"
+            "Close only if you can add a unifying insight neither side stated. "
+            "Otherwise output CLOSE."
+        )
+        try:
+            raw = await self.llm.generate(
+                tier="flash", prompt=close_prompt,
+                system_prompt=(
+                    "You are a sharp engineer ending a debate. No wrap-ups, no "
+                    "thanks, no summaries. Output CLOSE or one dense closing "
+                    "insight (80-200 chars)."
+                ),
+                max_tokens=250, temperature=0.4,
+            )
+        except Exception as e:
+            logger.debug("Phase B: cierre con sintesis fallo (%s) -> let_stand", e)
+            raw = ""
+        closing = (raw or "").strip()
+
+        def _let_stand(log_reason: str) -> str:
+            close_thread(post_id)
+            logger.info("Phase B: thread close: let_stand (post %s, %s)", post_id, log_reason)
+            return "let_stand"
+
+        if not closing or closing.upper().startswith("CLOSE") or len(closing) < 60:
+            return _let_stand(f"motivo={close_reason}, sin sintesis genuina")
+        closing_lower = closing.lower()
+        if any(w in closing_lower for w in (
+            "great discussion", "thanks for", "thank you", "good chat", "great chat",
+        )):
+            return _let_stand("wrap-up descartado")
+        _ctx = f"{thread_history} {cur}"
+        if text_has_unverifiable_historical_claim(closing, _ctx):
+            return _let_stand("cierre con cita historica no verificable")
+        if text_has_fabricated_measurement(closing):
+            return _let_stand("cierre fabricado")
+        try:
+            resp = self._safe_publish_comment(
+                post_id=str(post_id),
+                content=closing,
+                parent_comment_id=str(reply_comment.get("id") or ""),
+                is_followup=True,
+            )
+            success = bool(resp.get("success")) if isinstance(resp, dict) else bool(getattr(resp, "success", False))
+            if success:
+                self.incr_comments_today()
+                logger.info("Phase B: thread close: synthesized (post %s)", post_id)
+                return "synthesized"
+        except Exception as e:
+            logger.debug("Phase B: publicacion de sintesis fallo (%s)", e)
+        return _let_stand("publicacion de sintesis fallo")
+
+    async def _critique_quality_draft(self, reply: str, source_text: str) -> Tuple[str, str]:
+        """Borrador + revision para replies de ALTA exposicion (tier_quality).
+
+        UNA llamada de critica (flash, no classify: el 3B falla el 75% del
+        JSON) contra la rubrica: responde al punto especifico? agrega algo
+        nuevo? sin cita historica no verificable? sin repetir lo ya dicho?
+        Si la critica encuentra un problema -> UNA revision que lo corrige.
+        Si la revision queda peor (corta/vacia) se conserva el borrador.
+        Devuelve (texto_final, log)."""
+        if not reply or not reply.strip():
+            return reply, "draft kept (vacio)"
+        rubric = (
+            "You are a sharp editorial critic for a senior engineer's reply. "
+            "Evaluate: (1) does it answer the specific point raised? "
+            "(2) does it add something NEW, not paraphrase the other side? "
+            "(3) no unverifiable dated third-party incidents? "
+            "(4) no repetition of what was already said in the thread?\n"
+            "If the draft is solid, reply OK. If not, reply with the single "
+            "most important problem to fix (one sentence)."
+        )
+        try:
+            verdict = await self.llm.generate(
+                tier="flash",
+                prompt=f"REPLY DRAFT:\n{reply}\n\nSOURCE:\n{source_text[:800]}",
+                system_prompt=rubric,
+                max_tokens=150, temperature=0.1,
+            )
+        except Exception as e:
+            logger.debug("Phase B: critica quality fallo (%s) -> draft kept", e)
+            return reply, "draft kept (critica fallo)"
+        verdict_text = (verdict or "").strip()
+        if not verdict_text or verdict_text.upper().startswith("OK") or len(verdict_text) < 10:
+            return reply, "draft kept (critica aprueba)"
+        low = verdict_text.lower()
+        if any(k in low for k in ("no problem", "solid", "looks good", "well written", "no issues")):
+            return reply, "draft kept (critica aprueba)"
+        try:
+            revised = await self.llm.generate(
+                tier="flash",
+                prompt=(
+                    f"Rewrite the draft fixing exactly this: {verdict_text[:300]}\n\n"
+                    f"ORIGINAL DRAFT:\n{reply}\n\n"
+                    "Return only the revised reply, same voice, no preamble."
+                ),
+                system_prompt=(
+                    "You are a senior systems engineer. Fix the draft, keep the "
+                    "voice, do not soften it, do not add thanks or wrap-up."
+                ),
+                max_tokens=300, temperature=0.4,
+            )
+        except Exception:
+            revised = ""
+        revised_text = (revised or "").strip()
+        if not revised_text or len(revised_text) < max(30, len(reply) // 2):
+            return reply, f"draft kept (revision peor: {verdict_text[:80]})"
+        return revised_text, f"draft revised ({verdict_text[:80]})"
+
     async def _generate_reply_bestof(self, user_prompt: str, system_prompt: str,
                                      title: str, body: str, tier: str = "flash") -> str:
         """Best-of-2: genera 2 borradores y conserva el de mayor _score_reply_draft.
@@ -2991,6 +3127,13 @@ class PhaseB:
                         _bad_year, post.get("id"),
                     )
                     return "", None
+
+                # ── Borrador + revision SOLO en replies de alta exposicion
+                # (tier_quality = watchlist/referentes). El volumen general NO
+                # pasa por critica: duplicaria el costo para ~4% de upvotes. ──
+                if tier == "quality":
+                    reply, _quality_log = await self._critique_quality_draft(reply, f"{title} {body}")
+                    logger.info("Phase B: quality reply: %s (post %s)", _quality_log, post.get("id"))
 
                 # ── Historical examples gate: block if repeated example ──
                 is_repeat, blocked_examples = is_example_recently_used(reply)
@@ -3668,8 +3811,8 @@ class PhaseB:
             _synthesis_mode = False
             if _is_concession:
                 if post_id in self._concession_answered:
-                    logger.info("Phase B: thread closed: interlocutor conceded (post %s)", post_id)
                     close_thread(post_id)
+                    logger.info("Phase B: thread close: let_stand (post %s, interlocutor conceded de nuevo)", post_id)
                     return {"post_id": post_id, "comment_id": comment_id, "status": "closed_concession"}
                 # Primera concesion: como maximo UNA respuesta, de SINTESIS
                 # (el prompt recibe la directiva; no se agrega otra correccion).
@@ -3698,6 +3841,14 @@ class PhaseB:
                 logger.info("Phase B: own-post reply ABSTAIN (comment %s)", comment_id)
                 span.set("success", False)
                 return {"post_id": post_id, "comment_id": comment_id, "abstained": True}
+
+            # Sintesis post-concesion sin insight unificador (CLOSE): no
+            # publicar — el ultimo punto queda parado.
+            if _synthesis_mode and (reply_text or "").strip().upper().startswith("CLOSE"):
+                close_thread(post_id)
+                logger.info("Phase B: thread close: let_stand (post %s, sin sintesis genuina)", post_id)
+                span.set("success", False)
+                return {"post_id": post_id, "comment_id": comment_id, "status": "closed_concession"}
 
             if not reply_text:
                 span.set("success", False)
@@ -3902,6 +4053,16 @@ class PhaseB:
                 return True
         text = (comment.get("content") or comment.get("text") or "").lower()
         return any(marker in text for marker in cls._DELETED_CONTENT_MARKERS)
+
+    @staticmethod
+    def _is_direct_question(text: str) -> bool:
+        """Pregunta dirigida a COMET: mencion a @comet o pregunta ('?') en un
+        post propio. Se usa para priorizar y para no cerrar hilos con
+        preguntas pendientes."""
+        if not text:
+            return False
+        low = text.lower()
+        return "@comet" in low or "?" in low
 
     @staticmethod
     def _is_concession(text: str) -> bool:
@@ -4172,12 +4333,13 @@ class PhaseB:
             if injection_lines:
                 user_prompt = user_prompt + "\n\n" + "\n\n".join(injection_lines)
 
-            # ── Sintesis post-concesion: el otro ya acepto, no corregir de nuevo ──
+            # ── Sintesis post-concesion: el otro ya acepto, no corregir de nuevo.
+            # Cierre solo si hay insight que unifica; si no, CLOSE (let_stand). ──
             if concession_synthesis:
                 user_prompt = user_prompt + (
-                    "\n\nThey agreed. Do not add another correction. Either "
-                    "close with the shared conclusion or add one genuinely new "
-                    "element."
+                    "\n\nThey agreed. Do not add another correction. Close only "
+                    "if you can add a unifying insight neither side stated. "
+                    "Otherwise output CLOSE."
                 )
 
             system_prompt = (
@@ -4232,6 +4394,14 @@ class PhaseB:
                         _bad_year, author,
                     )
                     return ""
+
+                # ── Borrador + revision SOLO en replies de alta exposicion
+                # (tier_quality = watchlist/referentes) ──
+                if tier == "quality":
+                    reply, _quality_log = await self._critique_quality_draft(
+                        reply, f"{comment_text} {thread_history}"
+                    )
+                    logger.info("Phase B: quality reply: %s (author=%s)", _quality_log, author)
 
                 # ── Historical examples gate: block if repeated example ──
                 is_repeat, blocked_examples = is_example_recently_used(reply)
