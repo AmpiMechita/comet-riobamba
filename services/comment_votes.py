@@ -59,8 +59,10 @@ def _save(records: Dict[str, Dict[str, Any]], path: Optional[Path] = None) -> No
 
 
 def record_published_comment(post_id: str, comment_id: str, value_score: float,
-                             path: Optional[Path] = None) -> bool:
-    """Registra un comentario propio publicado con su score de valor (0 si falla)."""
+                             reason: str = "", path: Optional[Path] = None) -> bool:
+    """Registra un comentario propio publicado con su score de valor y el
+    motivo por el que entro a la cola (watchlist/historial/primera_interaccion/
+    valor). Con eso se mide QUE canal produce retorno y cual es ruido."""
     if not comment_id:
         return False
     records = _load(path)
@@ -72,6 +74,7 @@ def record_published_comment(post_id: str, comment_id: str, value_score: float,
         "post_id": str(post_id or ""),
         "date": datetime.now(timezone.utc).date().isoformat(),
         "value_score": round(float(value_score or 0.0), 3),
+        "reason": reason or "valor",
         "upvotes": None,
         "checked_at": None,
     }

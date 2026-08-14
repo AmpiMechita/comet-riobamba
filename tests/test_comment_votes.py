@@ -36,6 +36,16 @@ class TestCommentVotesLedger:
         assert record_published_comment("post-1", "", 0.5, path=path) is False
         assert not path.exists()
 
+    def test_record_with_reason(self, tmp_path):
+        path = tmp_path / "comment_votes.jsonl"
+        record_published_comment("post-1", "c-1", 0.3, reason="primera_interaccion", path=path)
+        rec = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+        assert rec["reason"] == "primera_interaccion"
+        # default
+        record_published_comment("post-2", "c-2", 0.9, path=path)
+        rec2 = json.loads(path.read_text(encoding="utf-8").splitlines()[1])
+        assert rec2["reason"] == "valor"
+
     def test_refresh_reads_upvotes_from_api(self, tmp_path):
         path = tmp_path / "comment_votes.jsonl"
         record_published_comment("post-1", "c-1", 0.72, path=path)

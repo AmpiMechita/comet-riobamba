@@ -1817,6 +1817,7 @@ class PhaseB:
                         record_published_comment(
                             post_id, str(followup_comment_id or ""),
                             compute_dual_score(followup_text)["research_value_score"],
+                            reason=self._comment_entry_reason(reply_author),
                         )
                     except Exception as e:
                         logger.debug("Phase B: comment_votes record failed (followup): %s", e)
@@ -3754,12 +3755,14 @@ class PhaseB:
                 if _synthesis_mode:
                     self._concession_answered.add(post_id)
                 # ── Ledger de retorno: registrar el comentario publicado con
-                # su score de valor para medir upvotes por comentario ──
+                # su score de valor y el motivo de entrada para medir que
+                # canal produce upvotes ──
                 try:
                     from services.comment_votes import record_published_comment
                     record_published_comment(
                         post_id, str(own_comment_id or ""),
                         compute_dual_score(reply_text)["research_value_score"],
+                        reason=self._comment_entry_reason(author),
                     )
                 except Exception as e:
                     logger.debug("Phase B: comment_votes record failed: %s", e)
@@ -3996,6 +3999,25 @@ class PhaseB:
         self._watchlist_author_count_today[author_key] = current + 1
         self._save_watchlist_count()
         return True
+
+    def _comment_entry_reason(self, author: str) -> str:
+        """Motivo por el que un comentario entro a la cola (para el ledger de
+        retorno): watchlist / historial (>=3) / primera_interaccion / valor."""
+        author_key = (author or "").strip().lower()
+        if self._is_watchlist_author(author_key):
+            return "watchlist"
+        count = 0
+        if author_key:
+            try:
+                from services.interlocutors import get_interaction_count
+                count = get_interaction_count(author_key)
+            except Exception:
+                pass
+        if count >= 3:
+            return "historial"
+        if count == 0:
+            return "primera_interaccion"
+        return "valor"
 
     def _is_watchlist_author(self, author: str) -> bool:
         return author.strip().lower() in self._watchlist_authors
