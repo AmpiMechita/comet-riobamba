@@ -912,6 +912,16 @@ class PhaseB:
         from .scoring import _reply_has_guardrail_template
         return _reply_has_guardrail_template(reply_text)
 
+    @staticmethod
+    def _reply_has_ungrounded_named_entity(reply_text: str, source_text: str) -> bool:
+        from .scoring import _reply_has_ungrounded_named_entity
+        return _reply_has_ungrounded_named_entity(reply_text, source_text)
+
+    @staticmethod
+    def _reply_has_secondhand_causal_attribution(reply_text: str) -> bool:
+        from .scoring import _reply_has_secondhand_causal_attribution
+        return _reply_has_secondhand_causal_attribution(reply_text)
+
     def _reply_theme_fingerprint(self, reply_text: str, source_text: str = "") -> str:
         text = f"{reply_text or ''} {source_text or ''}".lower()
         theme_terms = [
@@ -1306,6 +1316,11 @@ class PhaseB:
                     shadow_hits.append("ungrounded_numeric_specificity")
                 if not self._reply_mentions_source_terms(reply_text, source_text):
                     shadow_hits.append("weak_source_anchor")
+                # Fase 2 (integridad #3): shadow-only, sin penalty aun.
+                if self._reply_has_ungrounded_named_entity(reply_text, source_text):
+                    shadow_hits.append("ungrounded_named_entity")
+                if self._reply_has_secondhand_causal_attribution(reply_text):
+                    shadow_hits.append("secondhand_causal_attribution")
                 if shadow_hits:
                     # No polucionar el shadow log con entradas de dry-run/test
                     # (post-1, p-test, o IDs que parecen simulados) — las 1584

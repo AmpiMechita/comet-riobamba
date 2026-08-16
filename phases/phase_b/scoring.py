@@ -632,3 +632,67 @@ def _reply_has_guardrail_template(reply_text: str) -> bool:
         r"one\s+simple\s+rule\s+is",
     ]
     return any(re.search(p, text) for p in guardrail_patterns)
+
+
+# ── Gate de integridad #3 (Fase 2 — SHADOW ONLY) ────────────────
+# Detectores de fabricacion de 3ra persona y atribucion causal de segunda
+# mano. NO bloquean: loguean en shadow_quality_checks.jsonl via
+# _score_reply_draft para calibrar antes de activar como penalty.
+# Calibrados con los ejemplos del audit (16/8/2026):
+#   A "Project Mercury at AMD"           -> ungrounded_named_entity
+#   B "echoes ... early genetic programming ... inadvertently reward"
+#                                       -> secondhand_causal_attribution
+#   C mecanismo concreto / D analogia estructural -> limpias.
+
+# Multiword capitalized: evita el falso positivo del inicio de frase
+# ("The", "This", "Version-aware") que no forman par propio-capitalizado.
+_ENTITY_RE = re.compile(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b")
+
+# Marcadores de relato de segunda mano (campo historico / experiencias de
+# terceros sin evidencia propia).
+_ATTRIBUTION_CONTEXT_RE = re.compile(
+    r"\b(echoes|reminiscent\s+of|harkens?\s+back|challenges\s+faced|"
+    r"in\s+(?:the\s+)?early|back\s+in\s+the)\b",
+    re.IGNORECASE,
+)
+# Marcadores de causalidad no intencional: solo flaggean si ademas hay una
+# entidad propia sin grounding (un "inadvertently" sin sujeto especifico
+# es coloquial, no fabricacion).
+_ATTRIBUTION_UNINTENTIONAL_RE = re.compile(
+    r"\b(inadvertently|unintentionally|accidentally)\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_named_entities(text: str) -> set:
+    """Entidades multiword capitalizadas, normalizadas a lowercase.
+
+    Solo pares de >= 2 palabras capitalizadas (evita inicios de frase y
+    sustantivos comunes)."""
+    if not text:
+        return set()
+    return {
+        " ".join(m.split()).lower()
+        for m in _ENTITY_RE.findall(text)
+    }
+
+
+def _reply_has_ungrounded_named_entity(reply_text: str, source_text: str) -> bool:
+    """True si el reply menciona una entidad propia (proyecto/empresa/
+    producto) que NO aparece en la fuente — fabricacion de 3ra persona."""
+    entities = _extract_named_entities(reply_text or "")
+    if not entities:
+        return False
+    source_norm = re.sub(r"\s+", " ", (source_text or "").lower())
+    return any(e not in source_norm for e in entities)
+
+
+def _reply_has_secondhand_causal_attribution(reply_text: str) -> bool:
+    """True si el reply relata experiencias/causalidad de terceros como
+    hecho (relato de segunda mano sin evidencia propia)."""
+    text = reply_text or ""
+    if _ATTRIBUTION_CONTEXT_RE.search(text):
+        return True
+    if _ATTRIBUTION_UNINTENTIONAL_RE.search(text):
+        return bool(_extract_named_entities(text))
+    return False
