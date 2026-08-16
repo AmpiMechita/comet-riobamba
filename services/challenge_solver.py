@@ -1,11 +1,32 @@
 ﻿import ast
+import json
 import re
+from datetime import datetime, timezone
+from pathlib import Path
 from services.captcha_math_solver import solve_captcha_math
 # -*- coding: utf-8 -*-
 import logging
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger("services.challenge_solver")
+
+# Corpus de challenges reales: append atomico (una linea por intento) + fail-open.
+_CAPTCHA_SAMPLES_PATH = Path(__file__).resolve().parents[1] / "data" / "captcha_samples.jsonl"
+
+
+def _append_captcha_sample(sample: Dict[str, Any]) -> None:
+    """Append atomico y fail-open de una muestra al corpus de challenges.
+
+    Un error de escritura/logging NUNCA debe romper el flujo de verificacion:
+    cualquier excepcion se traga aqui dentro.
+    """
+    try:
+        _CAPTCHA_SAMPLES_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(_CAPTCHA_SAMPLES_PATH, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(sample, ensure_ascii=False) + "\n")
+            fh.flush()
+    except Exception as _e:
+        logger.debug("ChallengeSolver: no se pudo registrar sample de captcha (fail-open): %s", _e)
 
 class ChallengeSolver:
     @staticmethod
@@ -81,6 +102,7 @@ class ChallengeSolver:
                 system_prompt="You output ONLY the expression. No text, no explanation."
             )
             expr = response.strip()
+            self._last_extracted_expr = expr
             logger.info(f"ChallengeSolver: LLM extrajo expresion '{expr}'")
             result = self._safe_eval_expression(expr)
             if result is not None:
@@ -96,32 +118,63 @@ class ChallengeSolver:
     def __init__(self, moltbook_client, model_cascade=None):
         self.moltbook = moltbook_client
         self.model_cascade = model_cascade
+        self._last_native_expr = None
+        self._last_extracted_expr = None
+        self._last_llm_raw = None
 
     async def solve_and_verify(self, challenge_data: Dict[str, Any]) -> bool:
         verification_code = challenge_data.get("verification_code")
         challenge_text = challenge_data.get("challenge_text", "")
 
+        def _record_sample(extracted_expr, answer_calc, submit_status, server_message, verified, result=None) -> None:
+            """Corpus de challenges: append atomico + fail-open. Nunca rompe el flujo."""
+            content_id = challenge_data.get("content_id") or challenge_data.get("post_id")
+            raw = (result or {}).get("raw") if isinstance(result, dict) else None
+            if not content_id and isinstance(raw, dict):
+                content_id = raw.get("content_id")
+            _append_captcha_sample({
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "content_id": content_id,
+                "challenge_text": repr(challenge_text),
+                "extracted_expr": extracted_expr,
+                "answer_calc": answer_calc,
+                "submit_status": submit_status,
+                "server_message": server_message,
+                "verified": bool(verified),
+            })
+
         if not challenge_text or not verification_code:
             logger.warning("ChallengeSolver: datos incompletos.")
             return False
 
+        self._last_native_expr = None
+        self._last_extracted_expr = None
+        self._last_llm_raw = None
+
         logger.info("ChallengeSolver: Intentando resolver CAPTCHA nativamente con Python...")
         answer = solve_captcha_math(challenge_text) or self._solve_native_math(challenge_text)
+        extracted_expr = self._last_native_expr if answer else None
 
         if not answer:
             logger.info("ChallengeSolver: Nativo fallo. Intentando extraer expresion con LLM y evaluar localmente...")
             answer = await self._extract_and_eval_with_llm(challenge_text)
+            if answer:
+                extracted_expr = self._last_extracted_expr
 
         if not answer:
             logger.info("ChallengeSolver: LLM+eval fallo. Intentando con LLM como respaldo...")
             answer = await self._solve_with_llm(challenge_text)
+            if answer:
+                extracted_expr = self._last_llm_raw
 
         if not answer:
             logger.warning("ChallengeSolver: No se pudo resolver el challenge (ni Python ni LLM).")
+            _record_sample(extracted_expr, None, None, None, False)
             return False
 
         if not re.match(r"^-?\d+\.\d{2}$", str(answer).strip()):
             logger.warning(f"ChallengeSolver: respuesta no confiable o con formato invalido: {answer!r}")
+            _record_sample(extracted_expr, str(answer), None, None, False)
             return False
 
         answer = str(answer).strip()
@@ -132,12 +185,26 @@ class ChallengeSolver:
 
             if result and (result.get("success") or result.get("status") in (200, 201, 204)):
                 logger.info("✅ ChallengeSolver: CAPTCHA resuelto y verificacion exitosa!")
+                _record_sample(extracted_expr, answer, result.get("status"), None, True, result)
                 return True
             else:
                 logger.warning(f"ChallengeSolver: Moltbook rechazo la respuesta. Result: {result}")
+                raw = result.get("raw") if isinstance(result, dict) else None
+                server_message = None
+                if isinstance(raw, dict):
+                    server_message = raw.get("message") or raw.get("hint") or raw.get("error")
+                _record_sample(
+                    extracted_expr,
+                    answer,
+                    result.get("status") if isinstance(result, dict) else None,
+                    server_message,
+                    False,
+                    result,
+                )
                 return False
         except Exception as e:
             logger.error(f"ChallengeSolver: Error al enviar respuesta a Moltbook: {e}")
+            _record_sample(extracted_expr, answer, None, str(e), False)
             return False
 
     def _solve_native_math(self, text: str) -> Optional[str]:
@@ -156,6 +223,7 @@ class ChallengeSolver:
             num1 = float(match.group(1))
             op = match.group(2)
             num2 = float(match.group(3))
+            self._last_native_expr = match.group(0)
 
             result = None
             if op == '+':
@@ -217,6 +285,7 @@ class ChallengeSolver:
                 prompt=prompt,
                 system_prompt="You output ONLY numbers. No text. Reply with just the decimal number."
             )
+            self._last_llm_raw = response
             numbers = re.findall(r"-?\d+\.?\d*", response)
             if numbers:
                 try:
