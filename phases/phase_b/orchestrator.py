@@ -155,7 +155,7 @@ from services.conversation_state import (
 )
 from services.roadmap import load_roadmap
 from services.used_examples_tracker import is_example_recently_used, mark_examples_used
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer, ENGLISH_STOP_WORDS
 from sklearn.metrics.pairwise import cosine_similarity
 from utils.phase_utils import phase_error_boundary, validate_phase_deps
 
@@ -410,6 +410,46 @@ def is_semantic_duplicate_reply(candidate: str, previous: str, threshold: float 
     tfidf = TfidfVectorizer().fit_transform([candidate, previous])
     sim = cosine_similarity(tfidf[0:1], tfidf[1:2])[0][0]
     return sim >= threshold
+
+
+# ── Same-thread paraphrase detection (guard de repeticion por post) ──
+# El TF-IDF con threshold 0.80 dejaba pasar parafrasis reales del mismo
+# argumento (0.23-0.27 de similitud medidas en el hilo de bytes). Senal
+# combinada, scoped al MISMO post: TF-IDF >= 0.45 O Dice de content-words
+# >= 0.30. Calibrada con las frases reales del hilo (Dice 0.43-0.55) y con
+# replies legitimamente distintas del mismo thread (Dice ~0, no bloquea).
+_SAME_THREAD_TFIDF_THRESHOLD = 0.45
+_SAME_THREAD_DICE_THRESHOLD = 0.30
+
+
+def _content_words(text: str) -> set:
+    clean = re.sub(r"[^\w\sáéíóúñü]", " ", text.lower())
+    return {
+        w for w in clean.split()
+        if len(w) > 1 and w not in ENGLISH_STOP_WORDS
+    }
+
+
+def is_same_thread_duplicate_reply(candidate: str, previous: str) -> bool:
+    """True si candidate repite el argumento de previous (mismo post).
+
+    Señal combinada: similitud TF-IDF baja (0.45) O solapamiento Dice de
+    palabras de contenido (0.30). Solo debe usarse comparando contra los
+    comentarios previos del AGENTE en el MISMO post (guard de repeticion),
+    no cross-post."""
+    if not candidate or not previous:
+        return False
+    if is_semantic_duplicate_reply(candidate, previous, threshold=_SAME_THREAD_TFIDF_THRESHOLD):
+        return True
+    a = _content_words(candidate)
+    b = _content_words(previous)
+    if not a or not b:
+        return False
+    inter = len(a & b)
+    if inter == 0:
+        return False
+    dice = 2 * inter / (len(a) + len(b))
+    return dice >= _SAME_THREAD_DICE_THRESHOLD
 
 
 # ── Cross-cycle reply history (anti-duplicate) ─────────────────
@@ -1228,6 +1268,18 @@ class PhaseB:
                         post_id, new_total,
                     )
 
+                # ── Persistir TEXTO del comentario publicado (guard de
+                # repeticion por post: comparar contra TODOS los previos,
+                # cross-ciclo/restart). Fail-open. ──
+                try:
+                    _pub_cid = result.get("id") if isinstance(result, dict) else None
+                    if _pub_cid:
+                        self._dedup.set_agent_comment_text(
+                            str(post_id), str(_pub_cid), content,
+                        )
+                except Exception:
+                    pass
+
             return result
         except Exception as e:
             logger.error("Phase B: create_comment error for post %s: %s", post_id, e)
@@ -1485,10 +1537,10 @@ class PhaseB:
 
         # ── Check similarity against all prior comments ──
         for prior in all_prior:
-            if is_semantic_duplicate_reply(reply_text, prior, threshold=0.80):
+            if is_same_thread_duplicate_reply(reply_text, prior):
                 logger.info(
-                    "Phase B: semantic duplicate (%.2f) against prior in thread %s (attempt %s)",
-                    0.80, post_id, attempt,
+                    "Phase B: same-thread duplicate vs prior in thread %s (attempt %s)",
+                    post_id, attempt,
                 )
                 if attempt >= 2:
                     send_event("phase_b_duplicate_skip", {
@@ -1520,11 +1572,11 @@ class PhaseB:
                         return None
                     # Re-check against all prior
                     still_dup = any(
-                        is_semantic_duplicate_reply(new_reply, p, threshold=0.80)
+                        is_same_thread_duplicate_reply(new_reply, p)
                         for p in all_prior
                     )
                     if still_dup:
-                        logger.info("Phase B: re-generated reply still semantic duplicate in thread %s", post_id)
+                        logger.info("Phase B: re-generated reply still same-thread duplicate in thread %s", post_id)
                         send_event("phase_b_duplicate_skip", {
                             "post_id": post_id,
                             "reason": "semantic_duplicate_after_regeneration",

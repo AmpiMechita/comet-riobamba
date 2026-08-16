@@ -316,6 +316,52 @@ class DedupStore:
                 [(k, json.dumps(v, ensure_ascii=False)) for k, v in data.items() if _is_valid_post_key(k)],
             )
 
+    # ── Agent comment TEXTS (contenido por post, cross-ciclo/restart) ──
+    # Solo IDs no alcanzan: el guard de repeticion por post necesita el
+    # CONTENIDO de nuestros comentarios previos en el thread para comparar
+    # parafrasis del mismo argumento. Namespace preservado en cleanup
+    # (misma politica que agent_comment).
+
+    def set_agent_comment_text(self, post_id: str, comment_id: str, text: str) -> None:
+        """Persiste el TEXTO de un comentario propio (fail-open: un error de
+        escritura jamas debe romper el flujo de publicacion)."""
+        if not _is_valid_post_key(post_id) or not comment_id or not text:
+            return
+        try:
+            self._add("agent_comment_text", f"{post_id}:{comment_id}", text)
+        except Exception as e:
+            logger.warning("dedup_store: set_agent_comment_text failed: %s", e)
+
+    def get_agent_comment_text(self, post_id: str, comment_id: str) -> Optional[str]:
+        """Texto del comentario propio (post_id, comment_id) o None."""
+        if not comment_id:
+            return None
+        try:
+            with self._get_conn() as conn:
+                row = conn.execute(
+                    "SELECT value FROM dedup_store "
+                    "WHERE namespace='agent_comment_text' AND key=?",
+                    (f"{post_id}:{comment_id}",),
+                ).fetchone()
+                return row[0] if row else None
+        except Exception as e:
+            logger.warning("dedup_store: get_agent_comment_text failed: %s", e)
+            return None
+
+    def get_agent_comment_texts_for_post(self, post_id: str) -> List[str]:
+        """Todos los textos de comentarios propios en un post (orden de insercion)."""
+        try:
+            with self._get_conn() as conn:
+                rows = conn.execute(
+                    "SELECT value FROM dedup_store "
+                    "WHERE namespace='agent_comment_text' AND key LIKE ?",
+                    (f"{post_id}:%",),
+                ).fetchall()
+                return [r[0] for r in rows if r[0]]
+        except Exception as e:
+            logger.warning("dedup_store: get_agent_comment_texts_for_post failed: %s", e)
+            return []
+
     # ── Thread authors ───────────────────────────────────────
 
     def mark_thread_author(self, author_id: str) -> None:
