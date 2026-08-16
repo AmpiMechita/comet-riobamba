@@ -33,6 +33,16 @@ _REPLIED_COMMENT_IDS_PATH = BASE_DIR / "data" / "replied_comment_ids_durable.jso
 # anti-dogpile top-level counter above: a live threaded conversation is NOT a
 # dogpile, so it draws from its own cap (AGENT_MAX_FOLLOWUPS_PER_POST).
 _FOLLOWUPS_PER_POST_PATH = BASE_DIR / "data" / "followups_per_post.json"
+# Techo TOTAL por post-raiz: backstop duro que acota el TOTAL de replies del
+# agente en un post (top-level + follow-ups + own-post sumados). Independiente
+# de los contadores de forma (que siguen siendo sub-caps). Overridable por env
+# TOTAL_REPLIES_PER_POST_PATH (patron captcha) para aislar tests.
+_TOTAL_REPLIES_PER_POST_PATH = Path(
+    os.environ.get(
+        "TOTAL_REPLIES_PER_POST_PATH",
+        str(BASE_DIR / "data" / "total_replies_per_post.json"),
+    )
+)
 # Comentarios cuyo padre fue borrado (404 "Parent comment not found" al
 # responder): determinista, NUNCA se podran publicar. Namespace separado del
 # dedup de respuestas para que la cola los descarte sin re-generar contenido.
@@ -114,6 +124,46 @@ def get_followups_cap() -> int:
         return int(os.getenv("AGENT_MAX_FOLLOWUPS_PER_POST", "3"))
     except (TypeError, ValueError):
         return 3
+
+
+def get_total_cap(is_own: bool) -> int:
+    """Techo TOTAL de replies del agente por post-raiz (env-only, NOT
+    auto-optimizable). Post ajeno: AGENT_MAX_TOTAL_REPLIES_PER_POST_FOREIGN
+    (default 6). Post propio: AGENT_MAX_TOTAL_REPLIES_PER_POST_OWN (default 20)."""
+    env_name = (
+        "AGENT_MAX_TOTAL_REPLIES_PER_POST_OWN"
+        if is_own
+        else "AGENT_MAX_TOTAL_REPLIES_PER_POST_FOREIGN"
+    )
+    default = 20 if is_own else 6
+    try:
+        return int(os.getenv(env_name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def get_total_replies_for_post(post_id: str, path: Optional[Path] = None) -> int:
+    """Contador TOTAL de replies del agente en un post (0 si no existe). Fail-open."""
+    path = path or _TOTAL_REPLIES_PER_POST_PATH
+    try:
+        return _load(path).get(str(post_id), 0)
+    except Exception as e:
+        logger.debug("reply_cap: total read failed for %s: %s", post_id, e)
+        return 0
+
+
+def increment_total_replies_for_post(post_id: str, path: Optional[Path] = None) -> int:
+    """Incrementa y persiste atomicamente el contador TOTAL. Monotonico."""
+    path = path or _TOTAL_REPLIES_PER_POST_PATH
+    try:
+        counts = _load(path)
+        key = str(post_id)
+        counts[key] = counts.get(key, 0) + 1
+        _save(counts, path)
+        return counts[key]
+    except Exception as e:
+        logger.warning("reply_cap: total increment failed for %s: %s", post_id, e)
+        return -1
 
 
 def get_followups_for_post(post_id: str, path: Optional[Path] = None) -> int:

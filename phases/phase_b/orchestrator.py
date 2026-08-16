@@ -761,6 +761,8 @@ class PhaseB:
         # ── Threaded follow-ups: per-post cap independiente del anti-dogpile ──
         self.max_followups_per_post = reply_cap.get_followups_cap()
         self._followups_per_post_path: Path = reply_cap._FOLLOWUPS_PER_POST_PATH
+        # ── Techo TOTAL por post-raiz (backstop anti-dogpile, todas las vias) ──
+        self._total_replies_per_post_path: Path = reply_cap._TOTAL_REPLIES_PER_POST_PATH
         self._last_comment_per_thread: Dict[str, str] = {}
         self._dedup = DedupStore()
         self._dedup.cleanup(older_than_hours=24)
@@ -1027,6 +1029,24 @@ class PhaseB:
         path = getattr(self, "_followups_per_post_path", None) or reply_cap._FOLLOWUPS_PER_POST_PATH
         return reply_cap.increment_followups_for_post(post_id, path=path)
 
+    def _get_total_replies_for_post(self, post_id: str) -> int:
+        """Contador TOTAL de replies del agente en un post (todas las vias)."""
+        path = getattr(self, "_total_replies_per_post_path", None) or reply_cap._TOTAL_REPLIES_PER_POST_PATH
+        return reply_cap.get_total_replies_for_post(post_id, path=path)
+
+    def _increment_total_replies_for_post(self, post_id: str) -> int:
+        """Incrementa y persiste el contador TOTAL (todas las vias). Monotonico."""
+        path = getattr(self, "_total_replies_per_post_path", None) or reply_cap._TOTAL_REPLIES_PER_POST_PATH
+        return reply_cap.increment_total_replies_for_post(post_id, path=path)
+
+    def _is_own_post_id(self, post_id: str) -> bool:
+        """True si el post es propio (registro durado). Fail-safe: cualquier
+        error de lectura => False (tratado como ajeno, cap mas estricto)."""
+        try:
+            return str(post_id) in self._get_own_post_ids()
+        except Exception:
+            return False
+
     def _reconcile_deleted_agent_comments(self, post_id: str) -> None:
         """Prune recorded agent comment IDs that no longer exist on the platform
         (HTTP 404). Deleted comments would otherwise count toward the per-post
@@ -1064,7 +1084,8 @@ class PhaseB:
 
 
     def _safe_publish_comment(self, post_id: str, content: str, parent_comment_id: Optional[str] = None,
-                              is_followup: bool = False, skip_anti_dogpile: bool = False) -> Optional[Dict]:
+                              is_followup: bool = False, skip_anti_dogpile: bool = False,
+                              is_own_post: bool = False) -> Optional[Dict]:
         """Publish a comment with safety checks. Returns result dict or None if blocked.
 
         is_followup=True marca una respuesta enhebrada dentro de una conversación
@@ -1076,7 +1097,14 @@ class PhaseB:
 
         skip_anti_dogpile=True (posts PROPIOS): el cap anti-dogpile previene
         apilar en posts ajenos. Responder comentarios en posts propios no es
-        dogpile; su limite es max_comments_per_post, verificado por el caller."""
+        dogpile; su limite es max_comments_per_post, verificado por el caller.
+
+        Techo TOTAL por post-raiz (backstop anti-dogpile): aplica a TODAS las
+        vias sin exencion — el TOTAL de replies del agente en un post (sumando
+        top-level + follow-ups + own-post) queda acotado por
+        AGENT_MAX_TOTAL_REPLIES_PER_POST_FOREIGN / _OWN. Propiedad del post:
+        skip_anti_dogpile o is_own_post implican propio; en follow-ups se
+        consulta el own_post_store; desconocido => FOREIGN (fail-safe)."""
         # v5.1: Quality gate — length (50-500) + banned openers only
         if not self._passes_quality_gate(content):
             text_len = len(content.strip())
@@ -1123,6 +1151,24 @@ class PhaseB:
                     post_id, content[:150],
                 )
                 return {"success": True, "id": "dry-run-simulated", "status": 201, "dry_run": True}
+
+            # ── Techo TOTAL por post-raiz (backstop, todas las vias) ──
+            # Acota el TOTAL de replies del agente en un post sumando
+            # top-level + follow-ups + own-post. Sin exenciones: ni
+            # is_followup ni skip_anti_dogpile lo bypassan. La propiedad
+            # del post decide el ceiling (foreign=6, own=20).
+            if len(post_id) > 10:
+                _is_own = bool(skip_anti_dogpile or is_own_post)
+                if not _is_own and is_followup:
+                    _is_own = self._is_own_post_id(post_id)
+                total = self._get_total_replies_for_post(post_id)
+                ceiling = reply_cap.get_total_cap(is_own=_is_own)
+                if total >= ceiling:
+                    logger.info(
+                        "total-cap: skip post %s (%d/%d, %s)",
+                        post_id, total, ceiling, "own" if _is_own else "foreign",
+                    )
+                    return None
 
             # ── Anti-dogpile: monotonic per-post cap (FEED + own-post) ──
             # Hard guardrail (env AGENT_MAX_REPLIES_PER_POST, default 3),
@@ -1172,6 +1218,14 @@ class PhaseB:
                     logger.info(
                         "anti-dogpile: post %s now at %d/%d",
                         post_id, new_count, self.max_replies_per_post,
+                    )
+
+                # ── Techo TOTAL: contar SIEMPRE (todas las vias, 2xx) ──
+                if len(post_id) > 10 and 200 <= status < 300:
+                    new_total = self._increment_total_replies_for_post(post_id)
+                    logger.info(
+                        "total-cap: post %s now at %d",
+                        post_id, new_total,
                     )
 
             return result

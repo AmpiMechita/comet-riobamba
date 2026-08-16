@@ -133,6 +133,15 @@ def _isolate_runtime_state(tmp_path, monkeypatch):
         tmp_path / "replied_comment_ids_durable.json",
     )
 
+    # ── Techo TOTAL por post-raiz (services/reply_cap.py) ──
+    # Sin esto, los tests que publican via _safe_publish_comment acumulan el
+    # contador TOTAL en el data/total_replies_per_post.json REAL y los caps
+    # (6 ajeno / 20 propio) bloquean publicaciones en tests posteriores.
+    monkeypatch.setattr(
+        "services.reply_cap._TOTAL_REPLIES_PER_POST_PATH",
+        tmp_path / "total_replies_per_post.json",
+    )
+
     # ── Unrepliable namespace (services/reply_cap.py) ──
     # Comentarios con padre borrado (404). Sin redirect, los tests escriben en
     # el data/unrepliable_comment_ids.json REAL.
