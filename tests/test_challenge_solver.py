@@ -5,6 +5,14 @@ from unittest.mock import MagicMock, AsyncMock, patch
 from services.challenge_solver import ChallengeSolver
 
 
+@pytest.fixture(autouse=True)
+def _isolate_captcha_samples(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "services.challenge_solver._CAPTCHA_SAMPLES_PATH",
+        tmp_path / "captcha_samples.jsonl",
+    )
+
+
 # ── Native math solving ──────────────────────────────────────────
 
 

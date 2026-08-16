@@ -1,5 +1,6 @@
 ﻿import ast
 import json
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,7 +12,11 @@ from typing import Any, Dict, Optional
 logger = logging.getLogger("services.challenge_solver")
 
 # Corpus de challenges reales: append atomico (una linea por intento) + fail-open.
-_CAPTCHA_SAMPLES_PATH = Path(__file__).resolve().parents[1] / "data" / "captcha_samples.jsonl"
+# Ruta overrideable via env CAPTCHA_SAMPLES_PATH (para aislar tests de produccion).
+_CAPTCHA_SAMPLES_PATH = Path(os.environ.get(
+    "CAPTCHA_SAMPLES_PATH",
+    str(Path(__file__).resolve().parents[1] / "data" / "captcha_samples.jsonl"),
+))
 
 
 def _append_captcha_sample(sample: Dict[str, Any]) -> None:
