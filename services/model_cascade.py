@@ -307,11 +307,30 @@ class ModelCascade:
                 )
             )
 
-        # ── tier_flash: DeepSeek V4 Flash (generación barata de Fase A no-hero) ──
-        # Espeja tier_fallback (mismo path DeepSeek: thinking=disabled + piso 2048
-        # tokens, ver _call_provider). Usado por el enrutado hero/no-hero de Fase A;
-        # Fase B no lo toca. Solo se registra si hay DEEPSEEK_API_KEY.
-        if deepseek_key:
+        # ── tier_flash: DeepSeek V4 Flash Free via OpenCode Zen (gratis) ──
+        # DeepSeek directo sin saldo devuelve HTTP 402 (Insufficient Balance)
+        # incluso para sus modelos "free". OpenCode Zen sirve
+        # deepseek-v4-flash-free a $0/M (quota free limitada: 429
+        # FreeUsageLimitError; el resto de la cascada cubre mientras tanto).
+        # Si ZEN_ENABLED + key de Zen disponibles, tier_flash se sirve por Zen;
+        # si no, cae al DeepSeek pagado (comportamiento historico).
+        _zen_enabled = os.getenv("ZEN_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+        zen_key = os.getenv("MODEL_TIER_ZEN_API_KEY", "").strip()
+        if _zen_enabled and zen_key:
+            self.providers.append(
+                ProviderConfig(
+                    name="tier_flash",
+                    url=os.getenv("MODEL_TIER_ZEN_URL", "https://opencode.ai/zen/v1/chat/completions"),
+                    model=os.getenv("MODEL_TIER_ZEN_MODEL", "deepseek-v4-flash-free"),
+                    api_key=zen_key,
+                    timeout=int(os.getenv("MODEL_TIER_ZEN_TIMEOUT_SECONDS", "90") or 90),
+                    max_retries=self.default_retries,
+                    cooldown_seconds=self.default_cooldown,
+                    failure_threshold=self.default_failure_threshold,
+                    paid=False,
+                )
+            )
+        elif deepseek_key:
             self.providers.append(
                 ProviderConfig(
                     name="tier_flash",
