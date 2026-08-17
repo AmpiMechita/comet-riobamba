@@ -43,10 +43,15 @@ AGENT = "COMET-RIOBAMBA"
 @pytest.fixture(autouse=True)
 def _iso(tmp_path, monkeypatch):
     """Aísla dedup store y contadores per-post a tmp (el conftest ya redirige
-    el dedup durable per-comment, el ledger de interlocutores y reply_history)."""
+    el dedup durable per-comment, el ledger de interlocutores y reply_history).
+    Redirige tambien conversation_state: sin esto, close_thread escribe el
+    data/conversations.json REAL y los posts de test quedan cerrados entre
+    corridas (y el guard is_thread_closed de los follow-ups los saltea)."""
     monkeypatch.setattr(ds.DedupStore, "_default_db_path", tmp_path / "comet_dedup.db")
     monkeypatch.setattr(rcap, "_REPLIES_PER_POST_PATH", tmp_path / "replies_per_post.json")
     monkeypatch.setattr(rcap, "_FOLLOWUPS_PER_POST_PATH", tmp_path / "followups_per_post.json")
+    import services.conversation_state as cs
+    monkeypatch.setattr(cs, "CONVERSATIONS_PATH", tmp_path / "conversations.json")
     yield
 
 

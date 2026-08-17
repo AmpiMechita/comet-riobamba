@@ -1662,6 +1662,9 @@ class PhaseB:
             cycle_count = 0
 
             # ── Solo posts ajenos comentados en las últimas 48 h ──
+            # Hilos CERRADOS se excluyen SIEMPRE: sin esto, la sintesis de
+            # cierre genera respuestas nuevas, refresca la ventana 48h y el
+            # hilo se vuelve a cerrar en cada ciclo (loop de sintesis).
             cutoff = datetime.now() - timedelta(hours=48)
             recent_post_ids: List[str] = []
             for pid, ts in self._commented_post_ids.items():
@@ -1672,6 +1675,8 @@ class PhaseB:
                 except (ValueError, TypeError):
                     ts_dt = None
                 if ts_dt is not None and ts_dt >= cutoff:
+                    if is_thread_closed(pid):
+                        continue  # hilo cerrado: nunca vuelve a follow-ups
                     recent_post_ids.append(pid)
 
             logger.info(
@@ -2486,7 +2491,7 @@ class PhaseB:
                         "Phase B: comentario publicado en post_id=%s title=%s... tier=%s author=%s watchlist=%s",
                         post_id,
                         str(post.get("title") or "")[:40],
-                        getattr(post, "_reply_tier", "flash"),
+                        (post.get("_reply_tier") if isinstance(post, dict) else getattr(post, "_reply_tier", "flash")) or "flash",
                         feed_author,
                         is_wl,
                     )
@@ -2829,6 +2834,12 @@ class PhaseB:
         parado. Nunca wrap-ups del tipo 'great discussion/thanks'.
 
         Devuelve el motivo real del cierre: 'synthesized' | 'let_stand'."""
+        # Guard anti-loop: si el hilo ya se cerro (con o sin sintesis), NO
+        # volver a decidir — el loop de sintesis publica un comentario nuevo,
+        # recibe respuestas y se re-cierra en cada ciclo.
+        if is_thread_closed(post_id):
+            logger.info("Phase B: thread close: let_stand (post %s, hilo ya cerrado)", post_id)
+            return "let_stand"
         thread_history = self._build_thread_history(reply_comment, comments)
         cur = (reply_comment.get("content") or reply_comment.get("text") or "").strip()
         close_prompt = (
