@@ -362,6 +362,81 @@ class TestSemanticSnippetRehydration:
         assert results[0].get("_rehydrated") is None
         pb.api.get_post.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_spam_post_rejected(self):
+        """Un post marcado is_spam se descarta en el camino semantic (por ahi
+        entro el post spam de 96 dias que recibio un comentario)."""
+        pb = self._pb()
+        pb.api.semantic_search.return_value = [
+            {"id": "p4", "content": "A normal body without markers.", "is_spam": True},
+        ]
+
+        results = await pb._fetch_semantic_search_posts()
+
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_spam_rehydrated_post_rejected(self):
+        """El snippet no trae campos del gate; el post rehidratado si: spam se
+        descarta DESPUES de la rehidratacion."""
+        pb = self._pb()
+        pb.api.semantic_search.return_value = [
+            {"id": "p5", "content": "⟦HL⟧spam snippet⟦/HL⟧ with markers"},
+        ]
+        pb.api.get_post.return_value = {
+            "id": "p5", "content": "Full body", "is_spam": True,
+            "created_at": "2026-08-15T12:00:00.000Z",
+        }
+
+        results = await pb._fetch_semantic_search_posts()
+
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_stale_post_rejected_in_semantic_path(self):
+        """Edad > 7 dias se descarta tambien en el camino semantic (el age gate
+        del feed no aplicaba ahi: por eso entro un post de 96 dias)."""
+        pb = self._pb()
+        pb.api.semantic_search.return_value = [
+            {"id": "p6", "content": "A normal body.", "created_at": "2026-05-13T12:00:00.000Z"},
+        ]
+
+        results = await pb._fetch_semantic_search_posts()
+
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_fresh_post_passes_semantic_path(self):
+        """Un post reciente sin spam sigue entrando por semantic search."""
+        pb = self._pb()
+        pb.api.semantic_search.return_value = [
+            {"id": "p7", "content": "A normal body.", "created_at": "2026-08-17T07:00:00.000Z"},
+        ]
+
+        results = await pb._fetch_semantic_search_posts()
+
+        assert len(results) == 1
+
+    @pytest.mark.asyncio
+    async def test_feed_spam_post_filtered_out(self):
+        """El feed normal tambien descarta posts marcados is_spam."""
+        pb = self._pb()
+        resp = MagicMock()
+        resp.success = True
+        resp.data = {"posts": [
+            {"id": "f1", "content": "spam post", "is_spam": True,
+             "created_at": "2026-08-17T07:00:00.000Z", "submolt": "m/general"},
+            {"id": "f2", "content": "normal post",
+             "created_at": "2026-08-17T07:00:00.000Z", "submolt": "m/general"},
+        ]}
+        pb.api.get_feed.return_value = resp
+        pb.api.get_feed.side_effect = [resp, resp]
+
+        results = pb._fetch_candidate_posts(limit=20)
+
+        ids = [p.get("id") for p in results]
+        assert ids == ["f2"], f"el post spam debe filtrarse, got {ids}"
+
 
 def tmp_watchlist():
     """Autor watchlist temporal (config/phase_b_strategy.yaml de prueba)."""

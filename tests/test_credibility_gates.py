@@ -130,6 +130,40 @@ class TestHistoricalClaimGate:
         assert result is not None and result.get("success") is True
         pb.api.create_comment.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_phase_b_claims_context_does_not_legitimize_historical_year(self):
+        """Anti auto-contaminacion: el claims_context es OUTPUT del propio
+        agente (sus claims pasados), no evidencia del interlocutor. Un reply
+        que cita '2016 dyn dns outage' se rechaza AUNQUE el claims tracker
+        contenga ese mismo claim (loop que permitio citar el incidente de
+        terceros 24 veces)."""
+        from unittest.mock import patch
+
+        from tests.test_queue_value_turns import _redirect_paths, _make_pb
+
+        pb = _make_pb()
+        with patch("phases.phase_b.orchestrator.ClaimsTracker") as mock_tracker_cls, \
+             patch("phases.phase_b.orchestrator._get_ein_context", return_value=""):
+            mock_tracker = mock_tracker_cls.return_value
+            mock_tracker.get_context_for_reply.return_value = (
+                "2016 dyn dns outage had the same shape: every resolver trusted "
+                "the same upstream feed, and the failure cascaded because every "
+                "layer validated against a single source of truth."
+            )
+            pb.llm.generate = AsyncMock(
+                return_value=(
+                    "The 2016 dyn dns outage had the same shape: every resolver "
+                    "trusted the same upstream feed, and the failure cascaded "
+                    "because each layer validated against a single source of truth."
+                )
+            )
+            result = await pb._post_own_reply(
+                "post-1", "comment-1", "user1", "do resolvers trust a single upstream feed?"
+            )
+
+        assert result is None, "el claims_context propio no puede legitimar una cita historica de terceros"
+        pb.api.create_comment.assert_not_called()
+
 
 # ── Concesion: sintesis una vez, luego cerrar ────────────────────
 

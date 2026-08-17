@@ -2670,10 +2670,16 @@ class PhaseB:
             blocked_count = 0
             allowlist_blocked_count = 0
             stale_count = 0
+            spam_count = 0
             now = datetime.now(timezone.utc)
             max_age_days = 7
             for p in posts:
                 if not isinstance(p, dict):
+                    continue
+                # ── Spam/deleted/locked gate: la plataforma ya los marco ──
+                if p.get("is_spam") or p.get("is_deleted") or p.get("is_locked"):
+                    spam_count += 1
+                    logger.info("Phase B: post %s REJECTED (spam/deleted/locked)", p.get("id"))
                     continue
                 # ── Age gate: reject posts older than 7 days ──
                 ts_raw = p.get("created_at") or p.get("createdAt") or p.get("timestamp") or ""
@@ -2709,8 +2715,8 @@ class PhaseB:
                 filtered.append(p)
 
             logger.info(
-                "Phase B: %s posts candidatos (total_feed=%s, blocked=%s, allowlist_rejected=%s, stale=%s).",
-                len(filtered), len(posts), blocked_count, allowlist_blocked_count, stale_count,
+                "Phase B: %s posts candidatos (total_feed=%s, blocked=%s, allowlist_rejected=%s, stale=%s, spam=%s).",
+                len(filtered), len(posts), blocked_count, allowlist_blocked_count, stale_count, spam_count,
             )
             return filtered
 
@@ -3243,11 +3249,12 @@ class PhaseB:
 
                 # ── Gate de citas historicas: un año fuera del contexto es un
                 # incidente de terceros con detalles no verificables ──
+                # El contexto valido es SOLO lo externo: el post del otro y la
+                # evidencia inyectada (EIN). El claims_context es OUTPUT del
+                # propio agente: usarlo como contexto auto-legitima sus citas
+                # pasadas (loop de auto-contaminacion: el claim '2016 Dyn' del
+                # tracker permitia volver a citar 2016 Dyn indefinidamente).
                 _hist_ctx = f"{title} {body}"
-                try:
-                    _hist_ctx += " " + str(_claims_context or "")
-                except Exception:
-                    pass
                 try:
                     _hist_ctx += " " + str(_ein_context or "")
                 except Exception:
@@ -4510,11 +4517,9 @@ class PhaseB:
                 # ── Gate de citas historicas: un año fuera del contexto (lo que
                 # el interlocutor menciono / el paper / el incidente propio) es
                 # un incidente de terceros con detalles no verificables ──
+                # (mismo criterio que el feed: el claims_context es output
+                # propio y NO auto-legitima citas pasadas)
                 _hist_ctx = f"{comment_text} {thread_history}"
-                try:
-                    _hist_ctx += " " + str(_claims_context or "")
-                except Exception:
-                    pass
                 try:
                     _hist_ctx += " " + str(_ein_context or "")
                 except Exception:
@@ -4628,6 +4633,8 @@ class PhaseB:
             results: List[Dict[str, Any]] = []
             rehydrated_count = 0
             discarded_count = 0
+            now = datetime.now(timezone.utc)
+            max_age_days = 7
 
             for query in queries:
                 try:
@@ -4641,6 +4648,25 @@ class PhaseB:
                     if not pid or pid in seen_ids:
                         continue
                     seen_ids.add(pid)
+
+                    # ── Spam/edad: mismo gate que el feed ──
+                    # (el post vía semantic_search/rehidratación NO pasaba por
+                    # _fetch_candidate_posts: por ahí entró el post spam de 96
+                    # días. El gate se aplica también a los rehidratados abajo.)
+                    if post.get("is_spam") or post.get("is_deleted") or post.get("is_locked"):
+                        logger.info("Phase B: semantic post %s REJECTED (spam/deleted/locked)", pid)
+                        continue
+                    _ts_raw = post.get("created_at") or post.get("createdAt") or post.get("timestamp") or ""
+                    if _ts_raw:
+                        try:
+                            _post_dt = datetime.fromisoformat(str(_ts_raw).replace("Z", "+00:00"))
+                            if _post_dt.tzinfo is None:
+                                _post_dt = _post_dt.replace(tzinfo=timezone.utc)
+                            if (now - _post_dt).total_seconds() / 86400.0 > max_age_days:
+                                logger.debug("Phase B: semantic post %s descartado: age > %d days", pid, max_age_days)
+                                continue
+                        except Exception:
+                            pass
 
                     raw_sub = post.get("submolt") or post.get("community") or ""
                     from .candidate_scorer import _extract_submolt_name
@@ -4664,6 +4690,22 @@ class PhaseB:
                         except Exception:
                             full = None
                         if full:
+                            # El snippet no traía los campos del gate; el post
+                            # rehidratado sí → aplicar spam/edad sobre `full`.
+                            if full.get("is_spam") or full.get("is_deleted") or full.get("is_locked"):
+                                logger.info("Phase B: snippet rehidratado %s REJECTED (spam/deleted/locked)", pid)
+                                continue
+                            _ts_raw2 = full.get("created_at") or full.get("createdAt") or full.get("timestamp") or ""
+                            if _ts_raw2:
+                                try:
+                                    _post_dt2 = datetime.fromisoformat(str(_ts_raw2).replace("Z", "+00:00"))
+                                    if _post_dt2.tzinfo is None:
+                                        _post_dt2 = _post_dt2.replace(tzinfo=timezone.utc)
+                                    if (now - _post_dt2).total_seconds() / 86400.0 > max_age_days:
+                                        logger.debug("Phase B: snippet rehidratado %s descartado: age > %d days", pid, max_age_days)
+                                        continue
+                                except Exception:
+                                    pass
                             full["_search_query"] = query
                             full["_rehydrated"] = True
                             results.append(full)
