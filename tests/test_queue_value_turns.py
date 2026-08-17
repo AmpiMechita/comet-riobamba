@@ -147,6 +147,9 @@ class TestQueueValueThreshold:
         ]
         pb.api.create_comment.return_value = {"success": True, "id": "new", "status": 201}
         pb._classify_and_log_value = AsyncMock()
+        # tier=quality (watchlist) exige evidence/metric en el gate; el draft del
+        # fixture no las tiene, se mockea el gate para aislar el umbral de valor.
+        pb._passes_quality_gate = MagicMock(side_effect=lambda text, require_evidence=False: True)
 
         await pb._execute_own_post_replies()
 

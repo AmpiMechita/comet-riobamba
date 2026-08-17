@@ -291,7 +291,7 @@ class TestPhaseBBestOfReply:
         ])
         pb._passes_quality_gate = MagicMock(return_value=True)
 
-        def _fake_score(reply_text, source_text, log_context=None):
+        def _fake_score(reply_text, source_text, log_context=None, block_ungrounded=False):
             return (60 if "BETA" in reply_text else 30, [])
 
         pb._score_reply_draft = MagicMock(side_effect=_fake_score)
@@ -319,7 +319,7 @@ class TestPhaseBBestOfReply:
         ])
         pb._passes_quality_gate = MagicMock(return_value=True)
         pb._score_reply_draft = MagicMock(
-            side_effect=lambda reply_text, source_text, log_context=None: (50, [])
+            side_effect=lambda reply_text, source_text, log_context=None, block_ungrounded=False: (50, [])
         )
 
         with patch("phases.phase_b.orchestrator.is_example_recently_used", return_value=(False, [])):
@@ -346,7 +346,7 @@ class TestPhaseBBestOfReply:
         ])
         pb._passes_quality_gate = MagicMock(return_value=True)
         pb._score_reply_draft = MagicMock(
-            side_effect=lambda reply_text, source_text, log_context=None: (50, [])
+            side_effect=lambda reply_text, source_text, log_context=None, block_ungrounded=False: (50, [])
         )
 
         with patch("phases.phase_b.orchestrator.is_example_recently_used", return_value=(False, [])):

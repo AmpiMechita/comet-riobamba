@@ -117,8 +117,9 @@ async def check_claim(
     """Check whether a reply draft addresses the post's central claim.
 
     Returns {"on_topic": bool, "reason": str, "score": float}.
-    On LLM failure: returns {"on_topic": True, "score": 1.0, "reason": "check skipped"}
-    – fail-open to avoid silent over-blocking.
+    On LLM failure: returns {"on_topic": False, "score": 0.0, "reason": "check skipped"}
+    – fail-CLOSED: un claim que no se pudo verificar NO se valida (un
+    fallo del LLM o JSON roto no debe dejar pasar el claim como on_topic).
     """
     prompt = (
         f"CENTRAL CLAIM:\n{claim.get('central_claim', '')}\n\n"
@@ -134,21 +135,21 @@ async def check_claim(
             temperature=0.1,
         )
         if not raw or not raw.strip():
-            logger.warning("Claim check: empty response, fail-open")
-            return {"on_topic": True, "score": 1.0, "reason": "check skipped (empty response)"}
+            logger.warning("Claim check: empty response, fail-closed")
+            return {"on_topic": False, "score": 0.0, "reason": "check skipped (empty response)"}
         cleaned = _strip_code_fences(raw)
         result = json.loads(cleaned)
         if not isinstance(result, dict):
-            logger.warning("Claim check: non-dict response %s, fail-open", result)
-            return {"on_topic": True, "score": 1.0, "reason": "check skipped (non-dict)"}
+            logger.warning("Claim check: non-dict response %s, fail-closed", result)
+            return {"on_topic": False, "score": 0.0, "reason": "check skipped (non-dict)"}
         return {
-            "on_topic": bool(result.get("on_topic", True)),
+            "on_topic": bool(result.get("on_topic", False)),
             "reason": str(result.get("reason", "")),
-            "score": float(result.get("score", 1.0)),
+            "score": float(result.get("score", 0.0)),
         }
     except json.JSONDecodeError:
-        logger.warning("Claim check: invalid JSON from LLM: %.200s, fail-open", raw)
-        return {"on_topic": True, "score": 1.0, "reason": "check skipped (invalid JSON)"}
+        logger.warning("Claim check: invalid JSON from LLM: %.200s, fail-closed", raw)
+        return {"on_topic": False, "score": 0.0, "reason": "check skipped (invalid JSON)"}
     except Exception as e:
-        logger.warning("Claim check LLM call failed: %s, fail-open", e)
-        return {"on_topic": True, "score": 1.0, "reason": f"check skipped ({e})"}
+        logger.warning("Claim check LLM call failed: %s, fail-closed", e)
+        return {"on_topic": False, "score": 0.0, "reason": f"check skipped ({e})"}

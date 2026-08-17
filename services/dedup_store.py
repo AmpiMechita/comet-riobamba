@@ -11,7 +11,7 @@ import logging
 import re
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
@@ -427,7 +427,11 @@ class DedupStore:
                               upvoted_post, followed_agent (permanent state).
         Returns the number of rows deleted.
         """
-        cutoff = (datetime.now() - timedelta(hours=older_than_hours)).isoformat()
+        # created_at se escribe con SQLite datetime('now') → "YYYY-MM-DD HH:MM:SS"
+        # en UTC. El cutoff debe usar el MISMO formato y zona, o la comparacion
+        # lexicografica falla: isoformat() ("T" + hora local) hacía que ' ' (0x20)
+        # < 'T' (0x54) borrara TODAS las filas del dia anterior en cada restart.
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=older_than_hours)).strftime("%Y-%m-%d %H:%M:%S")
         namespaces_to_clean = ("replied_comment", "topic_fingerprint", "thread_author")
         total_deleted = 0
         with self._get_conn() as conn:

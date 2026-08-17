@@ -29,7 +29,8 @@ from core.self_monitor import SelfMonitor
 from services.model_cascade import ModelCascade
 from services.moltbook_api_client import MoltbookAPIClient, is_parent_not_found_404
 from services.platform_awareness import PlatformAwareness
-from services.reply_cap import mark_unrepliable_comment
+from services.reply_cap import mark_unrepliable_comment, mark_replied_to_comment
+from services.dedup_store import DedupStore
 from services.telegram_client import create_telegram_client
 from services.deepseek_balance import (
     check_deepseek_balance, was_balance_sent_today,
@@ -490,6 +491,27 @@ class COMETRiobambaAgent:
                     published += 1
                     self.state.increment_comments_today()
                     mark_outbox(item["id"], "published")
+                    # ── C1: los paths de fallo encolan al outbox SIN marcar
+                    # ningún dedup. Sin estos marks, el próximo scan de Phase B
+                    # vuelve a ver el comentario/post como sin responder y
+                    # publica un DUPLICADO visible. Marcar aquí es el único
+                    # punto donde el outbox retry tiene éxito.
+                    try:
+                        _real_cid = ""
+                        if isinstance(result, dict):
+                            _real_cid = result.get("comment_id") or result.get("id") or ""
+                        _dedup = DedupStore()
+                        _dedup.set_commented_post(str(post_id))
+                        if _real_cid:
+                            _dedup.add_agent_comment(str(post_id), str(_real_cid))
+                        if parent_comment_id:
+                            mark_replied_to_comment(f"{post_id}:{parent_comment_id}")
+                        logger.info(
+                            "Comment outbox: dedup durable marcado post=%s parent=%s cid=%s",
+                            post_id, parent_comment_id or "-", _real_cid or "-",
+                        )
+                    except Exception as _e:
+                        logger.warning("Comment outbox: dedup mark fallo (no bloqueante): %s", _e)
                     logger.info("Comment outbox: comentario publicado en post %s (ID outbox: %s)", post_id, item.get("id"))
                 else:
                     # Clasificar el fallo igual que el outbox de posts (_retry_outbox):

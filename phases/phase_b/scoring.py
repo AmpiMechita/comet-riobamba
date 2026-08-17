@@ -602,7 +602,7 @@ def _reply_has_ungrounded_numeric_specificity(reply_text: str, source_text: str)
     source = (source_text or "").lower()
     numeric_pattern = re.compile(
         r"\b\d+(?:\.\d+)?\s*(?:ms|msec|s|sec|secs|seconds?|mins?|minutes?|%|percent|"
-        r"times?|count|counts|replies?|posts?|days?|hours?)\b"
+        r"times?|count|counts|replies?|posts?|days?|hours?)(?:\b|(?=\s|[.,;!?]|$))"
     )
     if not numeric_pattern.search(text):
         return False
@@ -613,6 +613,13 @@ def _reply_has_ungrounded_numeric_specificity(reply_text: str, source_text: str)
     grounding_token_patterns = [
         re.compile(rf"\b{re.escape(tok)}\b") for tok in grounding_tokens
     ]
+    # Grounding literal: si el numero (con su unidad) del reply aparece en la
+    # fuente, el reply lo cita del post y NO es fabricacion.
+    if any(
+        token.lower() in source
+        for token in (m.group(0) for m in numeric_pattern.finditer(text))
+    ):
+        return False
     return not any(
         gt.search(source) for gt in grounding_token_patterns
     ) and not any(

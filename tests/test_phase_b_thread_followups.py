@@ -438,6 +438,7 @@ async def test_followup_to_watchlist_author_uses_quality_tier():
     """Respuesta de un autor watchlist → generación con tier='quality'."""
     pb = _make_pb_capture_tier()
     pb._generate_own_post_reply = AsyncMock(return_value=_GOOD_FOLLOWUP)
+    pb._passes_quality_gate = MagicMock(side_effect=lambda text, require_evidence=False: True)
     pb.api.fetch_post_comments.return_value = [
         _our_top_level("ours-1"),
         {**_reply_to("ours-1", "reply-wl", author="referente1")},

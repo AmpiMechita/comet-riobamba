@@ -167,28 +167,29 @@ class TestCheckClaimModule:
         assert result["score"] == 0.2
 
     @pytest.mark.asyncio
-    async def test_empty_response_fails_open(self):
+    async def test_empty_response_fails_closed(self):
+        """Un claim que no se pudo evaluar NO se valida: fail-CLOSED."""
         llm = AsyncMock()
         llm.generate.return_value = ""
         result = await check_claim({"central_claim": "x", "reply_must_address": "y"}, "reply draft", llm)
-        assert result["on_topic"] is True
-        assert result["score"] == 1.0
+        assert result["on_topic"] is False
+        assert result["score"] == 0.0
 
     @pytest.mark.asyncio
-    async def test_malformed_json_fails_open(self):
+    async def test_malformed_json_fails_closed(self):
         llm = AsyncMock()
         llm.generate.return_value = "not json"
         result = await check_claim({"central_claim": "x", "reply_must_address": "y"}, "reply draft", llm)
-        assert result["on_topic"] is True
-        assert result["score"] == 1.0
+        assert result["on_topic"] is False
+        assert result["score"] == 0.0
 
     @pytest.mark.asyncio
-    async def test_llm_exception_fails_open(self):
+    async def test_llm_exception_fails_closed(self):
         llm = AsyncMock()
         llm.generate.side_effect = RuntimeError("LLM down")
         result = await check_claim({"central_claim": "x", "reply_must_address": "y"}, "reply draft", llm)
-        assert result["on_topic"] is True
-        assert result["score"] == 1.0
+        assert result["on_topic"] is False
+        assert result["score"] == 0.0
 
     @pytest.mark.asyncio
     async def test_check_with_fences_json(self):

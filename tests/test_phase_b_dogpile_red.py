@@ -24,6 +24,7 @@ from phases.phase_b import PhaseB
 from phases.phase_b.orchestrator import (
     is_semantic_duplicate_reply,
     is_near_duplicate_reply,
+    is_same_thread_duplicate_reply,
 )
 from phases.deps import PhaseBDeps
 
@@ -160,11 +161,12 @@ def test_own_post_total_cap_stops_at_twenty():
     print(f"[DIAG] total_replies={total_counter}, replies_per_post={pb._get_replies_per_post(POST)}")
 
 
-# ── Test B: dedup semantico vs parafrasis reales (xfail) ────────
+# ── Test B: dedup semantico vs parafrasis reales (guard same-thread) ──
 
 # Frases citadas por el operador desde el hilo de bytes (16/8/2026): el mismo
 # argumento ("el gate de versiones no arregla nada, solo lo mueve") con
-# vocabulario distinto.
+# vocabulario distinto. El TF-IDF puro (thr 0.72) las dejaba pasar (0.23-0.27);
+# el guard same-thread (TF-IDF 0.45 O Dice 0.30, commit ec56104) las atrapa.
 _BYTES_THREAD_PHRASES = [
     "Version-aware constraints don't solve the problem—they relocate it",
     "Version-aware constraints collapse into the same trap",
@@ -173,30 +175,31 @@ _BYTES_THREAD_PHRASES = [
 ]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="dedup por embeddings es fix aparte: el TF-IDF actual no atrapa parafrasis",
-)
-def test_paraphrase_dedup_misses_same_argument():
-    """Las parafrasis del hilo de bytes son el MISMO argumento y el dedup
-    semantico deberia marcarlas como duplicadas. Hoy no lo hace (xfail)."""
-    from sklearn.feature_extraction.text import TfidfVectorizer
-    from sklearn.metrics.pairwise import cosine_similarity
-
+def test_paraphrase_dedup_catches_same_argument():
+    """Las parafrasis del hilo de bytes son el MISMO argumento y el guard
+    same-thread (is_same_thread_duplicate_reply) debe marcarlas como
+    duplicadas — el TF-IDF puro no las atrapaba (de ahi el xfail previo)."""
     pairs = [(0, 1), (0, 2), (1, 2)]
-    tfidf = TfidfVectorizer().fit_transform(_BYTES_THREAD_PHRASES)
     misses = []
     for i, j in pairs:
-        sim = cosine_similarity(tfidf[i : i + 1], tfidf[j : j + 1])[0][0]
-        semantic = is_semantic_duplicate_reply(_BYTES_THREAD_PHRASES[i], _BYTES_THREAD_PHRASES[j])
-        near = is_near_duplicate_reply(_BYTES_THREAD_PHRASES[i], _BYTES_THREAD_PHRASES[j])
-        print(f"[DIAG] par ({i},{j}) tfidf_sim={sim:.3f} semantic={semantic} near_bigram={near}")
+        semantic = is_same_thread_duplicate_reply(_BYTES_THREAD_PHRASES[i], _BYTES_THREAD_PHRASES[j])
+        print(f"[DIAG] par ({i},{j}) same_thread={semantic}")
         print(f"       A: {_BYTES_THREAD_PHRASES[i]!r}")
         print(f"       B: {_BYTES_THREAD_PHRASES[j]!r}")
         if not semantic:
             misses.append((i, j))
 
     assert not misses, (
-        f"RED: is_semantic_duplicate_reply (TF-IDF, thr=0.72) NO detecto {len(misses)}/3 "
+        f"RED: is_same_thread_duplicate_reply NO detecto {len(misses)}/3 "
         f"pares de parafrasis del mismo argumento (hilo bytes): {misses}"
     )
+
+
+def test_paraphrase_dedup_allows_distinct_arguments():
+    """Contraste: replies legitimamente distintos del mismo thread NO deben
+    disparar el guard (sin falsos positivos que bloqueen conversaciones)."""
+    a = "Version-aware constraints don't solve the problem—they relocate it"
+    b = "The retry budget caps how many attempts the runtime makes per cycle"
+    c = "A token-bucket limiter smooths the request rate under backpressure"
+    assert is_same_thread_duplicate_reply(a, b) is False
+    assert is_same_thread_duplicate_reply(b, c) is False

@@ -451,9 +451,6 @@ class MoltbookAPIClient(PlatformClient):
                 post_id = data.get("id") or data.get("post_id") or data.get("postId")
 
         success = 200 <= status < 300
-        if success and data.get("verification_required") and not result.get("_verified"):
-            success = False
-            logger.warning("create_post: HTTP 200 but verification required and not confirmed")
 
         valid_id = isinstance(post_id, str) and len(post_id) > 0
         verified = not (data.get("verification_required") and not result.get("_verified"))
@@ -535,10 +532,12 @@ class MoltbookAPIClient(PlatformClient):
             if not comment_id:
                 comment_id = data.get("id") or data.get("comment_id") or data.get("commentId")
 
+        # C3: HTTP 2xx = el comentario FUE creado en el servidor. El challenge
+        # de verificación (verification_required) es anti-bot POSTERIOR a la
+        # creación: no confirmarlo no debe convertir el éxito en fallo, o el
+        # caller reintenta un 2xx y publica un DUPLICADO. La falta de
+        # verificación se registra solo en la telemetría (response_schema_ok).
         success = 200 <= status < 300
-        if success and data.get("verification_required") and not result.get("_verified"):
-            success = False
-            logger.warning("create_comment: HTTP 200 but verification required and not confirmed")
 
         # transport_ok = True because we got an HTTP response (no exception)
         # response_schema_ok uses stronger domain evidence than just bool(comment_id):

@@ -939,12 +939,18 @@ class PhaseB:
         return "|".join(theme_terms)
 
     @staticmethod
-    def _passes_quality_gate(text: str) -> bool:
-        """v5.1 quality gate: length + banned openers only. Score decides upstream.
+    def _passes_quality_gate(text: str, require_evidence: bool = False) -> bool:
+        """v5.1 quality gate: length + banned openers + (opcional) señales de
+        sustancia. Score decides upstream.
 
         The abstraction constraint (no company names / calendar years) and the
         math constraints are enforced structurally in the prompt, not via
         brittle regex here.
+
+        require_evidence=True (replies tier=quality a autores watchlist):
+        el reply debe aportar evidencia o métrica concreta — un comentario
+        sin señal de sustancia (evidence=false y metric=false) es ruido de
+        baja calidad y NO se publica.
         """
 
         if not text or not text.strip():
@@ -965,7 +971,7 @@ class PhaseB:
                 logger.debug("Phase B: quality gate failed — banned opener '%s'", opener)
                 return False
 
-        # ── Evidence/framework/metric signals: logged for diagnostics only, no longer block ──
+        # ── Evidence/framework/metric signals ──
         has_evidence = any(s in text_lower for s in [
             "measured", "observed", "in production", "data shows",
             "we deployed", "we saw", "we hit", "the result was",
@@ -975,6 +981,13 @@ class PhaseB:
             "design", "principle", "the approach", "strategy",
         ])
         has_metric = any(c.isdigit() for c in text)
+        if require_evidence and not has_evidence and not has_metric:
+            logger.info(
+                "Phase B: quality gate REJECTED (tier=quality sin señal de sustancia) "
+                "len=%d evidence=%s metric=%s preview=%s",
+                text_len, has_evidence, has_metric, text_stripped[:80],
+            )
+            return False
         logger.info("Phase B: quality gate signal check len=%d evidence=%s framework=%s metric=%s",
                     text_len, has_evidence, has_framework, has_metric)
         return True
@@ -1135,7 +1148,7 @@ class PhaseB:
 
     def _safe_publish_comment(self, post_id: str, content: str, parent_comment_id: Optional[str] = None,
                               is_followup: bool = False, skip_anti_dogpile: bool = False,
-                              is_own_post: bool = False) -> Optional[Dict]:
+                              is_own_post: bool = False, require_evidence: bool = False) -> Optional[Dict]:
         """Publish a comment with safety checks. Returns result dict or None if blocked.
 
         is_followup=True marca una respuesta enhebrada dentro de una conversación
@@ -1155,10 +1168,10 @@ class PhaseB:
         AGENT_MAX_TOTAL_REPLIES_PER_POST_FOREIGN / _OWN. Propiedad del post:
         skip_anti_dogpile o is_own_post implican propio; en follow-ups se
         consulta el own_post_store; desconocido => FOREIGN (fail-safe)."""
-        # v5.1: Quality gate — length (50-500) + banned openers only
-        if not self._passes_quality_gate(content):
+        # v5.1: Quality gate — length (50-500) + banned openers (+ sustancia si tier=quality)
+        if not self._passes_quality_gate(content, require_evidence=require_evidence):
             text_len = len(content.strip())
-            logger.warning("Phase B: quality gate REJECTED (length or banned opener). len=%d. Preview: %s",
+            logger.warning("Phase B: quality gate REJECTED (length, banned opener o falta de sustancia). len=%d. Preview: %s",
                            text_len, content[:80])
             return None
         # Prompt leak check
@@ -1295,60 +1308,66 @@ class PhaseB:
             logger.error("Phase B: create_comment error for post %s: %s", post_id, e)
             return None
 
-    def _score_reply_draft(self, reply_text: str, source_text: str, log_context: Optional[Dict[str, Any]] = None) -> tuple[int, List[str]]:
+    def _score_reply_draft(self, reply_text: str, source_text: str, log_context: Optional[Dict[str, Any]] = None,
+                           block_ungrounded: bool = False) -> tuple[int, List[str]]:
         # v5.1: Permissive scoring mode — base 50, all penalties zeroed for testing
         score = 50
         reasons: List[str] = []
 
-        # ── Shadow quality logging (non-blocking, diagnostics only) ──
-        # Runs the three disabled guardrail functions purely for observability.
-        # If ANY would have flagged the reply, a JSONL record is appended to
-        # data/shadow_quality_checks.jsonl so we can calibrate the penalties
-        # against real data before deciding to reactivate them in the gate.
-        # Wrapped in try/except — a shadow-log I/O failure must never affect
-        # the actual publication flow.
-        if log_context is not None:
+        # ── Shadow quality guards ──
+        # Deteccion SIEMPRE (barata); el log JSONL solo con log_context.
+        # Si ANY guardrail dispara, se registra en data/shadow_quality_checks.jsonl
+        # para calibrar; en modo block_ungrounded (tier=quality) los checks
+        # ungrounded_named_entity / ungrounded_numeric_specificity BLOQUEAN.
+        # Wrapped en try/except — un fallo aqui nunca debe afectar la publicacion.
+        shadow_hits: List[str] = []
+        try:
+            if self._reply_has_guardrail_template(reply_text):
+                shadow_hits.append("guardrail_template")
+            if self._reply_has_ungrounded_numeric_specificity(reply_text, source_text):
+                shadow_hits.append("ungrounded_numeric_specificity")
+            if not self._reply_mentions_source_terms(reply_text, source_text):
+                shadow_hits.append("weak_source_anchor")
+            if self._reply_has_ungrounded_named_entity(reply_text, source_text):
+                shadow_hits.append("ungrounded_named_entity")
+            if self._reply_has_secondhand_causal_attribution(reply_text):
+                shadow_hits.append("secondhand_causal_attribution")
+
+            # ── Blocking mode (tier=quality): entidades y numeros sin ancla
+            # en la fuente NO se publican en replies de alta exposicion. Los
+            # checks ya calibraron en shadow log (534 registros desde 14/7). ──
+            if block_ungrounded:
+                for _check in ("ungrounded_named_entity", "ungrounded_numeric_specificity"):
+                    if _check in shadow_hits:
+                        score = 0
+                        reasons.append(_check)
+        except Exception:
+            pass
+
+        if log_context is not None and shadow_hits:
             try:
-                shadow_hits = []
-                if self._reply_has_guardrail_template(reply_text):
-                    shadow_hits.append("guardrail_template")
-                if self._reply_has_ungrounded_numeric_specificity(reply_text, source_text):
-                    shadow_hits.append("ungrounded_numeric_specificity")
-                if not self._reply_mentions_source_terms(reply_text, source_text):
-                    shadow_hits.append("weak_source_anchor")
-                # Fase 2 (integridad #3): shadow-only, sin penalty aun.
-                if self._reply_has_ungrounded_named_entity(reply_text, source_text):
-                    shadow_hits.append("ungrounded_named_entity")
-                if self._reply_has_secondhand_causal_attribution(reply_text):
-                    shadow_hits.append("secondhand_causal_attribution")
-                if shadow_hits:
-                    # No polucionar el shadow log con entradas de dry-run/test
-                    # (post-1, p-test, o IDs que parecen simulados) — las 1584
-                    # entradas de prueba enmascaraban las 76 reales.
-                    _pid = str(log_context.get("post_id") or "")
-                    if not _pid or _pid.startswith("p-test") or _pid.startswith("post-1") \
-                            or "test" in _pid.lower() or _pid.endswith("-simulated"):
-                        pass  # skip synthetic records
-                    else:
-                        record = {
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                            "checks": shadow_hits,
-                            "reply_preview": reply_text[:300],
-                            "source_preview": source_text[:300],
-                        }
-                        if log_context.get("post_id"):
-                            record["post_id"] = str(log_context["post_id"])
-                        if log_context.get("comment_id"):
-                            record["comment_id"] = str(log_context["comment_id"])
-                        try:
-                            _sh = getattr(self, "_shadow_quality_log_path", None) or Path("data") / "shadow_quality_checks.jsonl"
-                            _sh.parent.mkdir(parents=True, exist_ok=True)
-                            with open(str(_sh), "a", encoding="utf-8") as _fh:
-                                _fh.write(json.dumps(record, ensure_ascii=False) + "\n")
-                        except Exception:
-                            pass  # never fail the real flow
+                # No polucionar el shadow log con entradas de dry-run/test
+                # (post-1, p-test, o IDs que parecen simulados) — las 1584
+                # entradas de prueba enmascaraban las 76 reales.
+                _pid = str(log_context.get("post_id") or "")
+                if _pid and not _pid.startswith("p-test") and not _pid.startswith("post-1") \
+                        and "test" not in _pid.lower() and not _pid.endswith("-simulated"):
+                    record = {
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "checks": shadow_hits,
+                        "reply_preview": reply_text[:300],
+                        "source_preview": source_text[:300],
+                    }
+                    if log_context.get("post_id"):
+                        record["post_id"] = str(log_context["post_id"])
+                    if log_context.get("comment_id"):
+                        record["comment_id"] = str(log_context["comment_id"])
+                    _sh = getattr(self, "_shadow_quality_log_path", None) or Path("data") / "shadow_quality_checks.jsonl"
+                    _sh.parent.mkdir(parents=True, exist_ok=True)
+                    with open(str(_sh), "a", encoding="utf-8") as _fh:
+                        _fh.write(json.dumps(record, ensure_ascii=False) + "\n")
             except Exception:
-                pass
+                pass  # never fail the real flow
 
         # ── Penalties (v5.2): reactivadas tras calibración con shadow log.
         #    ungrounded_numeric_specificity: números sin respaldo = deshonesto
@@ -1906,6 +1925,7 @@ class PhaseB:
                         content=followup_text,
                         parent_comment_id=str(reply_id),
                         is_followup=True,
+                        require_evidence=(followup_tier == "quality"),
                     )
                     if resp is None:
                         continue
@@ -2406,9 +2426,13 @@ class PhaseB:
                             tier=getattr(self, "_claim_checker_tier", "flash"),
                         )
                     except Exception:
+                        # Fail-CLOSED: si el claim checker no puede evaluar
+                        # (LLM caido, JSON truncado), el claim no queda validado
+                        # y el reply NO se publica. Antes era fail-open
+                        # (on_topic=True) y dejaba pasar claims no verificados.
                         check_result = {
-                            "on_topic": True, "score": 1.0,
-                            "reason": "check skipped (LLM error)",
+                            "on_topic": False, "score": 0.0,
+                            "reason": "check skipped (LLM error) — fail closed",
                         }
                     self._last_claim_check = check_result
                     on_topic = check_result.get("on_topic", False)
@@ -2428,7 +2452,8 @@ class PhaseB:
                             break
                         continue
 
-                resp = self._safe_publish_comment(post_id=str(post_id), content=reply_text)
+                resp = self._safe_publish_comment(post_id=str(post_id), content=reply_text,
+                                                  require_evidence=(reply_tier == "quality"))
                 if resp is None:
                     _llm_attempts += 1
                     if _llm_attempts >= _max_llm_attempts:
@@ -3281,7 +3306,8 @@ class PhaseB:
                     return "", None
 
                 score, reasons = self._score_reply_draft(reply, f"{title}\n{body}",
-                                                            log_context={"post_id": post.get("id")})
+                                                            log_context={"post_id": post.get("id")},
+                                                            block_ungrounded=(tier == "quality"))
                 if score < 10:
                     logger.warning(
                         "Phase B: feed reply REJECTED — score=%d reasons=%s preview=%s",
@@ -4010,6 +4036,7 @@ class PhaseB:
                 parent_comment_id=comment_id,
                 content=reply_text,
                 skip_anti_dogpile=True,
+                require_evidence=self._is_watchlist_author(author),
             )
             if result is None:
                 span.set("success", False)
@@ -4546,7 +4573,8 @@ class PhaseB:
                     logger.warning("Phase B: own-post reply BLOCKED — repeated historical examples: %s", ", ".join(blocked_examples))
                     return ""
 
-                score, reasons = self._score_reply_draft(reply, comment_text)
+                score, reasons = self._score_reply_draft(reply, comment_text,
+                                                         block_ungrounded=self._is_watchlist_author(author))
                 if score < 10:
                     logger.warning(
                         "Phase B: own-post reply REJECTED — score=%d reasons=%s preview=%s",
