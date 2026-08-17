@@ -67,7 +67,7 @@ from .constants import (
     MAX_CONVERSATION_DEPTH,
     _OWN_POST_REPLY_SCORE_LIMIT,
 )
-from .scoring import RelevanceDecision, _get_feed_min_score, text_has_fabricated_measurement, _triage_comment_value, set_watchlist_authors, _extract_author_name, text_has_unverifiable_historical_claim
+from .scoring import RelevanceDecision, _get_feed_min_score, text_has_fabricated_measurement, _triage_comment_value, set_watchlist_authors, _extract_author_name, text_has_unverifiable_historical_claim, text_exposes_figures, comment_off_topic
 from . import constants as _constants_mod
 
 
@@ -878,9 +878,10 @@ class PhaseB:
         comment: Dict[str, Any],
         limit_ok: bool = True,
         is_own_post_reply: bool = False,
+        post_text: str = "",
     ) -> RelevanceDecision:
         from .scoring import _decide_reply
-        return _decide_reply(PhaseB, comment, limit_ok, is_own_post_reply, tech_keywords=PhaseB._TECH_KEYWORDS)
+        return _decide_reply(PhaseB, comment, limit_ok, is_own_post_reply, tech_keywords=PhaseB._TECH_KEYWORDS, post_text=post_text)
 
     @staticmethod
     def _decide_reply_from_post(post_body: str, comments: Optional[List[Dict]] = None, *, post: Optional[Dict] = None) -> RelevanceDecision:
@@ -1812,10 +1813,11 @@ class PhaseB:
                         )
                         continue
 
-                    # ── Guard de profundidad: limite de turnos dinamico ──
-                    # Base 4; se extiende a 8 para watchlist/interlocutores con
-                    # pregunta abierta + aporte nuevo; se corta antes si el
-                    # hilo repite. El motivo queda en el log.
+                    # ── Guard de profundidad: limite de interacciones ──
+                    # Maximo 4 intercambios del agente (fijo, sin extension
+                    # por watchlist) — defender la teoria y cerrar el tema.
+                    # El hilo se corta antes si repite. El motivo queda en el
+                    # log.
                     # NUNCA cerrar un hilo con pregunta directa a COMET sin
                     # responderla (mention @comet o pregunta en post propio).
                     _c_text = (reply_comment.get("content") or reply_comment.get("text") or "")
@@ -1851,6 +1853,34 @@ class PhaseB:
                             "Phase B: skip follow-up a comentario %s (triage: %s).",
                             reply_id, triage_reason,
                         )
+                        continue
+
+                    # ── Gate temático en follow-ups (política vigente) ──
+                    # El turno del interlocutor debe seguir refiriéndose al
+                    # tema del post: si deriva a un tema ajeno, el hilo se
+                    # cierra (no se entra en discusiones sin relevancia).
+                    # Fail-open: sin texto del post disponible no se filtra.
+                    if not getattr(self, "_followup_post_text_cache", None):
+                        self._followup_post_text_cache = {}
+                    if post_id not in self._followup_post_text_cache:
+                        _pt = ""
+                        try:
+                            _pp = self.api.get_post(post_id)
+                            if isinstance(_pp, dict):
+                                _pt = " ".join([
+                                    str(_pp.get("title") or "").strip(),
+                                    str(_pp.get("content") or _pp.get("body") or _pp.get("text") or "").strip(),
+                                ]).strip()
+                        except Exception:
+                            pass
+                        self._followup_post_text_cache[post_id] = _pt
+                    _fup_post_text = self._followup_post_text_cache.get(post_id, "")
+                    if _fup_post_text and comment_off_topic(reply_text, _fup_post_text):
+                        logger.info(
+                            "Phase B: thread close: off_topic (post %s, comment %s) — el turno se salió del tema del post, no se responde.",
+                            post_id, reply_id,
+                        )
+                        close_thread(post_id)
                         continue
 
                     # ── Concesion del interlocutor: una sintesis, luego cerrar ──
@@ -2812,14 +2842,13 @@ class PhaseB:
 
     def _thread_depth_limit(self, comment: Dict, all_comments: List[Dict],
                             author_key: str, is_watchlist: bool) -> Tuple[int, Optional[str]]:
-        """Limite de turnos dinamico para la conversacion enhebrada.
+        """Limite fijo de interacciones por conversacion (politica vigente).
 
-        Base 4. Se extiende a 8 solo si el intercambio vale la pena: autor
-        watchlist o interlocutor con historial (>=3 interacciones), el turno
-        anterior hizo una pregunta abierta, y el ultimo turno aporto algo
-        NUEVO (no repite semanticamente al anterior). Se corta ANTES de la
-        base si el hilo empieza a repetirse (duplicado semantico contra el
-        turno anterior). Devuelve (limite, motivo_de_cierre).
+        Maximo 4 intercambios del agente en un hilo, sea quien sea el autor
+        (watchlist o historial NO extienden el limite: el agente defiende su
+        teoria hasta 4 interacciones y luego deja el tema cerrado). Se corta
+        ANTES de la base si el hilo empieza a repetirse (duplicado semantico
+        contra el turno anterior). Devuelve (limite, motivo_de_cierre).
         """
         cur = (comment.get("content") or comment.get("text") or "").strip()
         parent_id = PhaseB._extract_parent_id(comment)
@@ -2838,24 +2867,7 @@ class PhaseB:
             return 1, "repetición"
 
         base = 4
-        has_history = False
-        if author_key:
-            try:
-                from services.interlocutors import get_interaction_count
-                has_history = get_interaction_count(author_key) >= 3
-            except Exception:
-                pass
-        if not (is_watchlist or has_history):
-            return base, None
-        # Extension: el turno anterior pregunto y no repitio al anterior.
-        has_question = "?" in parent_text
-        aporte_nuevo = not (
-            parent_text and grandparent_text
-            and is_semantic_duplicate_reply(parent_text, grandparent_text, threshold=0.80)
-        )
-        if has_question and aporte_nuevo:
-            return 8, None
-        return base, "sin pregunta"
+        return base, None
 
     async def _close_thread_decision(self, post_id: str, reply_comment: Dict,
                                      comments: List[Dict], author: str,
@@ -3307,7 +3319,8 @@ class PhaseB:
 
                 score, reasons = self._score_reply_draft(reply, f"{title}\n{body}",
                                                             log_context={"post_id": post.get("id")},
-                                                            block_ungrounded=(tier == "quality"))
+                                                            block_ungrounded=(tier == "quality")
+                                                            or text_exposes_figures(f"{title}\n{body}"))
                 if score < 10:
                     logger.warning(
                         "Phase B: feed reply REJECTED — score=%d reasons=%s preview=%s",
@@ -3426,6 +3439,10 @@ class PhaseB:
                 if not post_id:
                     logger.warning(f"Phase B: skipping post without id: {post}")
                     continue
+                post_text = " ".join([
+                    str(post.get("title") or "").strip(),
+                    str(post.get("content") or post.get("body") or post.get("text") or "").strip(),
+                ]).strip()
                 try:
                     all_comments = self.api.fetch_post_comments(post_id)
                 except Exception as e:
@@ -3498,7 +3515,7 @@ class PhaseB:
                         if value_score < floor:
                             queue_filter_counts["below_value"] = queue_filter_counts.get("below_value", 0) + 1
                             continue
-                    queue.append((post_id, c, all_comments))
+                    queue.append((post_id, c, all_comments, post_text))
                     per_post += 1
                 if queue_filter_counts:
                     breakdown = ", ".join(f"{k}={v}" for k, v in sorted(queue_filter_counts.items()))
@@ -3539,20 +3556,24 @@ class PhaseB:
                     return datetime.min.replace(tzinfo=timezone.utc)
 
             def _queue_sort_key(item):
-                _pid, c, _ = item
+                _pid, c, _, _ = item
                 author = self._get_author_name(c)
                 wl = 0 if self._is_watchlist_author(author) else 1
                 # Preguntas directas (mencion a @comet o pregunta en un post
                 # propio) envejecen HACIA ARRIBA: la antiguedad no las entierra.
                 _text = str(c.get("content") or c.get("text") or "").lower()
                 is_direct = "@comet" in _text or "?" in _text
-                return (0 if is_direct else 1, wl, -_recency_key(c).timestamp())
+                # Posts con notificaciones pendientes (activity_on_your_posts
+                # del home dashboard) se atienden PRIMERO: es la señal de
+                # que alguien comentó algo nuevo desde el último scan.
+                pending = 0 if (self._pending_home_post_ids and _pid in self._pending_home_post_ids) else 1
+                return (pending, 0 if is_direct else 1, wl, -_recency_key(c).timestamp())
 
             queue.sort(key=_queue_sort_key)
 
             # Cap por post (secundario): máx. max_own_comments_per_cycle por post
             per_post_count: Dict[str, int] = {}
-            selected: List[Tuple[str, Dict[str, Any], List[Dict[str, Any]]]] = []
+            selected: List[Tuple[str, Dict[str, Any], List[Dict[str, Any]], str]] = []
             for item in queue:
                 pid = item[0]
                 if per_post_count.get(pid, 0) >= self.max_own_comments_per_cycle:
@@ -3563,7 +3584,7 @@ class PhaseB:
                     break
 
             watchlist_sel = sum(
-                1 for _, c, _ in selected
+                1 for _, c, _, _ in selected
                 if self._is_watchlist_author(self._get_author_name(c))
             )
             logger.info(
@@ -3574,7 +3595,7 @@ class PhaseB:
 
             results: List[Dict[str, Any]] = []
 
-            for post_id, comment, all_comments in selected:
+            for post_id, comment, all_comments, post_text in selected:
                 if self.get_comments_today() >= self.max_comments_per_day:
                     logger.info(
                         "Phase B: límite diario alcanzado (%s/%s). Deteniendo cola own posts.",
@@ -3591,6 +3612,7 @@ class PhaseB:
                 result = await self._process_own_comment(
                     post_id, comment, all_comments,
                     limit_ok=len(results) < self.max_comments_per_post,
+                    post_text=post_text,
                 )
                 if result is None:
                     continue
@@ -3703,6 +3725,19 @@ class PhaseB:
 
         replied_count = self._get_agent_reply_count_in_post(post_id)
 
+        # Texto del post para el gate temático (off-topic) — fail-open: sin
+        # texto disponible no se filtra por tema.
+        _post_text = ""
+        try:
+            _p = self.api.get_post(post_id)
+            if isinstance(_p, dict):
+                _post_text = " ".join([
+                    str(_p.get("title") or "").strip(),
+                    str(_p.get("content") or _p.get("body") or _p.get("text") or "").strip(),
+                ]).strip()
+        except Exception:
+            pass
+
         # Rank comments by reply priority before iterating
         try:
             from phases.phase_b.candidate_scorer import rank_candidates
@@ -3780,6 +3815,7 @@ class PhaseB:
             result = await self._process_own_comment(
                 post_id, comment, all_comments,
                 limit_ok=replied_count < self.max_comments_per_post,
+                post_text=_post_text,
             )
             if result is None:
                 continue
@@ -3865,6 +3901,7 @@ class PhaseB:
         comment: Dict[str, Any],
         all_comments: List[Dict[str, Any]],
         limit_ok: bool = True,
+        post_text: str = "",
     ) -> Optional[Dict[str, Any]]:
         """Procesa UN comentario de un post propio: guards, decisión y publicación.
 
@@ -3897,11 +3934,14 @@ class PhaseB:
         parent_id = PhaseB._extract_parent_id(comment)
         if parent_id and parent_id in self._agent_comment_ids.get(post_id, []):
             depth = self._compute_thread_depth(comment, all_comments)
-            if depth >= MAX_CONVERSATION_DEPTH:
+            # Limite fijo de interacciones por hilo (politica vigente):
+            # maximo 4 niveles de conversacion, luego el tema queda cerrado.
+            _max_depth = 4
+            if depth >= _max_depth:
                 logger.info(
                     "Profundidad máxima alcanzada, salteando hilo "
                     "(post_id=%s, comment_id=%s, profundidad=%s, max=%s)",
-                    post_id, comment_id, depth, MAX_CONVERSATION_DEPTH,
+                    post_id, comment_id, depth, _max_depth,
                 )
                 return None
 
@@ -3927,6 +3967,7 @@ class PhaseB:
             comment,
             limit_ok=limit_ok,
             is_own_post_reply=is_own_post_reply,
+            post_text=post_text,
         )
         if not decision.should_reply:
             send_event("phase_b_reply_skip", {
@@ -4574,7 +4615,8 @@ class PhaseB:
                     return ""
 
                 score, reasons = self._score_reply_draft(reply, comment_text,
-                                                         block_ungrounded=self._is_watchlist_author(author))
+                                                         block_ungrounded=self._is_watchlist_author(author)
+                                                         or text_exposes_figures(comment_text))
                 if score < 10:
                     logger.warning(
                         "Phase B: own-post reply REJECTED — score=%d reasons=%s preview=%s",

@@ -36,6 +36,61 @@ _FABRICATION_PATTERN = re.compile(
 )
 _HAS_DIGIT = re.compile(r"\b\d+[%]?\b")
 
+# Cifras/métricas explícitas (número + unidad/%): el interlocutor expone
+# datos medidos. Si el comentario las trae, la respuesta del agente debe
+# estar 100% anclada (block_ungrounded) antes de publicarse.
+_NUMERIC_UNIT_RE = re.compile(
+    r"\b\d+(?:\.\d+)?\s*(?:%|percent|ms|msec|s|sec|secs|seconds?|mins?|minutes?|"
+    r"hours?|days?|times?|counts?|replies?|posts?|upvotes?|karma|kg|m|km|meters?|"
+    r"watts?|nm|gb|tb|request|requests|qps|rps|users?)(?!\w)",
+    re.IGNORECASE,
+)
+
+
+def text_exposes_figures(text: str) -> bool:
+    """True si el texto contiene cifras concretas (números con unidades/%).
+    Se usa para activar el block_ungrounded: si el interlocutor expone cifras,
+    la respuesta del agente no puede publicarse con números sin ancla."""
+    if not text:
+        return False
+    return bool(_NUMERIC_UNIT_RE.search(text))
+
+
+# ── Gate temático: solo comentarios con referencia al post ──────
+# Política vigente: solo se atienden comentarios que se refieren al tema
+# del post en cuestión y aportan información (verificable). Comentarios
+# off-topic (sin solapamiento temático con el post) se ignoran incluso en
+# posts propios: la relación compra prioridad, no relevancia.
+
+_TOPIC_BRIDGE_WORDS = frozenset({
+    "this", "that", "these", "those", "it", "its", "here", "then",
+    "point", "points", "idea", "idea", "question", "elaborate", "explain",
+    "clarify", "example", "examples", "agree", "disagree", "correct",
+    "wrong", "true", "false", "yes", "no", "really",
+})
+
+
+def comment_off_topic(comment_text: str, post_text: str) -> bool:
+    """True si el comentario NO se refiere al tema del post.
+
+    Regla: intersección de términos significativos (≥5 chars, sin stopwords)
+    entre el comentario y el post. Palabras puente ("this", "point",
+    "elaborate") no cuentan como referencia temática: un comentario que solo
+    dice "can you elaborate?" sin anclar al tema del post es off-topic.
+
+    post_text vacío → None se devuelve False (fail-open: sin texto del post
+    no se puede medir tema, no se filtra)."""
+    if not post_text or not comment_text:
+        return False
+    comment_terms = _extract_source_terms(comment_text)
+    if not comment_terms:
+        return True
+    post_terms = _extract_source_terms(post_text)
+    if not post_terms:
+        return False
+    overlap = comment_terms & post_terms
+    return not bool(overlap)
+
 
 def text_has_fabricated_measurement(text: str, is_own_incident: bool = False) -> bool:
     """Return True if text claims a first-person measurement and contains a number.
@@ -406,6 +461,7 @@ def _decide_reply(
     is_own_post_reply: bool = False,
     *,
     tech_keywords: frozenset = frozenset(),
+    post_text: str = "",
 ):
     if not limit_ok:
         return RelevanceDecision(False, 0, "reply_skipped_limit_reached")
@@ -414,6 +470,15 @@ def _decide_reply(
     text_lower = text.lower()
     if not text_lower:
         return RelevanceDecision(False, 0, "reply_skipped_low_relevance")
+
+    # ── Gate temático (política vigente): SOLO comentarios con referencia
+    # al tema del post en cuestión. Off-topic se ignora incluso en posts
+    # propios — la relación compra prioridad, no relevancia. Aplica también
+    # a preguntas: una pregunta sin referencia al tema principal no se atiende.
+    if post_text and comment_off_topic(text, post_text):
+        logger.info("Phase B: comentario de %s off-topic (sin referencia al tema del post), ignorando.",
+                    pb._get_author_name(comment))
+        return RelevanceDecision(False, 0, "reply_skipped_off_topic")
 
     is_question = "?" in text_lower
     is_mention = any(m in text_lower for m in {

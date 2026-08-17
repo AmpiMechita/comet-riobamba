@@ -50,14 +50,13 @@ def _deobfuscate(text: str) -> str:
     """Remove obfuscation symbols and normalize alternating caps."""
     if not text:
         return ""
-    # Strip obfuscation characters: ^ [ ] / (but keep - only between words)
-    cleaned = re.sub(r'[\^\[\]/]', '', text)
+    # Strip ALL non-alphanumeric chars (Moltbook usa ^ [ ] / < > | ~ & etc.)
+    cleaned = re.sub(r'[^A-Za-z0-9\s]', ' ', text)
     # Normalize to lowercase
     cleaned = cleaned.lower()
+    # Remove doubled letters ("LooobsssTeR" -> "lobster" aproximado)
+    cleaned = re.sub(r'(.)\1{2,}', r'\1', cleaned)
     # Collapse multiple spaces
-    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-    # Remove stray dashes not part of negative numbers
-    cleaned = re.sub(r'(?<!\d)-(?!\d)', ' ', cleaned)
     cleaned = re.sub(r'\s+', ' ', cleaned).strip()
     return cleaned
 
@@ -140,53 +139,89 @@ def _solve_from_words(text: str) -> Optional[str]:
     if native_result:
         return native_result
 
-    # Parse word-based math
-    numbers = []
-    operators = []
+    # ── Substring-compact parser (robusto contra simbolos/caps ofuscadas) ──
+    # Tras deobfuscar, las palabras numericas quedan casi intactas en el texto
+    # continuo ("thirty five... twenty four"). Buscarlas como SUBSTRING evita
+    # el ruido de tokens partidos ("t we n ty") que rompia el parseo por tokens.
+    compact = re.sub(r"[^a-z0-9]", "", cleaned)
+
+    # Keys simplificadas: "fiffteen" -> "fiften"; "fifteen" -> "fiften"
+    def _simplify(s: str) -> str:
+        return re.sub(r"(.)\1+", r"\1", s)
+
+    # Matcher greedy en UN SOLO espacio de coordenadas: el simplificado.
+    # Mezclar compact y simp_compact rompe las posiciones (el dedup cambia la
+    # longitud), causando matches fantasma como "three" dentro de "istwe...".
+    simp_compact = _simplify(compact)
+    numeric_hits = []  # (start, end, key, value) — coordenadas simplificadas
+    keys_desc = sorted(WORD_TO_NUM.keys(), key=len, reverse=True)
+
+    def _consume(pos: int) -> Optional[str]:
+        # Probe todas las keys (len desc) como prefijo en simp_compact,
+        # tanto en crudo como en forma deduplicada.
+        for key in keys_desc:
+            if len(key) < 3:
+                continue
+            needle_simp = _simplify(key)
+            if simp_compact.startswith(needle_simp, pos):
+                return key
+        return None
+
+    pos = 0
+    while pos < len(simp_compact):
+        key = _consume(pos)
+        if key:
+            numeric_hits.append((pos, pos + len(_simplify(key)), key, WORD_TO_NUM[key]))
+            pos += len(_simplify(key))
+        else:
+            pos += 1
+
+    # Componer numeros: "twenty" (20) + "three" (3) adyacentes => 23
+    numbers = []  # (pos_inicio, valor)
     i = 0
-
-    while i < len(words):
-        # Try to parse a number
-        num, next_i = _words_to_number(words, i)
-        if num is not None:
-            numbers.append(num)
-            i = next_i
-            continue
-
-        # Try to parse an operator
-        w = words[i]
-        if w in OP_KEYWORDS:
-            operators.append(OP_KEYWORDS[w])
-            i += 1
-            continue
-
-        # Check "by" followed by a number (common pattern: "slows by five")
-        if w == "by" and i + 1 < len(words):
-            i += 1
-            continue
-
+    while i < len(numeric_hits):
+        pos, end, key, val = numeric_hits[i]
+        if val >= 20 and i + 1 < len(numeric_hits):
+            nxt = numeric_hits[i + 1]
+            gap = nxt[0] - end
+            if gap <= 4 and nxt[3] < 10:
+                numbers.append((pos, val + nxt[3]))
+                i += 2
+                continue
+        numbers.append((pos, val))
         i += 1
 
-    # Need at least 2 numbers and 1 operator
-    if len(numbers) >= 2 and len(operators) >= 1:
-        result = numbers[0]
-        for idx, op in enumerate(operators):
-            if idx + 1 >= len(numbers):
-                break
-            n = numbers[idx + 1]
-            if op == "+":
-                result += n
-            elif op == "-":
-                result -= n
-            elif op == "*":
-                result *= n
-            elif op == "/" and n != 0:
-                result /= n
-            else:
-                return None
-        return f"{result:.2f}"
+    if len(numbers) < 2:
+        return None
 
-    return None
+    # Operador: palabra-op situada DESPUES del primer numero y ANTES/igual que
+    # el segundo ("claw adds twenty four", "swims at 20 and slows by five").
+    op = None
+    first_pos = numbers[0][0]
+    second_pos = numbers[1][0]
+    window_simp = simp_compact[first_pos:second_pos + 20]
+    for op_key in sorted(OP_KEYWORDS.keys(), key=len, reverse=True):
+        if len(op_key) < 3:
+            continue
+        if _simplify(op_key) in window_simp:
+            op = OP_KEYWORDS[op_key]
+            break
+    if op is None:
+        return None
+
+    result = None
+    n1, n2 = numbers[0][1], numbers[1][1]
+    if op == "+":
+        result = n1 + n2
+    elif op == "-":
+        result = n1 - n2
+    elif op == "*":
+        result = n1 * n2
+    elif op == "/" and n2 != 0:
+        result = n1 / n2
+    if result is None:
+        return None
+    return f"{result:.2f}"
 
 
 def solve_sync(challenge_text: str, llm_client) -> Optional[str]:

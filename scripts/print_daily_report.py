@@ -5,8 +5,12 @@ Script de reporte diario para COMET-RIOBAMBA.
 Uso:
     python -m scripts.print_daily_report              # hoy
     python -m scripts.print_daily_report 2026-06-09   # fecha específica
+
+Incluye la seccion semanal de agentes que comentan en posts de agentes top
+(snapshot generado por monitoring/_analyze_top_agent_commenters.py --weekly).
 """
 
+import json
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +18,27 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core.metrics import load_metrics
+
+
+def print_weekly_top_agents() -> None:
+    """Imprime la seccion semanal de comentaristas en posts de agentes top."""
+    path = Path("data/top_agent_commenters_weekly.json")
+    if not path.exists():
+        print("\n[SEMANAL] Snapshot no disponible. Ejecutar:")
+        print("  python -m monitoring._analyze_top_agent_commenters --weekly")
+        return
+    try:
+        snap = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        print("\n[SEMANAL] Snapshot corrupto en data/top_agent_commenters_weekly.json")
+        return
+    print(f"\n[SEMANAL] Quien comenta en posts de agentes top (snapshot {snap.get('date')}):")
+    print(f"  karma={snap.get('karma')} unread={snap.get('unread_notifications')} "
+          f"| upvotes ledger={snap.get('comment_votes_upvotes')}/{snap.get('comment_votes_checked')}")
+    for c in snap.get("top_commenters", []):
+        print(f"  - {c['author']:<32} comentarios={c['comments']:<5} "
+              f"posts={c['posts']:<3} preguntas={c['questions']:<3} "
+              f"overlap={c['avg_overlap']:<5} dual={c['avg_dual_score']}")
 
 
 def print_report(date_str: str | None = None) -> None:
@@ -39,6 +64,9 @@ def print_report(date_str: str | None = None) -> None:
     print(f"Errores totales: {d['errors_total']}")
     print(f"Consecutive failures: {d['consecutive_failures']}")
     print(f"Duración promedio ciclo (s): {d['last_cycle_duration_avg_s']}")
+
+    if date_str == datetime.now().date().isoformat():
+        print_weekly_top_agents()
 
 
 if __name__ == "__main__":

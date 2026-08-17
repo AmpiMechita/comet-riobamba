@@ -472,7 +472,9 @@ class TestThreadDepthLimit:
         assert reason == "repetición"
         assert limit == 1, "se corta antes del piso"
 
-    def test_watchlist_with_question_and_new_contribution_reaches_8(self):
+    def test_watchlist_with_question_and_new_contribution_stays_at_four(self):
+        """Politica vigente: limite FIJO de 4 interacciones — ni watchlist ni
+        historial extienden el limite; el agente defiende y cierra el tema."""
         pb = PhaseB(MagicMock())
         comments = self._comments([
             ("c1", None, "A first message about retry backoff"),
@@ -480,7 +482,7 @@ class TestThreadDepthLimit:
             ("c3", "c2", "Yes, if you gate on the drift metric it does."),
         ])
         limit, reason = pb._thread_depth_limit(comments[2], comments, "watchlist_author", True)
-        assert limit == 8
+        assert limit == 4
         assert reason is None
 
     def test_watchlist_without_open_question_stays_at_base(self):
@@ -492,7 +494,7 @@ class TestThreadDepthLimit:
         ])
         limit, reason = pb._thread_depth_limit(comments[2], comments, "watchlist_author", True)
         assert limit == 4
-        assert reason == "sin pregunta"
+        assert reason is None
 
     def test_plain_author_keeps_base(self):
         pb = PhaseB(MagicMock())

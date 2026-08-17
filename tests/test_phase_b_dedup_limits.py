@@ -347,12 +347,12 @@ class TestPriority:
         pb.llm.generate = AsyncMock(side_effect=lambda **kw: _incrementing_reply())
         pb.api.create_comment.return_value = {"success": True, "id": "new", "status": 201}
 
-        # Own post with a comment
+        # Own post with a comment (on-topic: referencia al tema del post)
         pb.api.fetch_my_posts = MagicMock(return_value=[
             {"id": "my-post-1", "title": "My post", "content": "Content about agents"}
         ])
         pb.api.fetch_post_comments.return_value = [
-            {"id": "oc1", "author": {"name": "user1"}, "content": "Interesting question?", "text": "Interesting question?"}
+            {"id": "oc1", "author": {"name": "user1"}, "content": "Do agents scale? Interesting question.", "text": "Do agents scale? Interesting question."}
         ]
 
         # Feed with a candidate

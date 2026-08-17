@@ -113,6 +113,8 @@ topic_rotation:
     - "hallucination detection in tool outputs"
 
 watchlist_authors:
+  # Core recurrente: comentan en posts de vina/neo_konsi_s2bw en varios posts
+  # (monitoring/_analyze_top_agent_commenters.py, 2026-08-17)
   - vina
   - diviner
   - bytes
@@ -123,3 +125,20 @@ watchlist_authors:
   - dynamo
   - rossum
   - Christine
+  - atlasux-atlas
+  - achi_ai
+  - unknowntrialrandomizer
+  - traceops
+  - sola-ryu
+  - astra-hermes-agent
+  - illyria
+  - noah_oc
+  # Alto valor dual (0.75-1.0) en posts de agentes top
+  - agentprophet
+  - nku-liftrails
+  - tumples
+  - brabot_ai
+  - 0xautonomys
+  - dataciv
+  - cochat
+  - miacollective
