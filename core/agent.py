@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -86,6 +87,7 @@ class COMETRiobambaAgent:
         self.config_version = content_cfg.get("config_version", "5.0")
         self.start_time = datetime.now()
         self.shutdown_requested = False
+        self._last_watchdog_check = 0.0
         self.state = AgentState()
 
         from config import BASE_DIR
@@ -1045,6 +1047,7 @@ class COMETRiobambaAgent:
             for _ in range(int(cycle_interval)):
                 if self.shutdown_requested or self._check_stop_flag():
                     break
+                self._maybe_supervise_watchdog()
                 await asyncio.sleep(1)
                 # Intra-sleep Phase B check: run Phase B-only if interval elapsed
                 if behavior_cfg.get("phase_b_enabled"):
@@ -1075,6 +1078,71 @@ class COMETRiobambaAgent:
     def request_shutdown(self):
         logger.info("🔄 Shutdown solicitado...")
         self.shutdown_requested = True
+
+    @staticmethod
+    def _pid_alive(pid: Optional[int]) -> bool:
+        """¿Existe el proceso? Versión robusta Windows (18/08/2026).
+
+        os.kill(pid, 0) en Windows puede lanzar OSError WinError 87
+        ("parámetro no correcto") incluso con PID vivo; tratar eso como
+        'muerto' hacía que el agente relanzara el watchdog cada 300s.
+        Mismo fallback que monitoring/watchdog.py: si kill no decide,
+        tasklist lo confirma; si tasklist tampoco, asumir vivo (fail-safe)."""
+        if not pid:
+            return False
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        except OSError:
+            pass
+        try:
+            import subprocess
+            out = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                capture_output=True, timeout=10,
+            )
+            text = out.stdout.decode("utf-8", errors="replace")
+            return f"{pid}" in text
+        except Exception:
+            return True  # ambigüo → no relanzar un proceso que podría vivir
+
+    def _maybe_supervise_watchdog(self) -> None:
+        """Supervisa el watchdog cada WATCHDOG_SUPERVISION_S (default 300s):
+        si su lock está ausente o con pid muerto, lo relanza. El agente es el
+        supervisor natural: corre 24/7 y su entorno de ejecución ya está
+        probado (a diferencia del Start-Process desde guard/scheduler)."""
+        interval = int(os.getenv("WATCHDOG_SUPERVISION_S", "300"))
+        if time.time() - self._last_watchdog_check < interval:
+            return
+        self._last_watchdog_check = time.time()
+        try:
+            from config import BASE_DIR
+            lock_file = BASE_DIR / ".watchdog.lock"
+            lock_alive = False
+            if lock_file.exists():
+                try:
+                    pid = int(lock_file.read_text(encoding="utf-8").strip())
+                    lock_alive = self._pid_alive(pid)
+                except ValueError:
+                    lock_alive = False
+            if lock_alive:
+                return
+            if (BASE_DIR / "data" / "stop.flag").exists():
+                return  # agente deteniéndose/parado → no relanzar el guard
+            python = sys.executable
+            proc = subprocess.Popen(
+                [python, "-u", "monitoring/watchdog.py"],
+                cwd=str(BASE_DIR),
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                close_fds=True,
+            )
+            logger.info("🛡️ Watchdog no estaba corriendo → relanzado (PID %s)", proc.pid)
+        except Exception as e:
+            logger.warning("Watchdog supervision falló: %s", e)
 
     def _check_stop_flag(self) -> bool:
         """If data/stop.flag exists, request shutdown and remove the flag.
