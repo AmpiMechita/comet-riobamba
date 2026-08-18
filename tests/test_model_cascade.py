@@ -1,6 +1,8 @@
 """Tests for services/model_cascade.py — critical path with zero prior coverage."""
 
 import logging
+import os
+
 import pytest
 
 try:
@@ -206,6 +208,104 @@ async def test_fallback_order_unchanged_without_paid_providers(cascade):
 
 
 @pytest.mark.asyncio
+async def test_fallback_prefers_free_when_flag_set(cascade):
+    """MODEL_CASCADE_PREFER_FREE=1: con DeepSeek/Anthropic sin saldo, el fallback
+    prueba los gratis (Gemini/Cloudflare/Cerebras/Groq) ANTES que los pagos.
+
+    Reordenado 18/08/2026: old únicamente mientras los créditos pagados no estén
+    resueltos; con crédito activo el default vuelve a DeepSeek primero.
+    """
+    _add_provider(cascade, "tier_premium", paid=True)   # registrado primero, como en _load_providers
+    _add_provider(cascade, "tier_sonnet")
+    _add_provider(cascade, "openrouter")
+    _add_provider(cascade, "cloudflare")
+    _add_provider(cascade, "tier_fallback", paid=True)
+    _add_provider(cascade, "tier_flash", paid=True)
+
+    attempted = []
+
+    async def _call(provider, messages, max_tokens, temperature):
+        attempted.append(provider.name)
+        if provider.name == "tier_premium":
+            raise RuntimeError("HTTP 400 desde tier_premium - credit balance too low")
+        if provider.name == "tier_fallback":
+            return "ok"
+        raise RuntimeError("fail")
+
+    with patch.object(cascade, "_is_circuit_open", return_value=False):
+        with patch.object(cascade, "_call_with_retries", side_effect=_call):
+            with patch.dict(os.environ, {"MODEL_CASCADE_PREFER_FREE": "1"}):
+                result = await cascade.generate(prompt="hello", tier="premium")
+
+    assert result == "ok"
+    # 1ro el preferido (tier_premium), luego gratis — no DeepSeek.
+    assert attempted[0] == "tier_premium"
+    assert "tier_sonnet" in attempted, f"los gratis deben probarse: {attempted}"
+    assert attempted.index("tier_sonnet") < attempted.index("tier_fallback"), (
+        f"con prefer_free, gratis antes que DeepSeek: {attempted}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_fallback_prefers_openrouter_for_content_when_flag_set(cascade):
+    """MODEL_CASCADE_PREFER_OPENROUTER=1: el CONTENIDO prueba OpenRouter pagado
+    (saldo disponible) antes que los gratis, pero classify nunca lo toca."""
+    _add_provider(cascade, "tier_premium", paid=True)
+    _add_provider(cascade, "openrouter", paid=True)   # ahora pagado (saldo $3.39)
+    _add_provider(cascade, "tier_sonnet")
+    _add_provider(cascade, "cloudflare")
+    _add_provider(cascade, "tier_fallback", paid=True)
+
+    attempted = []
+
+    async def _call(provider, messages, max_tokens, temperature):
+        attempted.append(provider.name)
+        if provider.name == "tier_premium":
+            raise RuntimeError("HTTP 400 desde tier_premium - credit balance too low")
+        if provider.name == "openrouter":
+            return "ok"
+        raise RuntimeError("fail")
+
+    with (
+        patch.object(cascade, "_is_circuit_open", return_value=False),
+        patch.object(cascade, "_call_with_retries", side_effect=_call),
+        patch.dict(os.environ, {"MODEL_CASCADE_PREFER_OPENROUTER": "1"}),
+    ):
+        result = await cascade.generate(prompt="hello", tier="premium")
+
+    assert result == "ok"
+    assert attempted[0] == "tier_premium"
+    assert attempted[1] == "openrouter", f"openrouter debe ir 2do para contenido: {attempted}"
+
+
+@pytest.mark.asyncio
+async def test_classify_never_uses_paid_openrouter(cascade):
+    """classify: con openrouter marcado paid=True, queda fuera del fallback
+    (el saldo OpenRouter es para contenido, no para miles de clasificaciones/día)."""
+    _add_provider(cascade, "cloudflare")
+    _add_provider(cascade, "openrouter", paid=True)
+    _add_provider(cascade, "tier_sonnet")
+    _add_provider(cascade, "tier_fallback", paid=True)
+
+    attempted = []
+
+    async def _call(provider, messages, max_tokens, temperature):
+        attempted.append(provider.name)
+        raise RuntimeError("fail all")
+
+    with (
+        patch.object(cascade, "_is_circuit_open", return_value=False),
+        patch.object(cascade, "_call_with_retries", side_effect=_call),
+        patch.dict(os.environ, {"MODEL_CASCADE_PREFER_OPENROUTER": "1"}),
+    ):
+        with pytest.raises(RuntimeError, match="Todos los proveedores fallaron"):
+            await cascade.generate(prompt="hello", tier="classify")
+
+    assert "openrouter" not in attempted, f"classify no debe usar openrouter pagado: {attempted}"
+    assert attempted[0] == "cloudflare"
+
+
+@pytest.mark.asyncio
 async def test_all_providers_fail_raises_error(cascade):
     _add_provider(cascade, "p1", model="p1")
     _add_provider(cascade, "p2", model="p2")
@@ -314,6 +414,29 @@ def test_record_failure_rate_limit_opens_circuit_for_one_hour(cascade):
     
     # El circuito debe estar cerrado porque lo forzamos a abrir por 3600s
     assert not cb.can_execute(), "rate limit should force_open circuit for 1 hour"
+
+
+def test_record_failure_no_credit_opens_circuit_for_twelve_hours(cascade):
+    _add_provider(cascade, "test_provider")
+    cb = cascade.circuit_breakers["test_provider"]
+    assert cb.can_execute()
+
+    cascade._record_failure(cascade.providers[0], RuntimeError("HTTP 402 Payment Required"))
+
+    assert not cb.can_execute(), "no-credit error should force_open circuit for 12h"
+    assert cb.recovery_timeout == 43200, "no-credit providers should stay open 12h"
+    assert "[sin-credito]" in cb._last_error
+
+
+def test_record_failure_free_usage_limit_opens_circuit_for_twelve_hours(cascade):
+    _add_provider(cascade, "test_provider")
+    cb = cascade.circuit_breakers["test_provider"]
+    assert cb.can_execute()
+
+    cascade._record_failure(cascade.providers[0], RuntimeError("FreeUsageLimitError: no free quota left"))
+
+    assert not cb.can_execute()
+    assert cb.recovery_timeout == 43200
 
 
 def test_record_failure_client_error_opens_circuit_immediately(cascade):
@@ -784,6 +907,47 @@ def test_missing_anthropic_key_logs_critical_warning(caplog):
         and "Claude 3.5 Sonnet" in r.message
         for r in caplog.records
     ), f"Expected critical ANTHROPIC_API_KEY warning, got: {[r.message for r in caplog.records]}"
+
+
+def test_prefer_free_skips_paid_providers_registration():
+    """MODEL_CASCADE_PREFER_FREE=1: tier_premium/tier_premium_opus/tier_fallback
+    (sin saldo) NO se registran — cero reintentos muertos y cero circuit-breakers
+    abriendo en cada ciclo (el origen del spam "proveedor fuera de rotación")."""
+    creds = _full_credentials()
+    with patch.dict(os.environ, {"MODEL_CASCADE_PREFER_FREE": "1"}):
+        mc = ModelCascade(credentials=creds)
+    names = [p.name for p in mc.providers]
+    assert "tier_premium" not in names, f"anthropic sin saldo no debe registrarse: {names}"
+    assert "tier_premium_opus" not in names, f"opus sin saldo no debe registrarse: {names}"
+    assert "tier_fallback" not in names, f"deepseek sin saldo no debe registrarse: {names}"
+    assert "tier_flash" not in names, "deepseek flash pagado tampoco debe registrarse"
+
+
+def test_circuit_alert_cooldown_suppresses_spam():
+    """CIRCUIT_ALERT_COOLDOWN: un proveedor que oscila OPEN/HALF_OPEN no
+    spamea al operador con "proveedor fuera de rotación" en cada ciclo."""
+    cascade = ModelCascade(credentials=_full_credentials())
+    fake_telegram = MagicMock()
+    fake_telegram.enabled = True
+    cascade._get_telegram_client = lambda: fake_telegram
+
+    with patch.dict(os.environ, {"CIRCUIT_ALERT_COOLDOWN_MINUTES": "30"}):
+        assert cascade._circuit_alert_cooldown_minutes() == 30.0
+
+        # primera apertura: alerta se envía y queda registrado el timestamp
+        with patch("services.model_cascade.time.time", return_value=1000.0):
+            cascade._alert_circuit_open("model_cascade.tier_fallback")
+        assert fake_telegram.send_alert.call_count == 1
+
+        # apertura repetida dentro del cooldown (100s después): se suprime
+        with patch("services.model_cascade.time.time", return_value=1100.0):
+            cascade._alert_circuit_open("model_cascade.tier_fallback")
+        assert fake_telegram.send_alert.call_count == 1, "no debe re-alertar dentro del cooldown"
+
+        # pasados 30 min (1800s): re-alerta
+        with patch("services.model_cascade.time.time", return_value=3000.0):
+            cascade._alert_circuit_open("model_cascade.tier_fallback")
+        assert fake_telegram.send_alert.call_count == 2
 
 
 # ── DeepSeek thinking-disable isolation ────────────────────────────

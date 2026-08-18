@@ -1790,7 +1790,7 @@ class PhaseAContentGeneration:
                     log_dual_score(generated_post["body"], phase="a")
                     logger.info(">>> [WIRE CHECK] Escribiendo dual_scores.jsonl (phase A)")
 
-                    delay = random.randint(30, 90)
+                    delay = random.randint(20, 45)
                     logger.info(f"Phase A: Esperando {delay}s antes de la siguiente acción para evitar rate limiting")
                     await asyncio.sleep(delay)
                 else:

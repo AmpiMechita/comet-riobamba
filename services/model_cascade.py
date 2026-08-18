@@ -97,6 +97,9 @@ class ModelCascade:
         self.circuit_breakers: Dict[str, CircuitBreaker] = {}
         self._health_histories: Dict[str, Deque[bool]] = {}
         self._telemetry_file = os.path.join("data", "cascade_telemetry.jsonl")
+        # cooldown de la última alerta Telegram por circuito (para no spamear
+        # al operador cuando un proveedor entra/sale de OPEN en cada ciclo)
+        self._last_circuit_alert_ts: Dict[str, float] = {}
         # usage de la ultima llamada exitosa por proveedor (para telemetria de
         # tokens/costo): {"provider": {"input_tokens": n, "output_tokens": n}}
         self._last_usage: Dict[str, Dict[str, int]] = {}
@@ -134,13 +137,21 @@ class ModelCascade:
     def _load_providers(self) -> None:
         creds = self.credentials
 
+        # ── Skip pagos sin saldo (18/08/2026) ──────────────────────────────
+        # Con MODEL_CASCADE_PREFER_FREE=1 los proveedores pagos sin crédito
+        # (DeepSeek HTTP 402, Anthropic spend-limit 0.00) NO se registran:
+        # evita reintentos muertos en cada ciclo y el ruido de circuit-breaker
+        # (OPEN/HALF_OPEN cada minuto → alertas Telegram "proveedor fuera de
+        # rotación"). OpenRouter (pago CON saldo $3.39) se registra aparte.
+        _skip_paid = os.getenv("MODEL_CASCADE_PREFER_FREE", "0").strip().lower() in ("1", "true", "yes")
+
         # ── tier_premium: Anthropic Claude (claude-sonnet-5, primary content) ──
         # When ANTHROPIC_API_KEY is present, tier_premium is served by Anthropic's
         # Messages API. DeepSeek V4 Pro serves tier_fallback. If the Anthropic key
         # is missing we fall back to the env-configured tier_opus credentials so
         # the cascade keeps working in dev/test environments.
         anthropic_key = getattr(creds, "anthropic_api_key", "") or ""
-        if anthropic_key:
+        if anthropic_key and not _skip_paid:
             self.providers.append(
                 ProviderConfig(
                     name="tier_premium",
@@ -179,7 +190,7 @@ class ModelCascade:
         # ── tier_premium_opus: Anthropic Claude Opus 4.8 (SOLO generación Fase A) ──
         # Mismo patrón que tier_premium pero modelo Opus. Fase B sigue usando
         # tier_premium (Sonnet). Solo se registra si hay ANTHROPIC_API_KEY.
-        if anthropic_key:
+        if anthropic_key and not _skip_paid:
             self.providers.append(
                 ProviderConfig(
                     name="tier_premium_opus",
@@ -229,6 +240,11 @@ class ModelCascade:
                     max_retries=self.default_retries,
                     cooldown_seconds=self.default_cooldown,
                     failure_threshold=self.default_failure_threshold,
+                    # OpenRouter: pago real (18/08/2026). Se marca paid=True para que
+                    # el clasificador (filtro `not p.paid`) NUNCA lo use: classify hace
+                    # miles de llamadas/día y vaciaría el saldo. El contenido (posts)
+                    # lo usa con prioridad propia via MODEL_CASCADE_PREFER_OPENROUTER.
+                    paid=(provider_name == "openrouter"),
                 )
             )
 
@@ -275,9 +291,10 @@ class ModelCascade:
 
         # ── tier_fallback: DeepSeek V4 Pro (paid fallback after Anthropic) ──
         # Prefer explicit DEEPSEEK_* config; otherwise reuse the env-configured
-        # tier_haiku credentials so existing setups keep working.
+        # tier_haiku credentials so existing setups keep working. Con
+        # PREFER_FREE=1 (DeepSeek sin saldo) NO se registra.
         deepseek_key = getattr(creds, "deepseek_api_key", "") or ""
-        if deepseek_key:
+        if deepseek_key and not _skip_paid:
             self.providers.append(
                 ProviderConfig(
                     name="tier_fallback",
@@ -291,7 +308,7 @@ class ModelCascade:
                     paid=True,
                 )
             )
-        elif creds.tier_haiku is not None:
+        elif creds.tier_haiku is not None and not _skip_paid:
             cfg = creds.tier_haiku
             self.providers.append(
                 ProviderConfig(
@@ -330,7 +347,7 @@ class ModelCascade:
                     paid=False,
                 )
             )
-        elif deepseek_key:
+        elif deepseek_key and not _skip_paid:
             self.providers.append(
                 ProviderConfig(
                     name="tier_flash",
@@ -501,7 +518,29 @@ class ModelCascade:
         # mínimo, y así el tiering de Fase A (hero Opus + volumen DeepSeek) no se
         # degrada a Cloudflare en cada fallo de Anthropic. Orden estable dentro
         # de cada grupo (orden de registro).
+        #
+        # MODEL_CASCADE_PREFER_FREE=1 (18/08/2026): DeepSeek sin saldo (HTTP 402)
+        # y Anthropic con spend-limit 0.00; el fallback va directamente a los
+        # gratis (Gemini AI Studio, Cloudflare, Cerebras, Groq, OpenRouter, Zen)
+        # antes de intentar los pagos. Reversible: quitar el env cuando los
+        # créditos de DeepSeek/Anthropic estén resueltos.
+        #
+        # MODEL_CASCADE_PREFER_OPENROUTER=1 (18/08/2026): con saldo OpenRouter
+        # disponible ($3.39), el CONTENIDO (posts/replies) prueba OpenRouter
+        # (deepseek-v4-flash pagado) antes que los gratis. El clasificador queda
+        # excluido (openrouter está marcado paid=True), así classify sigue gratis.
+        _prefer_free = os.getenv("MODEL_CASCADE_PREFER_FREE", "0").strip().lower() in ("1", "true", "yes")
+        _prefer_openrouter = os.getenv("MODEL_CASCADE_PREFER_OPENROUTER", "0").strip().lower() in ("1", "true", "yes")
+
         def _fallback_priority(p: ProviderConfig) -> int:
+            if _prefer_openrouter and p.name == "openrouter" and tier != "classify":
+                return -1  # contenido con saldo OpenRouter disponible: primera opción pagada
+            if _prefer_free:
+                if not p.paid:
+                    return 0  # gratis primero (Gemini/OpenRouter/Cloudflare/Cerebras/Groq/Zen)
+                if p.name in ("tier_fallback", "tier_flash"):
+                    return 1  # DeepSeek: pago barato, mejor que Anthropic si recupera crédito
+                return 2      # otros pagos (Anthropic premium/opus)
             if p.name in ("tier_fallback", "tier_flash"):
                 return 0  # DeepSeek: pago barato con crédito activo, calidad superior
             if not p.paid:
@@ -599,6 +638,10 @@ class ModelCascade:
                     input_tokens = int(usage.get("input_tokens", 0) or 0)
                     output_tokens = int(usage.get("output_tokens", 0) or 0)
                     cost_usd = _estimate_cost_usd(provider.name, input_tokens, output_tokens)
+                    # Zen (opencode.ai/zen) es gratis pero comparte nombre con
+                    # tier_flash (DeepSeek, pago). No cotizar como DeepSeek.
+                    if "zen" in (provider.url or "").lower():
+                        cost_usd = 0.0
                     self._accumulate_tier_stats(tier, provider.name, cost_usd)
                     self._append_telemetry_jsonl({
                         "ts": datetime.now(timezone.utc).isoformat(),
@@ -661,12 +704,24 @@ class ModelCascade:
         )
 
     def _alert_circuit_open(self, cb_name: str) -> None:
-        """Callback de CircuitBreaker cuando un proveedor pasa a OPEN. Nunca lanza excepción."""
+        """Callback de CircuitBreaker cuando un proveedor pasa a OPEN. Nunca lanza excepción.
+
+        Cooldown por proveedor (CIRCUIT_ALERT_COOLDOWN_MINUTES, default 30):
+        un proveedor que oscila OPEN↔HALF_OPEN (p.ej. DeepSeek sin saldo) no
+        spamea al operador con "proveedor fuera de rotación" en cada ciclo.
+        """
         try:
             telegram = self._get_telegram_client()
             if not telegram or not telegram.enabled:
                 return
             provider = cb_name.split(".", 1)[-1] if "." in cb_name else cb_name
+            now = time.time()
+            cooldown_s = self._circuit_alert_cooldown_minutes() * 60
+            last = self._last_circuit_alert_ts.get(provider, 0.0)
+            # Cooldown solo tras una alerta previa (no suprime la primera).
+            if last > 0.0 and now - last < cooldown_s:
+                return
+            self._last_circuit_alert_ts[provider] = now
             open_count = sum(1 for cb in self.circuit_breakers.values() if cb.state.value == "open")
             total = len(self.circuit_breakers)
             telegram.send_alert(
@@ -677,6 +732,13 @@ class ModelCascade:
             )
         except Exception as e:
             logger.warning("ModelCascade: no se pudo enviar alerta de circuit breaker: %s", e)
+
+    @staticmethod
+    def _circuit_alert_cooldown_minutes() -> float:
+        try:
+            return float(os.getenv("CIRCUIT_ALERT_COOLDOWN_MINUTES", "30"))
+        except (ValueError, TypeError):
+            return 30.0
 
     def _enter_degraded_mode(self, attempted: List[str], last_error: Optional[Exception]) -> None:
         """Cascade exhausted (tier_premium → tier_fallback all down): stop generation and alert.
@@ -1289,7 +1351,29 @@ class ModelCascade:
     def _record_failure(self, provider: ProviderConfig, error: Exception) -> None:
         """Registra fallo con comportamiento diferenciado por tipo de error HTTP."""
         cb = self._get_cb(provider)
+        error_str = str(error).lower()
         error_type = self._classify_http_error(error)
+
+        # Sin crédito (402 / FreeUsageLimit / billing): circuito forzado 12h.
+        # (18/08/2026) DeepSeek sin saldo se reintentaba en CADA ciclo → 120
+        # fallos/10 min de ruido en telemetría/logs y latencia extra; con
+        # 12h de fuerza abierta el ciclo va directo al siguiente proveedor.
+        no_credit_markers = [
+            "http 402",
+            "freeusagelimit",
+            "free usage limit",
+            "insufficient balance",
+            "billing",
+            "no credit",
+            "failed to authorize",
+        ]
+        if any(marker in error_str for marker in no_credit_markers):
+            logger.warning(
+                "💰 Sin crédito en '%s' - circuito forzado abierto 12h (%s)",
+                provider.name, error,
+            )
+            cb.force_open(reason=f"[sin-credito] {error}", duration_seconds=43200)
+            return
 
         # Rate limit (429): Abrir circuit breaker por 1 hora para evitar latencia
         if error_type == "rate_limit":
