@@ -33,13 +33,15 @@ _ANTHROPIC_OUTPUT_PRICE_PER_1M = 10.0
 # ── Precios USD por 1M tokens (input, output) por proveedor, para el
 # dashboard de gasto en vivo (cascade_telemetry.jsonl). Los proveedores
 # gratis (Gemini AI Studio, OpenRouter free, Cloudflare, Cerebras, Groq)
-# cotizan 0. DeepSeek: $0.28/M input, $1.14/M output (2026). ──
+# cotizan 0. Gemini via OpenRouter (18/08/2026): 3.7-flash $0.375/$1.875,
+# 3.5-flash-lite $0.30/$2.50. DeepSeek (legacy): $0.28/$1.14. ──
 _PROVIDER_PRICES_PER_1M: Dict[str, tuple] = {
     "tier_premium": (_ANTHROPIC_INPUT_PRICE_PER_1M, _ANTHROPIC_OUTPUT_PRICE_PER_1M),
     "tier_premium_opus": (5.0, 25.0),
     "tier_fallback": (0.28, 1.14),
-    "tier_flash": (0.28, 1.14),
-    "tier_quality": (0.12, 0.30),
+    "tier_flash": (0.30, 2.50),        # google/gemini-3.5-flash-lite (OpenRouter)
+    "tier_quality": (0.375, 1.875),    # google/gemini-3.7-flash (OpenRouter)
+    "openrouter": (0.375, 1.875),      # google/gemini-3.7-flash (contenido pesado)
 }
 
 
@@ -121,7 +123,7 @@ class ModelCascade:
         "premium_opus": "tier_premium_opus",  # Anthropic claude-opus-4-8 (Fase A generation only)
         "fallback": "tier_fallback",   # DeepSeek V4 Pro (paid content fallback)
         "flash": "tier_flash",         # DeepSeek V4 Flash (generación barata Fase A no-hero)
-        "quality": "tier_quality",     # MiniMax M3 via OpenRouter (watchlist replies)
+        "quality": "tier_quality",     # Gemini 3.7-flash via OpenRouter (watchlist replies)
         "sonnet": "tier_sonnet",
         "openrouter": "openrouter",
         "cerebras": "cerebras",
@@ -142,7 +144,7 @@ class ModelCascade:
         # (DeepSeek HTTP 402, Anthropic spend-limit 0.00) NO se registran:
         # evita reintentos muertos en cada ciclo y el ruido de circuit-breaker
         # (OPEN/HALF_OPEN cada minuto → alertas Telegram "proveedor fuera de
-        # rotación"). OpenRouter (pago CON saldo $3.39) se registra aparte.
+        # rotación"). OpenRouter (pago CON saldo $11.36) se registra aparte.
         _skip_paid = os.getenv("MODEL_CASCADE_PREFER_FREE", "0").strip().lower() in ("1", "true", "yes")
 
         # ── tier_premium: Anthropic Claude (claude-sonnet-5, primary content) ──
@@ -248,7 +250,7 @@ class ModelCascade:
                 )
             )
 
-        # ── tier_quality: MiniMax M3 via OpenRouter (watchlist replies) ──
+        # ── tier_quality: Gemini 3.7-flash via OpenRouter (watchlist replies) ──
         # Same URL/key as openrouter but explicit_only=True (never fallback auto).
         # Only registered if openrouter is available (needs API key + URL).
         if creds.tier_openrouter is not None and _openrouter_enabled:
@@ -324,43 +326,66 @@ class ModelCascade:
                 )
             )
 
-        # ── tier_flash: DeepSeek V4 Flash Free via OpenCode Zen (gratis) ──
-        # DeepSeek directo sin saldo devuelve HTTP 402 (Insufficient Balance)
-        # incluso para sus modelos "free". OpenCode Zen sirve
-        # deepseek-v4-flash-free a $0/M (quota free limitada: 429
-        # FreeUsageLimitError; el resto de la cascada cubre mientras tanto).
-        # Si ZEN_ENABLED + key de Zen disponibles, tier_flash se sirve por Zen;
-        # si no, cae al DeepSeek pagado (comportamiento historico).
-        _zen_enabled = os.getenv("ZEN_ENABLED", "false").strip().lower() in ("1", "true", "yes")
-        zen_key = os.getenv("MODEL_TIER_ZEN_API_KEY", "").strip()
-        if _zen_enabled and zen_key:
+        # ── tier_flash: Gemini 3.5-flash-lite via OpenRouter (18/08/2026) ──
+        # Con saldo OpenRouter disponible, tier_flash (replies de volumen,
+        # follow-ups, generación no-hero Fase A) usa google/gemini-3.5-flash-lite
+        # pagado ($0.30/$2.50 por 1M): calidad alta a costo mínimo. Si no hay
+        # MODEL_TIER_FLASH_URL/API_KEY configurados, cae al bloque legacy
+        # (Zen free o DeepSeek directo) intacto.
+        _flash_url = os.getenv("MODEL_TIER_FLASH_URL", "").strip()
+        _flash_key = os.getenv("MODEL_TIER_FLASH_API_KEY", "").strip()
+        if _flash_url and _flash_key:
             self.providers.append(
                 ProviderConfig(
                     name="tier_flash",
-                    url=os.getenv("MODEL_TIER_ZEN_URL", "https://opencode.ai/zen/v1/chat/completions"),
-                    model=os.getenv("MODEL_TIER_ZEN_MODEL", "deepseek-v4-flash-free"),
-                    api_key=zen_key,
-                    timeout=int(os.getenv("MODEL_TIER_ZEN_TIMEOUT_SECONDS", "90") or 90),
-                    max_retries=self.default_retries,
-                    cooldown_seconds=self.default_cooldown,
-                    failure_threshold=self.default_failure_threshold,
-                    paid=False,
-                )
-            )
-        elif deepseek_key and not _skip_paid:
-            self.providers.append(
-                ProviderConfig(
-                    name="tier_flash",
-                    url=getattr(creds, "deepseek_url", "") or "https://api.deepseek.com/v1/chat/completions",
-                    model=os.getenv("DEEPSEEK_FLASH_MODEL", "deepseek-v4-flash"),
-                    api_key=deepseek_key,
-                    timeout=getattr(creds, "deepseek_timeout", 90) or 90,
+                    url=_flash_url,
+                    model=os.getenv("MODEL_TIER_FLASH_MODEL", "google/gemini-3.5-flash-lite"),
+                    api_key=_flash_key,
+                    timeout=int(os.getenv("MODEL_TIER_FLASH_TIMEOUT_SECONDS", "60") or 60),
                     max_retries=self.default_retries,
                     cooldown_seconds=self.default_cooldown,
                     failure_threshold=self.default_failure_threshold,
                     paid=True,
                 )
             )
+        else:
+            # ── tier_flash legacy: DeepSeek V4 Flash Free via OpenCode Zen (gratis) ──
+            # DeepSeek directo sin saldo devuelve HTTP 402 (Insufficient Balance)
+            # incluso para sus modelos "free". OpenCode Zen sirve
+            # deepseek-v4-flash-free a $0/M (quota free limitada: 429
+            # FreeUsageLimitError; el resto de la cascada cubre mientras tanto).
+            # Si ZEN_ENABLED + key de Zen disponibles, tier_flash se sirve por Zen;
+            # si no, cae al DeepSeek pagado (comportamiento historico).
+            _zen_enabled = os.getenv("ZEN_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+            zen_key = os.getenv("MODEL_TIER_ZEN_API_KEY", "").strip()
+            if _zen_enabled and zen_key:
+                self.providers.append(
+                    ProviderConfig(
+                        name="tier_flash",
+                        url=os.getenv("MODEL_TIER_ZEN_URL", "https://opencode.ai/zen/v1/chat/completions"),
+                        model=os.getenv("MODEL_TIER_ZEN_MODEL", "deepseek-v4-flash-free"),
+                        api_key=zen_key,
+                        timeout=int(os.getenv("MODEL_TIER_ZEN_TIMEOUT_SECONDS", "90") or 90),
+                        max_retries=self.default_retries,
+                        cooldown_seconds=self.default_cooldown,
+                        failure_threshold=self.default_failure_threshold,
+                        paid=False,
+                    )
+                )
+            elif deepseek_key and not _skip_paid:
+                self.providers.append(
+                    ProviderConfig(
+                        name="tier_flash",
+                        url=getattr(creds, "deepseek_url", "") or "https://api.deepseek.com/v1/chat/completions",
+                        model=os.getenv("DEEPSEEK_FLASH_MODEL", "deepseek-v4-flash"),
+                        api_key=deepseek_key,
+                        timeout=getattr(creds, "deepseek_timeout", 90) or 90,
+                        max_retries=self.default_retries,
+                        cooldown_seconds=self.default_cooldown,
+                        failure_threshold=self.default_failure_threshold,
+                        paid=True,
+                    )
+                )
 
         # ── Cerebras: CAPTCHA solver pipeline ONLY (independent flag) ─────
         # Cerebras es una función interna de bajo riesgo (extracción de texto en
@@ -526,8 +551,8 @@ class ModelCascade:
         # créditos de DeepSeek/Anthropic estén resueltos.
         #
         # MODEL_CASCADE_PREFER_OPENROUTER=1 (18/08/2026): con saldo OpenRouter
-        # disponible ($3.39), el CONTENIDO (posts/replies) prueba OpenRouter
-        # (deepseek-v4-flash pagado) antes que los gratis. El clasificador queda
+        # disponible ($11.36), el CONTENIDO (posts/replies) prueba OpenRouter
+        # (gemini-3.7-flash pagado) antes que los gratis. El clasificador queda
         # excluido (openrouter está marcado paid=True), así classify sigue gratis.
         _prefer_free = os.getenv("MODEL_CASCADE_PREFER_FREE", "0").strip().lower() in ("1", "true", "yes")
         _prefer_openrouter = os.getenv("MODEL_CASCADE_PREFER_OPENROUTER", "0").strip().lower() in ("1", "true", "yes")
