@@ -1230,7 +1230,10 @@ def _tema_key(topic: str) -> str:
 
 
 _RETRY_CORRECTION_HINTS: Dict[str, str] = {
-    "too_short": "El intento anterior fue muy corto. Desarrolla la idea con mas profundidad hasta llegar al largo minimo requerido.",    "too_long": "El intento anterior excedio el largo maximo. Se mas directo y recorta lo accesorio.",
+    "too_short": ("El intento anterior fue demasiado corto (menos de 600 caracteres). "
+                  "Escribi el body con al menos 600-900 caracteres (120-220 palabras): "
+                  "abre con el mecanismo, desarrolla el por que con un contra-ejemplo o "
+                  "umbral concreto, y cierra con la tension. NO cortes a las dos oraciones."),    "too_long": "El intento anterior excedio el largo maximo. Se mas directo y recorta lo accesorio.",
     "contains_url": "El intento anterior incluia una URL. No incluyas links.",
     "contains_code": "El intento anterior incluia bloques de codigo o sintaxis de codigo. Describi la idea en prosa, sin codigo.",
     "contains_error_log": "El intento anterior parecia un log de error o traceback. Escribi una reflexion tecnica, no un log.",
