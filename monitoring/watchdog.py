@@ -634,16 +634,38 @@ def main() -> int:
     chat = env.get("TELEGRAM_CHAT_ID", "")
 
     # ── Single instance (race-free: O_CREAT|O_EXCL) ────────────────
+    # Bug 18/08/2026 (duplicados): dos procesos que arrancan al mismo instante
+    # hacían que el 2º leyera un lock todavíavacío (el 1º crea el archivo con
+    # O_EXCL y escribe su PID DESPUÉS de creado) → lo trataba como huérfano y
+    # se robaba el lock: DOS instancias vivas. Fix: esperar y releer el lock
+    # antes de declararlo huérfano + re-verificar que el lock sigue siendo
+    # NUESTRO tras la toma (si otro ganó mientras, salimos).
     try:
         fd = os.open(LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         os.write(fd, str(os.getpid()).encode("ascii"))
         os.close(fd)
     except FileExistsError:
         existing = _read_lock_pid()
+        if existing is None:
+            # Ventana de arranque: el 1er proceso aún no escribió su PID.
+            # Esperar hasta _WATCHDOG_LOCK_GRACE_S y releer antes de robar.
+            _grace = 0.0
+            while existing is None and _grace < 2.0:
+                time.sleep(0.2)
+                _grace += 0.2
+                existing = _read_lock_pid()
+            if existing is None:
+                existing = _read_lock_pid()  # último intento directo
         if existing and pid_alive(existing):
             logger.warning("watchdog: ya hay otra instancia (PID %s); salgo.", existing)
             return 1
         LOCK_FILE.write_text(str(os.getpid()), encoding="utf-8")  # lock huérfano
+        # Doble verificación: si mientras escribíamos otro originalmente ganó
+        # el lock con su PID vivo, el nuestro es el intruso → salir.
+        _sus = _read_lock_pid()
+        if _sus is not None and _sus != os.getpid() and pid_alive(_sus):
+            logger.warning("watchdog: lock ganado por PID %s (competición); salgo.", _sus)
+            return 1
 
     # ── Estado persistido entre reinicios del watchdog ──────────────
     state: dict = {}
