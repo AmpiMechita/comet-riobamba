@@ -222,6 +222,20 @@ class COMETRiobambaAgent:
         except Exception as e:
             logger.warning("Error enviando reporte inbound nocturno: %s", e)
 
+    def _maybe_run_nightly_reflection(self) -> None:
+        """Distila las interacciones del dia en topics de agenda (cadencia
+        interna diaria; fail-safe: si falla, nunca rompe el ciclo)."""
+        try:
+            from services.nightly_reflection import run_reflection
+            res = run_reflection()
+            if res.get("ran"):
+                logger.info(
+                    "Reflexion nocturna: %s eventos, %s topics añadidos a la agenda.",
+                    res.get("events_seen", 0), res.get("topics_added", 0),
+                )
+        except Exception as e:
+            logger.warning("Reflexion nocturna skip: %s", e)
+
     def _safe_record_action(self, action: str, success: bool = False, details: str = ""):
         if self._platform_awareness_available and self.platform_awareness:
             try:
@@ -776,6 +790,7 @@ class COMETRiobambaAgent:
         self._check_home_dashboard()
         self._maybe_send_daily_balance()
         self._maybe_send_nightly_inbound_report()
+        self._maybe_run_nightly_reflection()
 
         max_posts = behavior_cfg.get("max_posts_per_day", POLICY.max_posts_per_day)
         phase_a_blocked = self.posts_today >= max_posts
