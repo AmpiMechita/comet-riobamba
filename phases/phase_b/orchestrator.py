@@ -1441,8 +1441,30 @@ class PhaseB:
             # el summary reporta el DELTA (no 135 mil comentarios falsos) ──
             self._cycle_prefiltered_baseline = self._stats.get("queue_prefiltered", 0)
 
+            # ── Auto-tune semanal de umbrales (guardrails + cadencia) ──
+            # Si toca (7d), analiza el retorno real del ledger y ajusta de
+            # forma acotada feed_budget_pct / min_value. Fail-safe: nunca rompe
+            # el ciclo.
+            try:
+                from services.roi_auto_tune import apply_tuning
+                _tune = apply_tuning()
+                if _tune.get("ran") and _tune.get("changes"):
+                    logger.info(
+                        "roi_auto_tune: %d ajuste(s) aplicado(s): %s",
+                        len(_tune["changes"]), _tune.get("applied"),
+                    )
+            except Exception as _e:
+                logger.debug("roi_auto_tune: skip (%s)", _e)
+
             # ── Feed budget reservation ─────────────────────────────
-            feed_budget_pct = int(self.deps.behavior_cfg.get("feed_budget_pct", 40))
+            # El % lo decide el auto-tune de ROI (el .env ya no lo fija): los
+            # canales que producen retorno real reciben mas presupuesto.
+            try:
+                from services.roi_auto_tune import get_feed_budget_pct
+                _tuned_feed = get_feed_budget_pct(default_pct=15.0)
+            except Exception:
+                _tuned_feed = int(self.deps.behavior_cfg.get("feed_budget_pct", 40))
+            feed_budget_pct = int(_tuned_feed)
             feed_reserved = max(0, int(self.max_comments_per_day * feed_budget_pct / 100))
             own_cap = max(0, self.max_comments_per_day - feed_reserved)
 
@@ -3431,8 +3453,11 @@ class PhaseB:
             # superar un piso de valor (AGENT_MIN_REPLY_VALUE_SCORE) para
             # entrar, independiente de cuantos slots queden libres.
             try:
-                min_value = float(os.getenv("AGENT_MIN_REPLY_VALUE_SCORE", "0") or "0")
-            except (TypeError, ValueError):
+                from services.roi_auto_tune import get_min_value
+                # El .env explicito manda; si no, el auto-tune ajusta el piso
+                # de valor segun el retorno real de los scores bajos.
+                min_value = get_min_value(default_min=0.0)
+            except (TypeError, ValueError, ImportError):
                 min_value = 0.0
             queue: List[Tuple[str, Dict[str, Any], List[Dict[str, Any]]]] = []
             posts_with_pending = 0
