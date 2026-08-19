@@ -808,6 +808,9 @@ class PhaseB:
         # decisor (TTL 30 min por decisión negativa y razón determinista).
         # Evita re-evaluar el mismo comentario zombie ciclo tras ciclo.
         self._own_queue_skip_cooldown: Dict[str, datetime] = {}
+        # v5.9: cache del ROI por canal (gate de critica data-driven). Se
+        # rellena en la primera critica del ciclo, no por cada reply.
+        self._roi_channels_cache: Optional[Dict[str, float]] = None
         self._dedup = DedupStore()
         self._dedup.cleanup(older_than_hours=24)
         self._dedup.cleanup(older_than_hours=720)  # v5.0: 30-day deep cleanup
@@ -1440,6 +1443,10 @@ class PhaseB:
             # ── Baseline del ciclo: queue_prefiltered acumula entre ciclos,
             # el summary reporta el DELTA (no 135 mil comentarios falsos) ──
             self._cycle_prefiltered_baseline = self._stats.get("queue_prefiltered", 0)
+
+            # ── Cache del ROI por canal: se invalida cada ciclo para que el
+            # gate de critica use datos frescos (v5.9) ──
+            self._roi_channels_cache = None
 
             # ── Auto-tune semanal de umbrales (guardrails + cadencia) ──
             # Si toca (7d), analiza el retorno real del ledger y ajusta de
@@ -3330,10 +3337,11 @@ class PhaseB:
                     )
                     return "", None
 
-                # ── Borrador + revision SOLO en replies de alta exposicion
-                # (tier_quality = watchlist/referentes). El volumen general NO
-                # pasa por critica: duplicaria el costo para ~4% de upvotes. ──
-                if tier == "quality":
+                # ── Borrador + revision (writer + critic). No todo el volumen:
+                # solo alta exposicion (watchlist) y canales con ROI medido
+                # (data-driven). El resto pasa sin critica para no duplicar
+                # el costo en canales sin retorno demostrado. ──
+                if self._should_critique(tier, author):
                     reply, _quality_log = await self._critique_quality_draft(reply, f"{title} {body}")
                     logger.info("Phase B: quality reply: %s (post %s)", _quality_log, post.get("id"))
 
@@ -4453,6 +4461,30 @@ class PhaseB:
             return "primera_interaccion"
         return "valor"
 
+    def _should_critique(self, tier: str, author: str) -> bool:
+        """Decide si un reply pasa por writer + critic.
+
+        Regla data-driven (v5.9): la critica siempre para tier_quality
+        (watchlist) y, ademas, para cualquier canal cuyo retorno real medido
+        (upvotes/comentario del ledger) supere el umbral con muestra minima.
+        Asi el override pasa de regla estatica a decision basada en datos.
+        Cachea el ROI por ciclo (no relee el ledger por cada reply)."""
+        if tier == "quality":
+            return True
+        try:
+            reason = self._comment_entry_reason(author)
+            if reason == "watchlist":
+                return True
+            from services.roi_auto_tune import channels_with_roi, CRITIQUE_CHANNEL_ROI_MIN
+            if self._roi_channels_cache is None:
+                self._roi_channels_cache = channels_with_roi()
+            roi = self._roi_channels_cache.get(reason)
+            if roi is not None and roi >= CRITIQUE_CHANNEL_ROI_MIN:
+                return True
+        except Exception:
+            return False
+        return False
+
     def _is_watchlist_author(self, author: str) -> bool:
         return author.strip().lower() in self._watchlist_authors
 
@@ -4666,9 +4698,9 @@ class PhaseB:
                     )
                     return ""
 
-                # ── Borrador + revision SOLO en replies de alta exposicion
-                # (tier_quality = watchlist/referentes) ──
-                if tier == "quality":
+                # ── Borrador + revision (writer + critic): alta exposicion o canal
+                # con ROI medido (data-driven) ──
+                if self._should_critique(tier, author):
                     reply, _quality_log = await self._critique_quality_draft(
                         reply, f"{comment_text} {thread_history}"
                     )

@@ -282,6 +282,36 @@ def get_min_value(default_min: float = 0.0, path: Optional[Path] = None) -> floa
     return float(applied.get("min_value", default_min))
 
 
+# ── Canal con ROI medido (gate de critica) ─────────────────────────
+# La critica (writer + critic) se dispara para watchlist SIEMPRE y, de forma
+# data-driven, para cualquier canal cuyo retorno real (upvotes/comentario)
+# supere un umbral con muestra suficiente. Asi el override pasa de regla
+# estatica a decision basada en datos.
+CRITIQUE_CHANNEL_ROI_MIN = float(os.getenv("CRITIQUE_CHANNEL_ROI_MIN", "0.2"))
+
+
+def get_channel_roi(reason: str, min_sample: int = MIN_REASON_SAMPLE,
+                    path: Optional[Path] = None) -> Optional[float]:
+    """ROI (upvotes/comentario) de un canal, o None si muestra insuficiente."""
+    roi = analyze_roi(path)
+    rec = roi.get("reasons", {}).get(reason)
+    if not rec or rec["n"] < min_sample:
+        return None
+    return float(rec["roi"])
+
+
+def channels_with_roi(min_sample: int = MIN_REASON_SAMPLE,
+                      min_roi: float = CRITIQUE_CHANNEL_ROI_MIN,
+                      path: Optional[Path] = None) -> Dict[str, float]:
+    """Dict {canal: roi} para canales con ROI medido >= min_roi y muestra."""
+    roi = analyze_roi(path)
+    out: Dict[str, float] = {}
+    for reason, rec in roi.get("reasons", {}).items():
+        if rec["n"] >= min_sample and rec["roi"] >= min_roi:
+            out[reason] = float(rec["roi"])
+    return out
+
+
 def _print_report(rec: Dict[str, Any], roi: Dict[str, Any]) -> None:
     print(f"comentarios con retorno: {roi.get('total_checked', 0)}")
     reasons = roi.get("reasons", {})
