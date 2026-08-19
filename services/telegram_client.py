@@ -40,22 +40,100 @@ class TelegramClient:
         # ── /clean confirmation state ──
         self._pending_clean: dict | None = None
 
+    # ── Ledger y outbox (18/08/2026): todo lo enviado queda registrado en
+    # monitoring/telegram-ledger.jsonl (para el asistente y el watchdog), y
+    # los envíos fallidos se encolan en data/telegram_outbox.json para
+    # reintentarlos cuando el canal vuelva. ──────────────────────────────
+    LEDGER_FILE = BASE_DIR / "monitoring" / "telegram-ledger.jsonl"
+    OUTBOX_FILE = BASE_DIR / "data" / "telegram_outbox.json"
+
+    def _record_send(self, method: str, payload: dict, ok: bool) -> None:
+        try:
+            entry = {
+                "ts": time.time(),
+                "iso": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "method": method,
+                "ok": ok,
+                "text": str(payload.get("text", ""))[:300],
+            }
+            self.LEDGER_FILE.parent.mkdir(parents=True, exist_ok=True)
+            with self.LEDGER_FILE.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except Exception as e:
+            logger.warning("Telegram: ledger write failed: %s", e)
+
+    def _queue_outbox(self, method: str, payload: dict) -> None:
+        try:
+            entries: list = []
+            if self.OUTBOX_FILE.exists():
+                entries = json.loads(self.OUTBOX_FILE.read_text(encoding="utf-8"))
+            if any(e.get("payload") == payload for e in entries):
+                return  # ya está en cola (evita duplicados por reintentos)
+            entries.append({"ts": time.time(), "method": method, "payload": payload})
+            self.OUTBOX_FILE.parent.mkdir(parents=True, exist_ok=True)
+            self.OUTBOX_FILE.write_text(
+                json.dumps(entries[-50:], ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as e:
+            logger.warning("Telegram: outbox write failed: %s", e)
+
+    def retry_outbox(self) -> int:
+        """Reintenta los envíos pendientes de data/telegram_outbox.json.
+        Devuelve cuántos se enviaron correctamente."""
+        if not self.enabled:
+            return 0
+        try:
+            if not self.OUTBOX_FILE.exists():
+                return 0
+            entries = json.loads(self.OUTBOX_FILE.read_text(encoding="utf-8"))
+            if not entries:
+                return 0
+        except Exception as e:
+            logger.warning("Telegram: outbox read failed: %s", e)
+            return 0
+        remaining, sent = [], 0
+        for entry in entries:
+            method = entry.get("method", "sendMessage")
+            payload = entry.get("payload", {})
+            if self._send(method, payload):
+                sent += 1
+            else:
+                remaining.append(entry)
+        try:
+            self.OUTBOX_FILE.write_text(
+                json.dumps(remaining, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as e:
+            logger.warning("Telegram: outbox persist failed: %s", e)
+        return sent
+
     def _send(self, method: str, payload: dict) -> bool:
         if not self.enabled: return False
+        preview = str(payload.get("text", ""))[:300]
         try:
             url = f"{self.base_url}/{method}"
             response = requests.post(url, json=payload, timeout=30)
             if response.status_code == 200:
                 ok = response.json().get("ok", False)
-                if not ok:
+                if ok:
+                    logger.info("Telegram enviado (%s): %s", method, preview)
+                else:
                     logger.error("Telegram API returned ok=false for %s: %s",
                                  method, response.text[:200])
+                    self._queue_outbox(method, payload)
+                self._record_send(method, payload, ok)
                 return ok
             logger.error("Telegram send %s failed: HTTP %s %s",
                          method, response.status_code, response.text[:200])
+            self._queue_outbox(method, payload)
+            self._record_send(method, payload, False)
             return False
         except Exception as e:
             logger.error(f"Telegram send error: {e}")
+            self._queue_outbox(method, payload)
+            self._record_send(method, payload, False)
             return False
 
     def send_message(self, text: str, parse_mode: str = "HTML", disable_notification: bool = False) -> bool:

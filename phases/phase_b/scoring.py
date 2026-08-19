@@ -525,7 +525,12 @@ def _decide_reply(
     # ni siquiera en post propio. Spam, saludos, y 'me gusta' vacíos son ruido.
     muy_corto = len(text_lower) < 10
     solo_saludo = text_lower.strip() in {"hola", "hello", "hey", "hi", "buenas", "\U0001f44d"}
-    spam_like = any(k in text_lower for k in ("gana dinero", "sigue a", "visit", "check out"))
+    # v5.6+: spam solo si el comentario es CORTO y con intención promocional
+    # explícita. "check out"/"visit" aislados en una discusión técnica larga
+    # son contenido legítimo (falso positivo real: post 6d55a569, score=60).
+    _spam_intent = ("gana dinero", "sigue a", "sorteo", "promocion", "compra",
+                    "venta", "visita mi", "check out my", "visit my", "check out this")
+    spam_like = len(text_lower) < 100 and any(k in text_lower for k in _spam_intent)
     if (muy_corto or solo_saludo or spam_like) and bypass_applied:
         logger.info("Phase B: ruido puro ignorado pese a own-post/high-density (len=%d).", len(text_lower))
         return RelevanceDecision(False, score, "reply_skipped_low_relevance")
@@ -562,7 +567,9 @@ def _decide_reply(
 
     muy_corto = len(text_lower) < 10
     solo_saludo = text_lower.strip() in {"hola", "hello", "hey", "hi", "buenas", "\U0001f44d"}
-    spam_like = any(k in text_lower for k in ("gana dinero", "sigue a", "visit", "check out"))
+    _spam_intent = ("gana dinero", "sigue a", "sorteo", "promocion", "compra",
+                    "venta", "visita mi", "check out my", "visit my", "check out this")
+    spam_like = len(text_lower) < 100 and any(k in text_lower for k in _spam_intent)
 
     if muy_corto or solo_saludo or spam_like:
         return RelevanceDecision(False, score, "reply_skipped_low_relevance")

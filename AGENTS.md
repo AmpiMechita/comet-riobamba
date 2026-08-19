@@ -54,12 +54,67 @@
 - NO "arreglar" el parser de karma a campos planos.
 - Al proponer configs: respetar libre albedrío + anti-baneo; consultar `.env`.
 
+### Monitoreo en tiempo real (watchdog, 18/08/2026) — LEER ANTES DE ACTUAR
+- **Al inicio de cualquier sesión/tarea, correr `.\monitoring\status.ps1`**
+  (o leer `monitoring/latest.json` + `monitoring/watchdog-state.json`) y ACTUAR
+  sobre las alertas pendientes antes de tocar código. El operador quiere que
+  tanto él (Telegram) como el asistente lean los avisos para actuar de inmediato.
+- **`monitoring/watchdog.py`**: proceso continuo (tick 60s) que vigila:
+  agente vivo (auto-reinicio si cayó sin stop.flag, cooldown 30 min, máx 2/h),
+  circuitos LLM (3+ fallos/10 min en `data/cascade_telemetry.jsonl`), errores
+  de log (1h), modo degradado, saldos DeepSeek/OpenRouter (15 min), fallos de
+  Telegram (reintenta `data/telegram_outbox.json`), inactividad de publicación.
+  - Estado: `monitoring/watchdog-state.json` · Alertas: `monitoring/alerts.jsonl`
+    (compartido con health-check.ps1 → cooldown único, sin spam) · Log:
+    `logs/watchdog.log` · Lock: `.watchdog.lock` (creación atómica O_EXCL).
+  - El AGENTE supervisa al watchdog: `_maybe_supervise_watchdog()` en
+    `core/agent.py` lo relanza si su lock está muerto (intervalo 300s, env
+    `WATCHDOG_SUPERVISION_S`). El guard `monitoring/guard-watchdog.ps1`
+    (Task Scheduler `COMET-WatchdogGuard`, cada 5 min) es la tercera capa.
+  - **Reinicio del agente (18/08/2026)**: `decide_restart()` en watchdog.py
+    reinicia SOLO si el lock-PID está muerto (autoridad; el lock solo se
+    limpia al salir el proceso). NO reiniciar por staleness de health.json
+    (<2h): los ciclos duran ~8 min y con waits de publicación/retries pueden
+    pasar de 10 min → causaba falsos "Auto-reinicio" (alerta engañosa, no-op
+    real por el guard singleton de run-prod.ps1). Seguridad: lock vivo +
+    health >7200s = agente colgado → sí reiniciar.
+  - Auto-reinicio del agente: `run-prod.ps1` (aislado, respeta stop.flag).
+- **Ledger Telegram**: `monitoring/telegram-ledger.jsonl` registra TODO lo
+  enviado al móvil (ts, método, ok, texto) — `services/telegram_client.py`
+  lo escribe en `_send`; el watchdog escribe los suyos también. Para saber
+  qué recibió el operador: leer ese ledger (o el final de
+  `monitoring/telegram-sent.log`).
+- **No duplicar**: el watchdog solo re-alerta en transiciones (p. ej. saldo
+  bajo entra una vez, circuitos al abrir/recuperar). No crear más avisos por
+  tick. Los cooldowns del health-check (`alert-critical`/`alert-warning`,
+  60 min) marcan sus envíos en alerts.jsonl — respetarlos.
+- **health-check.ps1 (18/08/2026)**: la autoridad para "agente vivo" es el
+  PID de `.agent.lock` (el CIM no ve procesos de otra sesión y los ciclos
+  duran ~7 min, así que health.json puede tener hasta ~7 min de edad). No
+  revertir a buscar solo procesos `run_agent.py` ni a tolerancias < 15 min.
+  Circuitos en health-check: un tier cuenta como abierto solo con >=3
+  fallos/10 min Y ningún proveedor con éxito en la ventana (cascada caída
+  del todo); el fallback deepseek-directo→openrouter es ruido esperado.
+  No parsear `[DateTime]::Parse($obj.ts)` — ConvertFrom-Json ya lo
+  convirtió (el re-parse en formato local explota).
+- **Phase A weekly limit**: `data/editorial_policy.json`
+  `publication_policy.max_posts_per_week=105` alineado a 15/día del `.env`
+  (`AGENT_MAX_POSTS_PER_DAY`). La ventana es DESLIZANTE 7d
+  (`count_posts_since(7)`): si se vuelve a subir el diario, subir también
+  el semanal (7x) o Phase A se congela en "limite semanal alcanzado".
+  Síntoma: 0 posts con `Phase A: limite semanal alcanzado (X/X)`.
+- **ATENCIÓN (tests)**: `pytest tests/` sobrescribe `data/state/health.json`
+  (cycle=1) y otros archivos de estado reales; el agente los reescribe en su
+  próximo ciclo (~60s). No alarmarse por "ciclos=1" tras una corrida de tests.
+
 ## Run
 
 | Task | Command |
 |------|---------|
 | Dev | `python run_agent.py` |
 | Prod | `.\run-prod.ps1` |
+| Watchdog | `.\run-watchdog.ps1` (guard automático: Task Scheduler `COMET-WatchdogGuard`) |
+| Estado/alertas | `.\monitoring\status.ps1` |
 | Stop (graceful) | `New-Item data/stop.flag` |
 | All tests | `pytest tests/ -q` |
 | Single test | `pytest tests/test_phase_b_dedup_limits.py -v` |

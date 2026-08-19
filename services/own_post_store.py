@@ -126,6 +126,11 @@ def _append_to_published_log(post_id: str, topic: str, body: str = "") -> None:
     try:
         PUBLISHED_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
         history = _load_published_log()
+        for p in history:
+            if p.get("post_id") == post_id:
+                if topic and not p.get("topic"):
+                    p["topic"] = topic
+                return  # ya registrado: no duplicar (evita inflar count_posts_since)
         record = {
             "post_id": post_id,
             "topic": topic,

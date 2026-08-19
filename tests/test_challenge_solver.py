@@ -155,7 +155,7 @@ async def test_llm_fallback_when_native_fails():
     # Text without recognizable operation forces LLM fallback
     result = await solver.solve_and_verify({
         "verification_code": "v999",
-        "challenge_text": "obfuscated:forty_two_plus_zero",
+        "challenge_text": "unrecognized riddle text with no numbers",
     })
     assert result is True
     assert mock_cascade.generate.called
@@ -246,3 +246,25 @@ async def test_core_decimal_precision():
     llm = MockLLM("7.5")
     result = await solve("some challenge", llm)
     assert result == "7.50"
+
+
+@pytest.mark.parametrize("challenge_text,expected", [
+    ("A] LoObSsT.eR] ClAw^ FoRcE] Is^ ThIrTy] FiVe} NeUwToNs, Um| AnD] tHe] OtHeR^ ClAw~ AdDs] TwEnTy} FoUr< NeUwToNs, WhAt'S] ThE^ ToTaL| FoRcE?", "59.00"),
+    ("A] L oO b- StEr ] C lA w ] E xE rT s^ T hI rTy ] nOoToNs ] aNd ] tHe ] rIvA l ] cLaW ] A dD s ] T wE lV e ] nOoToNs , ] wHaT ] iS ] tHe ] tO tA l ] fOrCe ? ~ < > |", "42.00"),
+    ("ThIs] lO.oB sT-Er LooobsssTeR^ ExErTs TwEnTy ThReE nootons ] - [ DuRiNg MoLtInG It LoSeS SeVeN nootons, Um~ WhAt Is ThE NeT FoRcE< ? ", "16.00"),
+    ("A] LoObBsS tErR sW^iMmS uMm/ iN tHe] aQuA lIkE, lOoObBsSsTeR vElAwCiTeE iS tW/eN tY tHrEe MeTeRs- PeR sEeCoNd, aNd| iTs ClAaWw FoOrRcEe Is F/oUr NeWToNs~ MuLtI^pLy ThEsE, hOw MaNy NooOtOnMeTeR sIsSs?", "92.00"),
+    ("A] Lo.BsT-Er] ClAw ^FoRcE Is ThIrTy TwO NeW<ToNs Um, AnD InCrEaSeS By FiFfTeEn NeW>ToNs, WhAt Is ThE ToTaL FoRcE?", "47.00"),
+    ("A] lO oBbSsTt-Er' s ClA^w ExE rTs ThIrTy FiVeee NooToNs ] AnD T]hE W~aTeR PrE ssUrE AdDs TwElVe NooToNs, WhAt'S ToTaL FoRcE?", "47.00"),
+    ("A] lO^bSt-Er LoOobsssTeR cLaW fO^rCe Is S[iRrTy FivE] nEu-TonSs- ]+ [aNoThEr] lOoObsTtEr ClAw fOrCe Is T[wElVe] nEu-TonSs, WhAt Is ToTaL FOrCe?", "47.00"),
+    ("A] Lo.oBbS tErRr ~ S^wImS| aT/ tWeNtY tHrEe <vElAwCiTeE> ]cM/s AnD- AcCeLeRaTeS{ bY/ sEvEn }uMn, WhAtS- ThE^ nEw| VeLo^oCiTy?", "30.00"),
+    ("EaCh ] lO-oObBsTtErr ] ClAw ] FoRcE ] iS ] tHiRrTy^ fIiV[e ] NoOtT/OnS umm, AnD ] tW/oO ] lOoObBsStTeRrS ] piN]cH, HoW ] mUcH ] ToTaL ] FoR/ce ] (uSe ] mUlTiPlY) ?", "70.00"),
+    ("A] lO.bSt-Er S^wImS lIke V eL aWcItEe At] tWeN tY ThReE cE nTiMeTeRs/ pEr SeCoNd, uM| dU rInG a D oMmInAnCe] fIgH t It LoSeS sEvEn, wHaT]s N eW vE lO cItY ~?", "16.00"),
+    ("A] L oO b- StE rr ClA w] ExE rTs^ ThIr Ty FiV e] NoOt-O nS ~ AnD/ WaTe R] PrEs SuRe- AdD s^ SeV eN {,} WhA tIs/ ToTa L?", "42.00"),
+    ("A] Lo.O bS tEr'S SwImMiNnG VeLaWcItEe Is] TwEnTy ThReE MeTeRs PeR MiNuTe, AnD A CuRrReEnT AdDs FiVe MeTeRs PeR MiNuTe; WhAt'S CoMbInEd VeLoCiTy? ^ { < > }", "28.00"),
+    ("A] lOoObSsTtEeR] 'Ss ClLaW^ aPpLlIiEs/ tHhIiRrTtYy TwWoO nEeWwToOnNs- aNd] aNnOtThHeR^ aPpPlIiEeS/ eIiGhHtTeEeN nEeWwToOnNs, wHaT/ iSs] tHe^ ToOtTaLl FoOrRcEe?", "50.00"),
+    ("A] lOo-BsTtErRr S^cLaWw F|oRrCeE iSs [fO rTy] fIi-Ve~ nEu-TooNs\\, uM {mOlTtInG} aDdS/ tWe-LvE, hOw^ mAnY] nEeW| fO rCeE< tOtAl>?", "57.00"),
+])
+def test_production_obfuscated_samples(challenge_text, expected):
+    from services.captcha_math_solver import solve_captcha_math
+    assert solve_captcha_math(challenge_text) == expected
+

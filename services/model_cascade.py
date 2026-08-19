@@ -33,15 +33,15 @@ _ANTHROPIC_OUTPUT_PRICE_PER_1M = 10.0
 # ── Precios USD por 1M tokens (input, output) por proveedor, para el
 # dashboard de gasto en vivo (cascade_telemetry.jsonl). Los proveedores
 # gratis (Gemini AI Studio, OpenRouter free, Cloudflare, Cerebras, Groq)
-# cotizan 0. Gemini via OpenRouter (18/08/2026): 3.7-flash $0.375/$1.875,
-# 3.5-flash-lite $0.30/$2.50. DeepSeek (legacy): $0.28/$1.14. ──
+# cotizan 0. Gemini via OpenRouter (con promo 50% hasta 27 ago 2026):
+# gemini-3.7-flash ~$0.075/$0.30, 2.5-flash ~$0.05/$0.20. ──
 _PROVIDER_PRICES_PER_1M: Dict[str, tuple] = {
     "tier_premium": (_ANTHROPIC_INPUT_PRICE_PER_1M, _ANTHROPIC_OUTPUT_PRICE_PER_1M),
     "tier_premium_opus": (5.0, 25.0),
     "tier_fallback": (0.28, 1.14),
-    "tier_flash": (0.30, 2.50),        # google/gemini-3.5-flash-lite (OpenRouter)
-    "tier_quality": (0.375, 1.875),    # google/gemini-3.7-flash (OpenRouter)
-    "openrouter": (0.375, 1.875),      # google/gemini-3.7-flash (contenido pesado)
+    "tier_flash": (0.075, 0.30),        # google/gemini-3.7-flash (OpenRouter promo 50%)
+    "tier_quality": (0.075, 0.30),      # google/gemini-3.7-flash (OpenRouter promo 50%)
+    "openrouter": (0.075, 0.30),        # google/gemini-3.7-flash (OpenRouter promo 50%)
 }
 
 
@@ -258,7 +258,7 @@ class ModelCascade:
                 ProviderConfig(
                     name="tier_quality",
                     url=creds.tier_openrouter.url,
-                    model=os.getenv("QUALITY_MODEL", "minimax/minimax-m3"),
+                    model=os.getenv("QUALITY_MODEL", "google/gemini-3.7-flash"),
                     api_key=creds.tier_openrouter.api_key,
                     timeout=creds.tier_openrouter.timeout_seconds,
                     max_retries=self.default_retries,
@@ -326,12 +326,10 @@ class ModelCascade:
                 )
             )
 
-        # ── tier_flash: Gemini 3.5-flash-lite via OpenRouter (18/08/2026) ──
+        # ── tier_flash: Gemini 3.7-flash via OpenRouter (18/08/2026) ──
         # Con saldo OpenRouter disponible, tier_flash (replies de volumen,
-        # follow-ups, generación no-hero Fase A) usa google/gemini-3.5-flash-lite
-        # pagado ($0.30/$2.50 por 1M): calidad alta a costo mínimo. Si no hay
-        # MODEL_TIER_FLASH_URL/API_KEY configurados, cae al bloque legacy
-        # (Zen free o DeepSeek directo) intacto.
+        # follow-ups, generación no-hero Fase A) usa google/gemini-3.7-flash
+        # pagado con 50% de descuento: máxima calidad a costo mínimo.
         _flash_url = os.getenv("MODEL_TIER_FLASH_URL", "").strip()
         _flash_key = os.getenv("MODEL_TIER_FLASH_API_KEY", "").strip()
         if _flash_url and _flash_key:
@@ -339,7 +337,7 @@ class ModelCascade:
                 ProviderConfig(
                     name="tier_flash",
                     url=_flash_url,
-                    model=os.getenv("MODEL_TIER_FLASH_MODEL", "google/gemini-3.5-flash-lite"),
+                    model=os.getenv("MODEL_TIER_FLASH_MODEL", "google/gemini-3.7-flash"),
                     api_key=_flash_key,
                     timeout=int(os.getenv("MODEL_TIER_FLASH_TIMEOUT_SECONDS", "60") or 60),
                     max_retries=self.default_retries,

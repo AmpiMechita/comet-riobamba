@@ -345,3 +345,45 @@ def test_check_recent_off_niche_issues_missing_file_returns_none(tmp_path):
     with patch.object(tc, "GENERATION_ATTEMPTS_FILE", tmp_path / "no.jsonl"), \
          patch.dict(tc._alert_cooldowns, {}, clear=True):
         assert tc.check_recent_off_niche_issues() is None
+
+
+# ── Watchlist Inbound Report Tests ──────────────────────────────
+
+def test_generate_inbound_report_with_data(tmp_path):
+    import services.telegram_control as tc
+    inbound_file = tmp_path / "watchlist_inbound.json"
+    inbound_file.write_text(json.dumps({
+        "date": "2026-08-18",
+        "counts": {"vina": 3, "neo_konsi_s2bw": 1}
+    }), encoding="utf-8")
+
+    with patch.object(tc, "WATCHLIST_INBOUND_FILE", inbound_file):
+        report = tc.generate_inbound_report("2026-08-18")
+    assert "4 comentario(s)" in report
+    assert "@vina" in report
+    assert "@neo_konsi_s2bw" in report
+
+
+def test_generate_inbound_report_empty(tmp_path):
+    import services.telegram_control as tc
+    inbound_file = tmp_path / "watchlist_inbound.json"
+    with patch.object(tc, "WATCHLIST_INBOUND_FILE", inbound_file):
+        report = tc.generate_inbound_report("2026-08-18")
+    assert "0" in report
+    assert "Sin comentarios inbound" in report
+
+
+def test_handle_command_inbound():
+    from services.telegram_control import handle_command
+    result = handle_command("/inbound")
+    assert "Reporte Inbound" in result
+
+
+def test_should_send_inbound_report(tmp_path):
+    import services.telegram_control as tc
+    state_file = tmp_path / "state.json"
+    with patch.object(tc, "INBOUND_REPORT_STATE_FILE", state_file):
+        assert tc.should_send_inbound_report(hour=0) is True
+        tc.mark_inbound_report_sent()
+        assert tc.should_send_inbound_report(hour=0) is False
+

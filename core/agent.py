@@ -208,6 +208,20 @@ class COMETRiobambaAgent:
         except Exception as e:
             logger.warning("Error en balance diario: %s", e)
 
+    def _maybe_send_nightly_inbound_report(self) -> None:
+        """Send nightly Watchlist Inbound report via Telegram once per day (default 21:00)."""
+        if not self.telegram_client or not self.telegram_client.enabled:
+            return
+        try:
+            from services.telegram_control import should_send_inbound_report, generate_inbound_report, mark_inbound_report_sent
+            if should_send_inbound_report():
+                report_msg = generate_inbound_report()
+                self.telegram_client.send_message(report_msg, parse_mode="HTML")
+                mark_inbound_report_sent()
+                logger.info("🎯 Reporte nocturno de Watchlist Inbound enviado por Telegram")
+        except Exception as e:
+            logger.warning("Error enviando reporte inbound nocturno: %s", e)
+
     def _safe_record_action(self, action: str, success: bool = False, details: str = ""):
         if self._platform_awareness_available and self.platform_awareness:
             try:
@@ -761,6 +775,7 @@ class COMETRiobambaAgent:
         self.state._check_daily_reset()
         self._check_home_dashboard()
         self._maybe_send_daily_balance()
+        self._maybe_send_nightly_inbound_report()
 
         max_posts = behavior_cfg.get("max_posts_per_day", POLICY.max_posts_per_day)
         phase_a_blocked = self.posts_today >= max_posts

@@ -18,6 +18,8 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger("services.telegram_control")
 
 BRIEFING_STATE_FILE = Path("data/telegram_briefing_state.json")
+INBOUND_REPORT_STATE_FILE = Path("data/telegram_inbound_report_state.json")
+WATCHLIST_INBOUND_FILE = Path("data/watchlist_inbound_today.json")
 AGENT_PROPOSALS_FILE = Path("data/agent_proposals.jsonl")
 GENERATION_ATTEMPTS_FILE = Path("data/generation_attempts.jsonl")
 _FEED_STALL_STATE_FILE = Path("data/phase_b_feed_stall.json")
@@ -136,6 +138,107 @@ def generate_daily_briefing() -> str:
         pass
 
     lines.append("")
+
+    # ── Watchlist Inbound ──
+    try:
+        if WATCHLIST_INBOUND_FILE.exists():
+            w_data = json.loads(WATCHLIST_INBOUND_FILE.read_text(encoding="utf-8"))
+            if w_data.get("date") == str(yesterday):
+                w_counts = w_data.get("counts", {})
+                w_total = sum(int(v) for v in w_counts.values())
+                if w_total > 0:
+                    lines.append(f"🎯 <b>Watchlist Inbound ayer:</b> {w_total} comentario(s)")
+                    for author, cnt in sorted(w_counts.items(), key=lambda x: -int(x[1]))[:3]:
+                        lines.append(f"  • @{html.escape(author)}: {cnt}")
+                    lines.append("")
+    except Exception:
+        pass
+
+    lines.append(f"<i>Generado: {datetime.now().strftime('%Y-%m-%d %H:%M')}</i>")
+    return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════
+# WATCHLIST INBOUND REPORT (NIGHTLY & ON-DEMAND)
+# ══════════════════════════════════════════════════════════════
+
+def should_send_inbound_report(hour: int = 21) -> bool:
+    """True if it's past the configured hour and nightly inbound report hasn't been sent today."""
+    now = datetime.now()
+    import os
+    target_hour = int(os.getenv("TELEGRAM_INBOUND_REPORT_HOUR", str(hour)))
+    if now.hour < target_hour:
+        return False
+    if not INBOUND_REPORT_STATE_FILE.exists():
+        return True
+    try:
+        data = json.loads(INBOUND_REPORT_STATE_FILE.read_text(encoding="utf-8"))
+        last = data.get("last_report", "")
+        if last:
+            last_date = datetime.fromisoformat(last).date()
+            if last_date == now.date():
+                return False
+    except Exception:
+        pass
+    return True
+
+
+def mark_inbound_report_sent() -> None:
+    INBOUND_REPORT_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    INBOUND_REPORT_STATE_FILE.write_text(
+        json.dumps({"last_report": datetime.now().isoformat()}),
+        encoding="utf-8",
+    )
+
+
+def generate_inbound_report(target_date: Optional[str] = None) -> str:
+    """Generate the nightly Watchlist Inbound report message."""
+    if not target_date:
+        target_date = datetime.now().date().isoformat()
+
+    lines = [f"🎯 <b>COMET — Reporte Inbound ({target_date})</b>", ""]
+
+    inbound_data = {}
+    if WATCHLIST_INBOUND_FILE.exists():
+        try:
+            data = json.loads(WATCHLIST_INBOUND_FILE.read_text(encoding="utf-8"))
+            if data.get("date") == target_date:
+                inbound_data = data.get("counts", {})
+        except Exception:
+            pass
+
+    total_comments = sum(int(v) for v in inbound_data.values()) if inbound_data else 0
+
+    if total_comments > 0:
+        lines.append(f"👥 <b>Referentes Watchlist en posts de COMET:</b> {total_comments} comentario(s)")
+        sorted_authors = sorted(inbound_data.items(), key=lambda x: -int(x[1]))
+        for author, count in sorted_authors:
+            lines.append(f"  • <b>@{html.escape(author)}:</b> {count} comentario(s)")
+    else:
+        lines.append("👥 <b>Referentes Watchlist en posts de COMET:</b> 0")
+        lines.append("  <i>(Sin comentarios inbound de referentes hoy; objetivo >0/día)</i>")
+
+    lines.append("")
+
+    # Check research agenda topics generated from watchlist pairing
+    try:
+        agenda_file = Path("data/research_agenda.json")
+        if agenda_file.exists():
+            agenda = json.loads(agenda_file.read_text(encoding="utf-8"))
+            topics = agenda.get("topics", [])
+            pairing_topics = [
+                t for t in topics
+                if t.get("source") == "watchlist_pairing" and t.get("created_at", "").startswith(target_date)
+            ]
+            if pairing_topics:
+                lines.append(f"🔄 <b>Counter-claims registrados para Fase A:</b> {len(pairing_topics)}")
+                for pt in pairing_topics[:3]:
+                    title = html.escape(pt.get("topic", "?"))[:65]
+                    lines.append(f"  • {title}")
+                lines.append("")
+    except Exception:
+        pass
+
     lines.append(f"<i>Generado: {datetime.now().strftime('%Y-%m-%d %H:%M')}</i>")
     return "\n".join(lines)
 
@@ -292,10 +395,13 @@ def handle_command(command: str, agent=None) -> str:
         return _cmd_learnings()
     elif cmd == "/spend":
         return _cmd_spend()
+    elif cmd == "/inbound":
+        return _cmd_inbound()
     else:
         return (
             "📋 <b>Comandos:</b>\n"
             "/stats — Métricas del día\n"
+            "/inbound — Referentes watchlist que comentaron hoy\n"
             "/top — Últimos 5 posts\n"
             "/claims — Top 5 claims reforzados\n"
             "/next — Próximo topic de Phase A\n"
@@ -308,6 +414,13 @@ def handle_command(command: str, agent=None) -> str:
             "/learnings — Lo que aprendí hoy en Moltbook\n"
             "/spend — Gasto LLM de hoy por tarea"
         )
+
+
+def _cmd_inbound() -> str:
+    try:
+        return generate_inbound_report()
+    except Exception as e:
+        return f"Error generando reporte inbound: {e}"
 
 
 def _cmd_stats() -> str:

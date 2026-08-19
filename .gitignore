@@ -87,6 +87,7 @@ Thumbs.db
 
 # Agent runtime lock
 .agent.lock
+.watchdog.lock
 
 # Compressed backups
 _legacy_backup_*.zip

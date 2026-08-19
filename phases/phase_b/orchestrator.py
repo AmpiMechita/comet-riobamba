@@ -804,6 +804,10 @@ class PhaseB:
         # ── Techo TOTAL por post-raiz (backstop anti-dogpile, todas las vias) ──
         self._total_replies_per_post_path: Path = reply_cap._TOTAL_REPLIES_PER_POST_PATH
         self._last_comment_per_thread: Dict[str, str] = {}
+        # v5.5+: cooldown de candidatos de la cola propia que fallan el
+        # decisor (TTL 30 min por decisión negativa y razón determinista).
+        # Evita re-evaluar el mismo comentario zombie ciclo tras ciclo.
+        self._own_queue_skip_cooldown: Dict[str, datetime] = {}
         self._dedup = DedupStore()
         self._dedup.cleanup(older_than_hours=24)
         self._dedup.cleanup(older_than_hours=720)  # v5.0: 30-day deep cleanup
@@ -2121,8 +2125,8 @@ class PhaseB:
             roadmap = load_roadmap()
             roadmap_topics_lower = set(t.lower() for t in roadmap.all_topics())
 
-            candidate_posts = self._fetch_candidate_posts(limit=50)
-            candidate_posts = candidate_posts[:15]  # slightly larger pool for stricter selection
+            candidate_posts = self._fetch_candidate_posts(limit=20)
+            candidate_posts = candidate_posts[:12]  # pool de selección más ajustado para reducir ciclos largos
 
             search_posts = await self._fetch_semantic_search_posts() if self._semantic_search_enabled else []
             self._stats["semantic_candidates"] = len(search_posts)
@@ -3466,6 +3470,17 @@ class PhaseB:
                     if not queuable:
                         queue_filter_counts[reason] = queue_filter_counts.get(reason, 0) + 1
                         continue
+                    # ── Cooldown anti-zombie (v5.5+): candidato que ya falló el
+                    # decisor en un ciclo reciente no se re-evalúa hasta que
+                    # expire el TTL — evita el bucle de un comentario muerto
+                    # consumiendo slots/LLM ciclo tras ciclo. ──
+                    _cid = c.get("id") or c.get("comment_id")
+                    _cd_key = f"{post_id}:{_cid}"
+                    if _cd_key in self._own_queue_skip_cooldown and \
+                            datetime.now(timezone.utc) < self._own_queue_skip_cooldown[_cd_key]:
+                        queue_filter_counts["cooldown"] = queue_filter_counts.get("cooldown", 0) + 1
+                        continue
+                    self._own_queue_skip_cooldown.pop(_cd_key, None)
                     # ── Score de valor: se mide SIEMPRE (telemetria de la
                     # distribucion para calibrar el umbral con datos); el
                     # filtro solo aplica si el umbral esta seteado. ──
@@ -3655,6 +3670,25 @@ class PhaseB:
                     merged[pid] = dict(p)
         except Exception as e:
             logger.warning(f"Phase B: error fetching recent own posts: {e}")
+        # ── Auto-sync del registro durable (v5.5+): posts que la API reporta
+        # como propios pero que no están en own_post_ids.json (p.ej. publicados
+        # antes de existir el registro) se registran sin duplicar — esto evita
+        # perder el own-post bypass de relevancia. La API es fuente de verdad
+        # para "qué posts son míos"; el registro durable solo lo confirma. ──
+        try:
+            from services.own_post_store import register_post
+            known = self._get_own_post_ids()
+            synced = 0
+            for pid in list(merged.keys()):
+                if pid not in known:
+                    register_post(pid)
+                    known.add(pid)
+                    synced += 1
+            if synced:
+                self._own_post_ids_cache = known
+                logger.info("Phase B: auto-sync own_post_store: %d post(s) registrado(s) desde API.", synced)
+        except Exception as e:
+            logger.debug("Phase B: auto-sync own_post_store no disponible: %s", e)
         return list(merged.values())
 
     def _get_own_post_ids(self) -> Set[str]:
@@ -3970,6 +4004,13 @@ class PhaseB:
             post_text=post_text,
         )
         if not decision.should_reply:
+            # ── Anti-zombie (v5.5+): un rechazo definitivo (no de presupuesto)
+            # pone al candidato en cooldown 30 min para que no re-entre a la
+            # cola en cada ciclo hasta que expire el TTL. ──
+            if decision.reason not in ("reply_skipped_limit_reached",):
+                self._own_queue_skip_cooldown[f"{post_id}:{comment_id}"] = (
+                    datetime.now(timezone.utc) + timedelta(minutes=30)
+                )
             send_event("phase_b_reply_skip", {
                 "post_id": post_id,
                 "comment_id": comment_id,
