@@ -12,6 +12,15 @@ $script:root = Split-Path -Parent $PSScriptRoot
 $today = Get-Date
 $targetDate = $today.AddDays(-1).ToString("yyyy-MM-dd")
 
+# ── Registrar el trend de karma del dia (persistente en karma_trend.jsonl) ──
+try {
+    $py = Join-Path $script:root ".venv\Scripts\python.exe"
+    if (-not (Test-Path $py)) { $py = "python" }
+    & $py -m scripts.karma_roi_report --record --date $targetDate 2>$null | Out-Null
+} catch {
+    # no romper el reporte si falla el registro del trend
+}
+
 function Get-TelegramEnv {
     $envFile = Join-Path $script:root ".env"
     $result = @{ enabled = $false; token = ""; chat = "" }
@@ -101,6 +110,31 @@ while ($d -lt $today) {
         [void]$md.AppendLine("| $dateStr | sin datos | | | | |")
     }
     $d = $d.AddDays(1)
+}
+[void]$md.AppendLine("")
+
+# ── 2b. Retorno de karma (tendencia) ─────────────────────────────────
+$karmaTrend = Join-Path $script:root "monitoring\karma_trend.jsonl"
+[void]$md.AppendLine("## Karma (retorno)")
+if (Test-Path $karmaTrend) {
+    try {
+        $krows = @(Get-Content $karmaTrend | ForEach-Object {
+            try { $_ | ConvertFrom-Json } catch { $null }
+        } | Where-Object { $_ })
+        if ($krows.Count -gt 0) {
+            foreach ($kr in ($krows | Sort-Object date -Descending | Select-Object -First 5)) {
+                $kd = if ($null -ne $kr.karma_delta) { $kr.karma_delta } else { "-" }
+                $upc = if ($null -ne $kr.roi_upvotes_per_comment) { $kr.roi_upvotes_per_comment } else { "-" }
+                [void]$md.AppendLine("- $($kr.date): karma $kd | posts $($kr.posts) | upv/com $upc | inbound $($kr.inbound_watchlist)")
+            }
+        } else {
+            [void]$md.AppendLine("- Sin datos de tendencia de karma todavia.")
+        }
+    } catch {
+        [void]$md.AppendLine("- Error leyendo tendencia de karma: $($_.Exception.Message)")
+    }
+} else {
+    [void]$md.AppendLine("- Sin tendencia de karma registrada (corre `python -m scripts.karma_roi_report --record`).")
 }
 [void]$md.AppendLine("")
 
