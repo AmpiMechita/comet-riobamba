@@ -123,7 +123,7 @@ EDITORIAL_CONFIG = {
         "HISTORICAL CLAIMS: Do not borrow authority from named third-party incidents you cannot verify. Your credibility comes from mechanisms you can defend and incidents you actually lived. If you cannot source it, argue it without the anecdote.",
         "Frame your inventions impersonally: 'The mechanism is', 'Gate at X', 'The protocol should'. Do not narrate personal lived experience.",
         "END with tension that invites argument: either ONE sharp technical question, OR a strong, debatable assertion that dares disagreement. Never polite engagement-bait ('what do you think?'). The reader should want to reply and push back — and ideally steal your idea.",
-        "Maximum 150 words. Density and punch over length.",
+        "Write 120-220 words (600-900 characters). Density and punch over length, but never under the minimum length.",
         "FORBIDDEN: NEVER mention Moltbook, this platform, or any social network by name.",
     ],
 }
@@ -624,6 +624,9 @@ def choose_topic(mode: str = "research") -> tuple[str, str]:
             if str(t.get("source", "")).startswith("phase_b_feed") and not allow_feed:
                 logger.debug("Phase A: skipping topic '%s' (source=%s)", t.get("topic", ""), t.get("source", ""))
                 continue
+            if _topic_in_cooldown(t.get("topic", "")):
+                logger.info("Phase A: skipping topic en cooldown '%s'", t.get("topic", "")[:50])
+                continue
             uncovered.append(t)
             if len(uncovered) >= 3:
                 break
@@ -700,8 +703,9 @@ def build_prompts(topic: str, policy: Optional[Dict[str, Any]] = None, variant: 
     variant_extra = ""
     if variant == "more_concise":
         variant_extra = (
-            "VARIANT: Write MORE CONCISELY than usual. Target 50-80 words. "
-            "Single paragraph only. Every word must add technical value.\n"
+            "VARIANT: Write MORE CONCISELY than usual. Target 120-160 words "
+            "(still above the minimum length). Single paragraph only. "
+            "Every word must add technical value.\n"
         )
     elif variant == "failure_focused":
         variant_extra = (
@@ -1153,9 +1157,80 @@ def _log_rejected_body(topic: str, topic_source: str, attempt: int, reason: str,
         logger.debug("Phase A: no se pudo registrar rejected body: %s", e)
 
 
+# ── Cooldown de topics fallidos (v5.11) ───────────────────────────────
+# Rompe el bucle de un topic "toxico" que falla la validacion repetidamente
+# (ej. 105x too_short del mismo topic con Gemini 3.7 Flash) bloqueando la
+# publicacion. Cuando un topic agota sus reintentos con fallo determinista,
+# entra en cooldown persistente y el selector lo salta hasta que expire.
+_TOPIC_COOLDOWN_PATH = BASE_DIR / "data/phase_a_topic_cooldown.json"
+TOPIC_COOLDOWN_MINUTES = float(os.getenv("PHASE_A_TOPIC_COOLDOWN_MINUTES", "240"))  # 4h
+
+
+def _load_topic_cooldown() -> Dict[str, str]:
+    if not _TOPIC_COOLDOWN_PATH.exists():
+        return {}
+    try:
+        data = json.loads(_TOPIC_COOLDOWN_PATH.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError, ValueError):
+        return {}
+
+
+def _save_topic_cooldown(cooldown: Dict[str, str]) -> None:
+    try:
+        _TOPIC_COOLDOWN_PATH.parent.mkdir(parents=True, exist_ok=True)
+        from utils.file_helpers import write_json_atomic
+        write_json_atomic(_TOPIC_COOLDOWN_PATH, cooldown, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.debug("Phase A: no se pudo guardar topic cooldown: %s", e)
+
+
+def _topic_in_cooldown(topic: str) -> bool:
+    """True si el topic esta en cooldown vigente (expires_at futuro)."""
+    if not topic:
+        return False
+    expires = _load_topic_cooldown().get(_tema_key(topic))
+    if not expires:
+        return False
+    try:
+        exp = datetime.fromisoformat(str(expires))
+    except ValueError:
+        return False
+    now = datetime.now(timezone.utc)
+    if exp.tzinfo is None:
+        exp = exp.replace(tzinfo=timezone.utc)
+    return now < exp
+
+
+def _mark_topic_cooldown(topic: str, reason: str = "") -> None:
+    """Mete el topic en cooldown por TOPIC_COOLDOWN_MINUTES."""
+    if not topic:
+        return
+    cooldown = _load_topic_cooldown()
+    key = _tema_key(topic)
+    expires = datetime.now(timezone.utc) + timedelta(minutes=TOPIC_COOLDOWN_MINUTES)
+    cooldown[key] = expires.isoformat()
+    # poda: descarta entradas expiradas para no crecer sin fin
+    now = datetime.now(timezone.utc)
+    for k, v in list(cooldown.items()):
+        try:
+            if datetime.fromisoformat(str(v)) < now:
+                del cooldown[k]
+        except ValueError:
+            del cooldown[k]
+    _save_topic_cooldown(cooldown)
+    logger.warning(
+        "Phase A: topic en cooldown %.0f min (reason=%s): '%s'",
+        TOPIC_COOLDOWN_MINUTES, reason or "-", topic[:60],
+    )
+
+
+def _tema_key(topic: str) -> str:
+    return " ".join((topic or "").lower().split())
+
+
 _RETRY_CORRECTION_HINTS: Dict[str, str] = {
-    "too_short": "El intento anterior fue muy corto. Desarrolla la idea con mas profundidad hasta llegar al largo minimo requerido.",
-    "too_long": "El intento anterior excedio el largo maximo. Se mas directo y recorta lo accesorio.",
+    "too_short": "El intento anterior fue muy corto. Desarrolla la idea con mas profundidad hasta llegar al largo minimo requerido.",    "too_long": "El intento anterior excedio el largo maximo. Se mas directo y recorta lo accesorio.",
     "contains_url": "El intento anterior incluia una URL. No incluyas links.",
     "contains_code": "El intento anterior incluia bloques de codigo o sintaxis de codigo. Describi la idea en prosa, sin codigo.",
     "contains_error_log": "El intento anterior parecia un log de error o traceback. Escribi una reflexion tecnica, no un log.",
@@ -1233,6 +1308,9 @@ def _topic_with_matrix_fallback(
         for t in all_uncovered:
             if str(t.get("source", "")).startswith("phase_b_feed") and not allow_feed:
                 logger.debug("Phase A: skipping topic '%s' (source=%s)", t.get("topic", ""), t.get("source", ""))
+                continue
+            if _topic_in_cooldown(t.get("topic", "")):
+                logger.info("Phase A: skipping topic en cooldown '%s'", t.get("topic", "")[:50])
                 continue
             uncovered.append(t)
             if len(uncovered) >= 3:
@@ -1442,6 +1520,9 @@ class PhaseAContentGeneration:
                     yaml_topics = _load_strategy_yaml_topics() or []
                     all_rotated_topics = yaml_topics + [t for t in EDITORIAL_CONFIG["topics"] if t not in yaml_topics]
                     for alt in all_rotated_topics:
+                        # v5.11: saltar topics en cooldown (fallaron validacion)
+                        if _topic_in_cooldown(alt):
+                            continue
                         if not _is_topic_recently_used(alt) and _is_allowed_topic(alt):
                             topic = alt
                             topic_source = "dedup_fallback"
@@ -1461,7 +1542,7 @@ class PhaseAContentGeneration:
                                 best_alt_sim = avg_sim
                                 best_alt = alt
                     if not alt_found:
-                        if best_alt and _is_allowed_topic(best_alt):
+                        if best_alt and _is_allowed_topic(best_alt) and not _topic_in_cooldown(best_alt):
                             topic = best_alt
                             topic_source = "forced_fallback"
                             logger.info("Phase A: Forzando publicación de tema '%s' (menor similitud=%.2f) para evitar silencio editorial.", topic[:60], best_alt_sim)
@@ -1648,6 +1729,9 @@ class PhaseAContentGeneration:
                     _log_rejected_body(topic, topic_source, attempt, f"validation_failed:{reason}", title, post_text)
                     retry_correction = _build_retry_correction(f"validation_failed:{reason}")
                     if attempt >= max_attempts:
+                        # v5.11: topic que agota reintentos con fallo determinista
+                        # entra en cooldown para no bloquear la publicacion.
+                        _mark_topic_cooldown(topic, reason=f"validation_failed:{reason}")
                         generated_post = {"title": title, "body": post_text, "metadata": {"topic": topic, "validation_reason": reason}, "attempts": attempt, "published": False, "error": f"validation_failed:{reason}"}
                     continue
 
