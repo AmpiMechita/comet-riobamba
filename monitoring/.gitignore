@@ -7,3 +7,4 @@ heartbeat.json
 watchdog-state.json
 telegram-ledger.jsonl
 daily-*.md
+karma_trend.jsonl
