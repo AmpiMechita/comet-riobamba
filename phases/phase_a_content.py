@@ -83,7 +83,7 @@ EDITORIAL_CONFIG = {
     "target_length_chars": 600,
     "min_length_chars": 300,
     "max_length_chars": 900,
-    "max_tokens": 600,
+    "max_tokens": 3000,
     "temperature": 0.72,
     "phase_a_max_attempts": 3,
     "topics": [
