@@ -116,6 +116,7 @@ import json
 import logging
 import os
 import re
+import requests
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -156,6 +157,12 @@ from services.conversation_state import (
 from services.roadmap import load_roadmap
 from services.used_examples_tracker import is_example_recently_used, mark_examples_used
 from sklearn.feature_extraction.text import TfidfVectorizer, ENGLISH_STOP_WORDS
+
+# Shadow de medición del adjudicador de fabricación (ETAPA 2, 20/08/2026):
+# cada veredicto REAL/FABRICATION/fail-open del gate se registra aquí para
+# calibrar acierto del ruteo a Groq compound-mini. Path sobreescribible en
+# tests vía getattr(self, "_adjudicator_verdict_log_path", ...).
+_ADJUDICATOR_VERDICT_LOG_PATH = Path("data") / "adjudicator_verdicts.jsonl"
 from sklearn.metrics.pairwise import cosine_similarity
 from utils.phase_utils import phase_error_boundary, validate_phase_deps
 
@@ -1347,30 +1354,100 @@ class PhaseB:
         "Respond with EXACTLY one word: REAL or FABRICATION. Nothing else."
     )
 
+    # ETAPA 2 (20/08/2026): 8 tokens estrangulaba a los modelos con
+    # reasoning/scratchpad (Groq compound-mini y fallbacks de la cascada
+    # emiten razonamiento antes del veredicto). Atributo de clase para que
+    # los tests puedan parchearlo sin tocar la cascada.
+    _ADJUDICATOR_MAX_TOKENS = 256
+
     def _fabrication_block_enabled(self) -> bool:
         """True si AGENT_ENABLE_FABRICATION_BLOCK=1 (bloquear draft) — default OFF."""
         return os.getenv("AGENT_ENABLE_FABRICATION_BLOCK", "0") == "1"
 
     @staticmethod
     def _parse_adjudication(raw: Optional[str]) -> Optional[str]:
-        """Extrae 'REAL' o 'FABRICATION' de la salida (tolerante a basura)."""
+        """Extrae 'REAL' o 'FABRICATION' de la salida.
+
+        ETAPA 2 (20/08/2026): tolera reasoning/scratchpad ANTES del veredicto
+        y toma la ÚLTIMA aparición — los modelos con reasoning emiten el
+        veredicto al final, a veces precedido de dudas internas ("...could be
+        REAL, but given the measured claim: FABRICATION"). 'REAL' nunca es
+        substring de 'FABRICATION', así que rfind es inequívoco."""
         if not raw:
             return None
-        text = raw.strip().strip('"').strip("'").strip("`").upper()
-        if text.startswith("FABRICATION"):
-            return "FABRICATION"
-        if text.startswith("REAL"):
-            return "REAL"
-        return None
+        text = raw.upper()
+        last_fab = text.rfind("FABRICATION")
+        last_real = text.rfind("REAL")
+        if last_fab == -1 and last_real == -1:
+            return None
+        return "FABRICATION" if last_fab > last_real else "REAL"
+
+    def _log_adjudicator_verdict(self, route: str, model: str,
+                                 verdict: str, reply_text: str) -> None:
+        """Registra cada veredicto del gate en el shadow de medición
+        (data/adjudicator_verdicts.jsonl). Nunca rompe el flujo."""
+        try:
+            _path = (getattr(self, "_adjudicator_verdict_log_path", None)
+                     or _ADJUDICATOR_VERDICT_LOG_PATH)
+            _path.parent.mkdir(parents=True, exist_ok=True)
+            with open(str(_path), "a", encoding="utf-8") as _fh:
+                _fh.write(json.dumps({
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "route": route,  # "groq" | "cascade" | "fail-open"
+                    "model": model,
+                    "verdict": verdict,
+                    "reply_preview": reply_text[:200],
+                }, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+
+    def _adjudicate_via_groq(self, user_prompt: str) -> Optional[str]:
+        """Llamada directa a Groq (groq/compound-mini) SOLO para este gate.
+
+        ETAPA 2: NO pasa por la cascada — la generación sigue Cloudflare-first
+        (ETAPA 1) y el modelo de generación de Groq es 404. FAIL-OPEN: sin key,
+        429/TPM, error HTTP o respuesta vacía → None (el caller cae al fallback)."""
+        api_key = os.getenv("GROQ_API_KEY", "").strip()
+        if not api_key:
+            return None
+        url = (os.getenv("GROQ_ADJUDICATOR_URL", "").strip()
+               or os.getenv("GROQ_API_URL", "").strip()
+               or "https://api.groq.com/openai/v1/chat/completions")
+        model = os.getenv("GROQ_ADJUDICATOR_MODEL", "groq/compound-mini").strip()
+        try:
+            resp = requests.post(
+                url,
+                headers={"Authorization": f"Bearer {api_key}",
+                         "Content-Type": "application/json"},
+                json={
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": self._ADJUDICATION_SYSTEM},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "max_tokens": self._ADJUDICATOR_MAX_TOKENS,
+                    "temperature": 0.0,
+                },
+                timeout=30,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            choices = data.get("choices") or []
+            if not choices:
+                return None
+            return (choices[0].get("message") or {}).get("content")
+        except Exception:
+            return None
 
     async def _adjudicate_named_entity_fabrication(self, reply_text: str,
                                                    source_text: str,
                                                    entities) -> bool:
         """Returns True if the named entity is adjudicated as FABRICATION.
 
-        FAIL-OPEN: any error, empty response, or unparseable output → False
-        (PASA, no bloquear). Tier classify first; fallback to flash if the
-        classify tier fails to produce a parseable single-word verdict."""
+        ETAPA 2 (20/08/2026): ruteo dedicado a Groq groq/compound-mini (no a
+        classify/Cloudflare). FAIL-OPEN: 429/error/unparseable → False (PASA,
+        no bloquear). Fallback de disponibilidad: cascada classify → flash,
+        con max_tokens=256 (ya no 8) para no estrangular reasoning models."""
         if not self.llm:
             return False
         if not entities:
@@ -1381,20 +1458,34 @@ class PhaseB:
             f"NAMED ENTITIES FOUND:\n{', '.join(sorted(str(e) for e in entities))}\n\n"
             "Verdict (one word):"
         )
+        # 1) Groq compound-mini (dedicado, SOLO para este gate)
+        raw = self._adjudicate_via_groq(user_prompt)
+        if raw:
+            verdict = self._parse_adjudication(raw)
+            if verdict is not None:
+                self._log_adjudicator_verdict(
+                    "groq",
+                    os.getenv("GROQ_ADJUDICATOR_MODEL", "groq/compound-mini"),
+                    verdict, reply_text,
+                )
+                return verdict == "FABRICATION"
+        # 2) Fallback: cascada (classify → flash) con mt alto
         for tier in ("classify", "flash"):
             try:
                 raw = await self.llm.generate(
                     tier=tier,
                     prompt=user_prompt,
                     system_prompt=self._ADJUDICATION_SYSTEM,
-                    max_tokens=8,
+                    max_tokens=self._ADJUDICATOR_MAX_TOKENS,
                     temperature=0.0,
                 )
                 verdict = self._parse_adjudication(raw)
                 if verdict is not None:
+                    self._log_adjudicator_verdict("cascade", tier, verdict, reply_text)
                     return verdict == "FABRICATION"
             except Exception:
                 continue
+        self._log_adjudicator_verdict("fail-open", "-", "fail-open", reply_text)
         return False
 
     async def _score_reply_draft(self, reply_text: str, source_text: str, log_context: Optional[Dict[str, Any]] = None,

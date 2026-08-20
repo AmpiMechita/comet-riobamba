@@ -2,14 +2,19 @@
 """Tests del adjudicador LLM de fabricación de nombres propios.
 
 Cubre:
-  - _adjudicate_named_entity_fabrication: tier classify, fallback a flash,
-    fail-open ante error/salida no parseable.
+  - _adjudicate_named_entity_fabrication (ETAPA 2): ruteo dedicado a Groq
+    groq/compound-mini (payload: model, max_tokens=256, temperature=0),
+    fallback a cascada classify → flash con mt=256, parse robusto (última
+    aparición, tolera reasoning previo), fail-open ante 429/error/unparseable,
+    y registro de veredictos en el shadow de medición (adjudicator_verdicts).
   - wiring en _score_reply_draft: flag AGENT_ENABLE_FABRICATION_BLOCK=1
     bloquea el draft si FABRICATION; =0 (default) es shadow (veredicto al
     shadow log, sin bloquear).
 
 LLM mockeado (AsyncMock), determinista. Aislado con tmp_path (el shadow log se
-redirige a tmp vía pb._shadow_quality_log_path).
+redirige a tmp vía pb._shadow_quality_log_path). Groq queda desactivado por
+defecto (conftest borra GROQ_API_KEY): los tests que ejercitan el ruteo Groq
+lo encienden explícitamente parcheando requests.post.
 """
 
 import asyncio
@@ -186,3 +191,146 @@ async def test_wiring_fail_open_on_llm_error_does_not_block(tmp_path, monkeypatc
     score, reasons = await pb._score_reply_draft(REPLY_FAB, SOURCE, log_context={"post_id": POST})
     assert score == 50, f"error del adjudicador debe pasar (fail-open), score={score} reasons={reasons}"
     assert "fabrication_named_entity" not in reasons
+
+
+# ── ETAPA 2: ruteo dedicado a Groq groq/compound-mini ────────────
+
+@pytest.mark.asyncio
+async def test_adjudicator_parse_robust_last_occurrence():
+    """ETAPA 2: reasoning/scratchpad antes del veredicto y última aparición."""
+    assert _PhaseBCls._parse_adjudication(
+        "Let me think: the source does not mention it, could be REAL, but the "
+        "reply claims a measured result. Verdict: FABRICATION"
+    ) == "FABRICATION"
+    assert _PhaseBCls._parse_adjudication(
+        "The entity is well known, so REAL. Wait, actually FABRICATION"
+    ) == "FABRICATION"
+    assert _PhaseBCls._parse_adjudication(
+        "FABRICATION? No — this is an established system, REAL."
+    ) == "REAL"
+    assert _PhaseBCls._parse_adjudication(
+        'I lean toward "FABRICATION". Final answer: REAL'
+    ) == "REAL"
+    assert _PhaseBCls._parse_adjudication(
+        "considering... the claim is fabricated. fabrication"
+    ) == "FABRICATION"
+    assert _PhaseBCls._parse_adjudication("  REAL  ") == "REAL"
+    assert _PhaseBCls._parse_adjudication(None) is None
+
+
+@pytest.mark.asyncio
+async def test_adjudicator_groq_routes_first(tmp_path, monkeypatch):
+    """Groq decide; la cascada NO se consulta."""
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+    pb = _make_pb()
+    pb.llm = MagicMock()
+    pb.llm.generate = AsyncMock(return_value="REAL")
+    pb._adjudicate_via_groq = MagicMock(return_value="FABRICATION")
+    assert await pb._adjudicate_named_entity_fabrication(REPLY_FAB, SOURCE, {"project mercury"}) is True
+    pb.llm.generate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_adjudicator_groq_payload_model_and_tokens(tmp_path, monkeypatch):
+    """El payload HTTP a Groq usa groq/compound-mini, max_tokens=256, temp=0."""
+    captured = {}
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"choices": [{"message": {"content": "FABRICATION"}}]}
+
+    def _fake_post(url, headers=None, json=None, timeout=None):
+        captured["url"] = url
+        captured["payload"] = json
+        captured["timeout"] = timeout
+        return _Resp()
+
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+    monkeypatch.setattr("phases.phase_b.orchestrator.requests.post", _fake_post)
+    pb = _make_pb()
+    pb.llm = MagicMock()
+    pb.llm.generate = AsyncMock(return_value="REAL")
+    assert await pb._adjudicate_named_entity_fabrication(REPLY_FAB, SOURCE, {"project mercury"}) is True
+    assert captured["payload"]["model"] == "groq/compound-mini"
+    assert captured["payload"]["max_tokens"] == 256
+    assert captured["payload"]["temperature"] == 0.0
+    assert captured["payload"]["messages"][0]["role"] == "system"
+    pb.llm.generate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_adjudicator_groq_429_fail_open(tmp_path, monkeypatch):
+    """429 de compound-mini (TPM) → fail-open: PASA si la cascada también cae."""
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+
+    def _fake_post(*a, **k):
+        raise RuntimeError("HTTP 429 Too Many Requests (compound-mini TPM)")
+
+    monkeypatch.setattr("phases.phase_b.orchestrator.requests.post", _fake_post)
+    pb = _make_pb()
+    pb.llm = MagicMock()
+    pb.llm.generate = AsyncMock(side_effect=RuntimeError("LLM down"))
+    assert await pb._adjudicate_named_entity_fabrication(REPLY_FAB, SOURCE, {"project mercury"}) is False
+    assert pb.llm.generate.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_adjudicator_groq_unparseable_falls_back_to_cascade(tmp_path, monkeypatch):
+    """Groq devuelve basura → fallback a cascada classify → flash."""
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+    pb = _make_pb()
+    pb.llm = MagicMock()
+    pb.llm.generate = AsyncMock(side_effect=["please clarify", "FABRICATION"])
+    pb._adjudicate_via_groq = MagicMock(return_value="hmm maybe")
+    assert await pb._adjudicate_named_entity_fabrication(REPLY_FAB, SOURCE, {"project mercury"}) is True
+    tiers = [c.kwargs.get("tier") for c in pb.llm.generate.await_args_list]
+    assert tiers == ["classify", "flash"]
+
+
+@pytest.mark.asyncio
+async def test_adjudicator_cascade_fallback_uses_256_tokens():
+    """Fallback a cascada usa max_tokens=256 (no 8)."""
+    pb = _make_pb()
+    pb.llm = MagicMock()
+    pb.llm.generate = AsyncMock(return_value="REAL")
+    assert await pb._adjudicate_named_entity_fabrication(REPLY_FAB, SOURCE, {"project mercury"}) is False
+    assert pb.llm.generate.await_args.kwargs["max_tokens"] == 256
+    assert pb.llm.generate.await_args.kwargs["temperature"] == 0.0
+
+
+# ── ETAPA 2: shadow de medición de veredictos ────────────────────
+
+@pytest.mark.asyncio
+async def test_adjudicator_logs_verdict_shadow_groq(tmp_path, monkeypatch):
+    """Veredicto Groq registrado en el shadow (route=groq)."""
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+    pb = _make_pb()
+    pb.llm = MagicMock()
+    pb.llm.generate = AsyncMock(return_value="REAL")
+    pb._adjudicator_verdict_log_path = tmp_path / "verdicts.jsonl"
+    pb._adjudicate_via_groq = MagicMock(return_value="FABRICATION")
+    assert await pb._adjudicate_named_entity_fabrication(REPLY_FAB, SOURCE, {"project mercury"}) is True
+    lines = (tmp_path / "verdicts.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    record = json.loads(lines[0])
+    assert record["route"] == "groq"
+    assert record["model"] == "groq/compound-mini"
+    assert record["verdict"] == "FABRICATION"
+    assert record["reply_preview"] == REPLY_FAB[:200]
+
+
+@pytest.mark.asyncio
+async def test_adjudicator_logs_fail_open_shadow(tmp_path):
+    """Sin Groq y cascada rota → fail-open registrado en shadow."""
+    pb = _make_pb()
+    pb.llm = MagicMock()
+    pb.llm.generate = AsyncMock(return_value="gibberish no verdict here")
+    pb._adjudicator_verdict_log_path = tmp_path / "verdicts.jsonl"
+    assert await pb._adjudicate_named_entity_fabrication(REPLY_FAB, SOURCE, {"project mercury"}) is False
+    lines = (tmp_path / "verdicts.jsonl").read_text(encoding="utf-8").splitlines()
+    record = json.loads(lines[-1])
+    assert record["route"] == "fail-open"
+    assert record["verdict"] == "fail-open"

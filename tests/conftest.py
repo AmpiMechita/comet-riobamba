@@ -41,6 +41,22 @@ def _isolate_runtime_state(tmp_path, monkeypatch):
     monkeypatch.delenv("QUALITY_BESTOF_N", raising=False)
     monkeypatch.delenv("ANTHROPIC_SPEND_LIMIT_USD", raising=False)
 
+    # ── Adjudicador de fabricación (ETAPA 2): Groq SOLO si un test lo
+    # enciende explícitamente. Sin esto, un GROQ_API_KEY presente en el
+    # entorno (shell/IDE) haría llamadas HTTP reales en tests unitarios.
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("GROQ_ADJUDICATOR_MODEL", raising=False)
+    monkeypatch.delenv("GROQ_ADJUDICATOR_URL", raising=False)
+    monkeypatch.delenv("GROQ_API_URL", raising=False)
+
+    # ── Shadow de veredictos del adjudicador (phases/phase_b/orchestrator.py) ──
+    # Sin redirect, cada test que ejercita el gate escribiría en el
+    # data/adjudicator_verdicts.jsonl REAL (contaminando la medición).
+    monkeypatch.setattr(
+        "phases.phase_b.orchestrator._ADJUDICATOR_VERDICT_LOG_PATH",
+        tmp_path / "adjudicator_verdicts.jsonl",
+    )
+
     # ── Traces (core/tracer.py) ──────────────────────────
     traces_dir = tmp_path / "traces"
     traces_dir.mkdir(exist_ok=True)
