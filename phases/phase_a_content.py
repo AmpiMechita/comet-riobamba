@@ -1214,9 +1214,12 @@ def _mark_topic_cooldown(topic: str, reason: str = "") -> None:
     now = datetime.now(timezone.utc)
     for k, v in list(cooldown.items()):
         try:
-            if datetime.fromisoformat(str(v)) < now:
+            exp_v = datetime.fromisoformat(str(v))
+            if exp_v.tzinfo is None:
+                exp_v = exp_v.replace(tzinfo=timezone.utc)
+            if exp_v < now:
                 del cooldown[k]
-        except ValueError:
+        except (ValueError, TypeError):
             del cooldown[k]
     _save_topic_cooldown(cooldown)
     logger.warning(
