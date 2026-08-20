@@ -1,9 +1,11 @@
 """Tests for the AGENT_FLASH_ONLY kill-switch (06/08/2026).
 
 Con AGENT_FLASH_ONLY=1 toda generación pagada (premium / premium_opus /
-opus / sonnet / fallback / haiku) se fuerza a 'tier_flash' (DeepSeek V4
-Flash), protegiendo el saldo Anthropic (reservado para el asesor). Reversible
-quitando el env. Sin el env, el comportamiento previo se conserva.
+opus / sonnet / fallback / haiku) se fuerza a 'flash' — desde ETAPA 1
+(20/08/2026) mapeado a cloudflare llama-3.3-70b (working-free, el
+proveedor de contenido verificado) —, protegiendo el saldo Anthropic
+(reservado para el asesor). Reversible quitando el env. Sin el env, el
+comportamiento previo se conserva.
 """
 
 import pytest
@@ -51,13 +53,14 @@ def cascade(mock_credentials):
 
 
 @pytest.mark.asyncio
-async def test_flash_only_forces_paid_tiers_to_tier_flash(cascade, monkeypatch):
-    """AGENT_FLASH_ONLY=1: premium/premium_opus/fallback sirven por tier_flash."""
+async def test_flash_only_forces_paid_tiers_to_working_free(cascade, monkeypatch):
+    """AGENT_FLASH_ONLY=1: premium/premium_opus/fallback sirven por cloudflare
+    (working-free, el target de tier='flash' desde ETAPA 1)."""
     monkeypatch.setenv("AGENT_FLASH_ONLY", "1")
     _add_provider(cascade, "tier_premium", model="claude-sonnet-5")
     _add_provider(cascade, "tier_premium_opus", model="claude-opus-4-8")
     _add_provider(cascade, "tier_fallback", model="deepseek-v4-pro")
-    _add_provider(cascade, "tier_flash", model="deepseek-v4-flash")
+    _add_provider(cascade, "cloudflare", model="llama-3.3-70b")
 
     captured = []
 
@@ -70,15 +73,17 @@ async def test_flash_only_forces_paid_tiers_to_tier_flash(cascade, monkeypatch):
             result = await cascade.generate(prompt="hello", tier=tier)
             assert result == "ok"
 
-    assert captured == ["tier_flash", "tier_flash", "tier_flash"], \
-        f"FLASH-ONLY debió servir todos por tier_flash, capturado: {captured}"
+    assert captured == ["cloudflare", "cloudflare", "cloudflare"], \
+        f"FLASH-ONLY debió servir todos por cloudflare, capturado: {captured}"
 
 
 @pytest.mark.asyncio
-async def test_flash_only_keeps_explicit_flash(cascade, monkeypatch):
-    """AGENT_FLASH_ONLY=1: tier='flash' ya es flash — sin doble log/rewrite."""
+async def test_flash_only_resolves_flash_to_working_free(cascade, monkeypatch):
+    """AGENT_FLASH_ONLY=1: tier='flash' resuelve a cloudflare (working-free) —
+    sin doble log/rewrite."""
     monkeypatch.setenv("AGENT_FLASH_ONLY", "1")
     _add_provider(cascade, "tier_flash", model="deepseek-v4-flash")
+    _add_provider(cascade, "cloudflare", model="llama-3.3-70b")
 
     captured = []
 
@@ -89,7 +94,7 @@ async def test_flash_only_keeps_explicit_flash(cascade, monkeypatch):
     with patch.object(cascade, "_call_with_retries", side_effect=_fake_call):
         result = await cascade.generate(prompt="hello", tier="flash")
     assert result == "ok"
-    assert captured == ["tier_flash"]
+    assert captured == ["cloudflare"]
 
 
 @pytest.mark.asyncio

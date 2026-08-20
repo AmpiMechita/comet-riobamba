@@ -63,6 +63,8 @@ def _add_provider(cascade, name, enabled=True, model="test-model", url="http://t
     ("openrouter", "openrouter"),
     ("premium", "tier_premium"),
     ("fallback", "tier_fallback"),
+    ("flash", "cloudflare"),    # ETAPA 1 (20/08/2026): working-free
+    ("quality", "cloudflare"),  # ETAPA 1 (20/08/2026): working-free
     ("opus", "tier_premium"),   # legacy alias
     ("haiku", "tier_fallback"),  # legacy alias
 ])
@@ -124,14 +126,10 @@ async def test_fallback_to_next_provider_on_failure(cascade):
 
 
 @pytest.mark.asyncio
-async def test_fallback_prefers_deepseek_over_free(cascade):
-    """Si el tier pedido falla, el fallback prueba DeepSeek (crédito activo,
-    mejor calidad) antes que los gratis.
-
-    Reordenado 04/08/2026: con crédito en DeepSeek, el fallback prioriza
-    tier_fallback/tier_flash sobre los gratis (Cloudflare/Cerebras) — el
-    tiering de Fase A (hero Opus + volumen DeepSeek) no debe degradarse a
-    llama-3.3-70b en cada fallo de Anthropic.
+async def test_fallback_working_free_first_deepseek_last(cascade):
+    """ETAPA 1 (20/08/2026): si el tier pedido falla, el fallback prueba
+    working-free (cloudflare → openrouter :free) ANTES que DeepSeek pago;
+    los dead (tier_sonnet/tier_flash) quedan al final como fallback profundo.
     """
     _add_provider(cascade, "tier_premium", paid=True)   # registrado primero, como en _load_providers
     _add_provider(cascade, "tier_sonnet")
@@ -146,6 +144,8 @@ async def test_fallback_prefers_deepseek_over_free(cascade):
         attempted.append(provider.name)
         if provider.name == "tier_premium":
             raise RuntimeError("HTTP 400 desde tier_premium - credit balance too low")
+        if provider.name == "cloudflare":
+            raise RuntimeError("HTTP 502 desde cloudflare")
         return "ok"
 
     with patch.object(cascade, "_is_circuit_open", return_value=False):
@@ -153,16 +153,16 @@ async def test_fallback_prefers_deepseek_over_free(cascade):
             result = await cascade.generate(prompt="hello", tier="premium")
 
     assert result == "ok"
-    # 1ro el preferido (tier_premium), 2do DeepSeek — no un gratis.
+    # 1ro el preferido (tier_premium), 2do working-free cloudflare, 3ro openrouter :free.
     assert attempted[0] == "tier_premium"
-    assert attempted[1] == "tier_fallback", f"orden real: {attempted}"
-    assert "cloudflare" not in attempted, f"no debia llegar a cloudflare: {attempted}"
+    assert attempted[1] == "cloudflare", f"orden real: {attempted}"
+    assert attempted[2] == "openrouter", f"orden real: {attempted}"
 
 
 @pytest.mark.asyncio
-async def test_fallback_prefers_free_over_other_paid(cascade):
-    """Control: dentro del fallback, gratis van antes que otros pagos
-    (Anthropic premium/opus) — solo DeepSeek salta la fila de los gratis."""
+async def test_fallback_working_free_before_other_paid_dead_last(cascade):
+    """Control: dentro del fallback, working-free (openrouter :free) va antes
+    que otros pagos; los dead (tier_flash gemini pago) van al final."""
     _add_provider(cascade, "tier_premium", paid=True)
     _add_provider(cascade, "tier_premium_opus", paid=True)
     _add_provider(cascade, "tier_sonnet")
@@ -180,15 +180,17 @@ async def test_fallback_prefers_free_over_other_paid(cascade):
             with pytest.raises(RuntimeError, match="Todos los proveedores fallaron"):
                 await cascade.generate(prompt="hello", tier="sonnet")
 
-    # tier_sonnet es el preferido; DeepSeek primero, luego gratis, luego opus/premium
+    # tier_sonnet es el preferido; luego working-free (openrouter), luego pagos, dead al final
     assert attempted[0] == "tier_sonnet"
-    assert attempted[1] == "tier_flash", f"orden real: {attempted}"
+    assert attempted[1] == "openrouter", f"orden real: {attempted}"
     assert attempted.index("openrouter") < attempted.index("tier_premium_opus"), f"orden real: {attempted}"
+    assert attempted[-1] == "tier_flash", f"dead al final: {attempted}"
 
 
 @pytest.mark.asyncio
-async def test_fallback_order_unchanged_without_paid_providers(cascade):
-    """Control: sin proveedores pagos, el reorden no altera el orden de registro."""
+async def test_fallback_order_working_free_without_paid_providers(cascade):
+    """Control: sin proveedores pagos, el orden es cloudflare → openrouter
+    (working-free), no el orden de registro."""
     _add_provider(cascade, "tier_sonnet")
     _add_provider(cascade, "openrouter")
     _add_provider(cascade, "cloudflare")
@@ -204,18 +206,15 @@ async def test_fallback_order_unchanged_without_paid_providers(cascade):
             with pytest.raises(RuntimeError, match="Todos los proveedores fallaron"):
                 await cascade.generate(prompt="hello", tier="sonnet")
 
-    assert attempted == ["tier_sonnet", "openrouter", "cloudflare"]
+    assert attempted == ["tier_sonnet", "cloudflare", "openrouter"]
 
 
 @pytest.mark.asyncio
-async def test_fallback_prefers_free_when_flag_set(cascade):
-    """MODEL_CASCADE_PREFER_FREE=1: con DeepSeek/Anthropic sin saldo, el fallback
-    prueba los gratis (Gemini/Cloudflare/Cerebras/Groq) ANTES que los pagos.
-
-    Reordenado 18/08/2026: old únicamente mientras los créditos pagados no estén
-    resueltos; con crédito activo el default vuelve a DeepSeek primero.
-    """
-    _add_provider(cascade, "tier_premium", paid=True)   # registrado primero, como en _load_providers
+async def test_fallback_full_order_working_free_then_paid_then_dead(cascade):
+    """ETAPA 1: orden completo del pool con todo fallando: preferred →
+    cloudflare → openrouter (:free) → tier_fallback (DeepSeek pago) →
+    dead (tier_sonnet Gemini AI Studio, tier_flash gemini pago)."""
+    _add_provider(cascade, "tier_premium", paid=True)
     _add_provider(cascade, "tier_sonnet")
     _add_provider(cascade, "openrouter")
     _add_provider(cascade, "cloudflare")
@@ -226,32 +225,25 @@ async def test_fallback_prefers_free_when_flag_set(cascade):
 
     async def _call(provider, messages, max_tokens, temperature):
         attempted.append(provider.name)
-        if provider.name == "tier_premium":
-            raise RuntimeError("HTTP 400 desde tier_premium - credit balance too low")
-        if provider.name == "tier_fallback":
-            return "ok"
-        raise RuntimeError("fail")
+        raise RuntimeError("fail all")
 
     with patch.object(cascade, "_is_circuit_open", return_value=False):
         with patch.object(cascade, "_call_with_retries", side_effect=_call):
-            with patch.dict(os.environ, {"MODEL_CASCADE_PREFER_FREE": "1"}):
-                result = await cascade.generate(prompt="hello", tier="premium")
+            with pytest.raises(RuntimeError, match="Todos los proveedores fallaron"):
+                await cascade.generate(prompt="hello", tier="premium")
 
-    assert result == "ok"
-    # 1ro el preferido (tier_premium), luego gratis — no DeepSeek.
-    assert attempted[0] == "tier_premium"
-    assert "tier_sonnet" in attempted, f"los gratis deben probarse: {attempted}"
-    assert attempted.index("tier_sonnet") < attempted.index("tier_fallback"), (
-        f"con prefer_free, gratis antes que DeepSeek: {attempted}"
-    )
+    assert attempted == [
+        "tier_premium", "cloudflare", "openrouter", "tier_fallback", "tier_sonnet", "tier_flash",
+    ], f"orden real: {attempted}"
 
 
 @pytest.mark.asyncio
-async def test_fallback_prefers_openrouter_for_content_when_flag_set(cascade):
-    """MODEL_CASCADE_PREFER_OPENROUTER=1: el CONTENIDO prueba OpenRouter pagado
-    (saldo disponible) antes que los gratis, pero classify nunca lo toca."""
+async def test_fallback_content_cloudflare_then_openrouter(cascade):
+    """ETAPA 1: el CONTENIDO prueba cloudflare (working-free) primero y
+    openrouter (:free nemotron) segundo — sin dead providers al frente.
+    classify nunca toca openrouter (paid=True)."""
     _add_provider(cascade, "tier_premium", paid=True)
-    _add_provider(cascade, "openrouter", paid=True)   # ahora pagado (saldo $3.39)
+    _add_provider(cascade, "openrouter", paid=True)
     _add_provider(cascade, "tier_sonnet")
     _add_provider(cascade, "cloudflare")
     _add_provider(cascade, "tier_fallback", paid=True)
@@ -266,16 +258,14 @@ async def test_fallback_prefers_openrouter_for_content_when_flag_set(cascade):
             return "ok"
         raise RuntimeError("fail")
 
-    with (
-        patch.object(cascade, "_is_circuit_open", return_value=False),
-        patch.object(cascade, "_call_with_retries", side_effect=_call),
-        patch.dict(os.environ, {"MODEL_CASCADE_PREFER_OPENROUTER": "1"}),
-    ):
-        result = await cascade.generate(prompt="hello", tier="premium")
+    with patch.object(cascade, "_is_circuit_open", return_value=False):
+        with patch.object(cascade, "_call_with_retries", side_effect=_call):
+            result = await cascade.generate(prompt="hello", tier="premium")
 
     assert result == "ok"
     assert attempted[0] == "tier_premium"
-    assert attempted[1] == "openrouter", f"openrouter debe ir 2do para contenido: {attempted}"
+    assert attempted[1] == "cloudflare", f"cloudflare debe ir 2do para contenido: {attempted}"
+    assert attempted[2] == "openrouter", f"openrouter :free 3ro: {attempted}"
 
 
 @pytest.mark.asyncio

@@ -335,14 +335,15 @@ class TestWatchlistBonus:
         assert not phase_b._check_increment_watchlist_cap("vina")
 
     def test_flash_only_does_not_degrade_quality_tier(self):
-        """Con AGENT_FLASH_ONLY=1, tier='quality' NO se degrada a flash."""
+        """Con AGENT_FLASH_ONLY=1, tier='quality' NO se degrada a flash
+        (ETAPA 1: resuelve a cloudflare, working-free)."""
         import os
         try:
             os.environ["AGENT_FLASH_ONLY"] = "1"
             from services.model_cascade import ModelCascade
             quality_tier = ModelCascade.TIER_MAPPING.get("quality", "")
-            assert quality_tier == "tier_quality", (
-                f"TIER_MAPPING should map quality -> tier_quality, got {quality_tier}"
+            assert quality_tier == "cloudflare", (
+                f"TIER_MAPPING should map quality -> cloudflare (ETAPA 1: working-free), got {quality_tier}"
             )
             # Verify FLASH_ONLY list doesn't include quality
             tier_list = ("premium", "premium_opus", "opus", "sonnet", "fallback", "haiku")

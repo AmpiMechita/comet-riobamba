@@ -33,15 +33,16 @@ _ANTHROPIC_OUTPUT_PRICE_PER_1M = 10.0
 # ── Precios USD por 1M tokens (input, output) por proveedor, para el
 # dashboard de gasto en vivo (cascade_telemetry.jsonl). Los proveedores
 # gratis (Gemini AI Studio, OpenRouter free, Cloudflare, Cerebras, Groq)
-# cotizan 0. Gemini via OpenRouter (con promo 50% hasta 27 ago 2026):
-# gemini-3.7-flash ~$0.075/$0.30, 2.5-flash ~$0.05/$0.20. ──
+# cotizan 0. ETAPA 1 (20/08/2026): openrouter y tier_quality sirven
+# nvidia/nemotron-3-super-120b-a12b:free (OpenRouter) → cotizan 0; solo
+# tier_flash conserva gemini-3.7-flash pagado (fallback profundo, dead). ──
 _PROVIDER_PRICES_PER_1M: Dict[str, tuple] = {
     "tier_premium": (_ANTHROPIC_INPUT_PRICE_PER_1M, _ANTHROPIC_OUTPUT_PRICE_PER_1M),
     "tier_premium_opus": (5.0, 25.0),
     "tier_fallback": (0.28, 1.14),
-    "tier_flash": (0.075, 0.30),        # google/gemini-3.7-flash (OpenRouter promo 50%)
-    "tier_quality": (0.075, 0.30),      # google/gemini-3.7-flash (OpenRouter promo 50%)
-    "openrouter": (0.075, 0.30),        # google/gemini-3.7-flash (OpenRouter promo 50%)
+    "tier_flash": (0.075, 0.30),        # google/gemini-3.7-flash (OpenRouter promo 50%) — dead, fallback profundo
+    "tier_quality": (0.0, 0.0),         # nvidia/nemotron-3-super-120b-a12b:free (OpenRouter)
+    "openrouter": (0.0, 0.0),           # nvidia/nemotron-3-super-120b-a12b:free (OpenRouter)
 }
 
 
@@ -122,8 +123,12 @@ class ModelCascade:
         "premium": "tier_premium",     # Anthropic claude-sonnet-5 (primary content)
         "premium_opus": "tier_premium_opus",  # Anthropic claude-opus-4-8 (Fase A generation only)
         "fallback": "tier_fallback",   # DeepSeek V4 Pro (paid content fallback)
-        "flash": "tier_flash",         # DeepSeek V4 Flash (generación barata Fase A no-hero)
-        "quality": "tier_quality",     # Gemini 3.7-flash via OpenRouter (watchlist replies)
+        # ETAPA 1 (20/08/2026): el contenido resuelve working-free al PRIMER
+        # intento. flash/quality -> cloudflare (llama-3.3-70b, verificado):
+        # antes cada ciclo quemaba ~66s en 402/429 (gemini pago, Gemini AI
+        # Studio 20/día) antes de llegar al proveedor que sí funciona.
+        "flash": "cloudflare",         # contenido no-hero Fase A: working-free
+        "quality": "cloudflare",       # replies watchlist: working-free
         "sonnet": "tier_sonnet",
         "openrouter": "openrouter",
         "cerebras": "cerebras",
@@ -242,10 +247,11 @@ class ModelCascade:
                     max_retries=self.default_retries,
                     cooldown_seconds=self.default_cooldown,
                     failure_threshold=self.default_failure_threshold,
-                    # OpenRouter: pago real (18/08/2026). Se marca paid=True para que
-                    # el clasificador (filtro `not p.paid`) NUNCA lo use: classify hace
-                    # miles de llamadas/día y vaciaría el saldo. El contenido (posts)
-                    # lo usa con prioridad propia via MODEL_CASCADE_PREFER_OPENROUTER.
+                    # OpenRouter: se marca paid=True para que el clasificador
+                    # (filtro `not p.paid`) NUNCA lo use: classify hace miles de
+                    # llamadas/día. ETAPA 1 (20/08/2026): el contenido lo usa
+                    # con modelo :free (nemotron-3-super-120b) como 2da opción
+                    # working-free tras cloudflare (orden determinístico).
                     paid=(provider_name == "openrouter"),
                 )
             )
@@ -534,41 +540,33 @@ class ModelCascade:
             p for p in self.providers
             if p.name != provider_name and not p.explicit_only
         ]
-        # Prioridad de fallback (04/08/2026): DeepSeek primero, luego gratis,
-        # luego otros pagos. Antes (22/7) "gratis antes que pago" porque DeepSeek
-        # no tenía crédito; con crédito activo DeepSeek (V4 Pro/Flash) tiene mejor
-        # calidad que los gratis (llama-3.3-70b de Cloudflare/Cerebras) por costo
-        # mínimo, y así el tiering de Fase A (hero Opus + volumen DeepSeek) no se
-        # degrada a Cloudflare en cada fallo de Anthropic. Orden estable dentro
-        # de cada grupo (orden de registro).
+        # Prioridad de fallback (ETAPA 1, 20/08/2026): working-free primero,
+        # dead al final. El contenido (flash/quality) resuelve a cloudflare
+        # (llama-3.3-70b, verificado 24/7) como preferred vía TIER_MAPPING; en
+        # el pool, OpenRouter (nemotron-3-super-120b :free) segundo y cerebras
+        # tercero. Los dead (Gemini AI Studio 20/día, Groq 404, gemini-3.7-flash
+        # pagado vía OpenRouter) quedan al final como fallback profundo — antes
+        # del reorden, cada ciclo quemaba ~66s en 402/429 antes de llegar al
+        # proveedor que sí funciona. Orden estable dentro de cada grupo
+        # (orden de registro).
         #
-        # MODEL_CASCADE_PREFER_FREE=1 (18/08/2026): DeepSeek sin saldo (HTTP 402)
-        # y Anthropic con spend-limit 0.00; el fallback va directamente a los
-        # gratis (Gemini AI Studio, Cloudflare, Cerebras, Groq, OpenRouter, Zen)
-        # antes de intentar los pagos. Reversible: quitar el env cuando los
-        # créditos de DeepSeek/Anthropic estén resueltos.
-        #
-        # MODEL_CASCADE_PREFER_OPENROUTER=1 (18/08/2026): con saldo OpenRouter
-        # disponible ($11.36), el CONTENIDO (posts/replies) prueba OpenRouter
-        # (gemini-3.7-flash pagado) antes que los gratis. El clasificador queda
-        # excluido (openrouter está marcado paid=True), así classify sigue gratis.
-        _prefer_free = os.getenv("MODEL_CASCADE_PREFER_FREE", "0").strip().lower() in ("1", "true", "yes")
-        _prefer_openrouter = os.getenv("MODEL_CASCADE_PREFER_OPENROUTER", "0").strip().lower() in ("1", "true", "yes")
+        # Los flags MODEL_CASCADE_PREFER_FREE / MODEL_CASCADE_PREFER_OPENROUTER
+        # siguen controlando el REGISTRO de proveedores pagos (arriba,
+        # _skip_paid); el orden del pool es ahora determinístico por proveedor.
 
         def _fallback_priority(p: ProviderConfig) -> int:
-            if _prefer_openrouter and p.name == "openrouter" and tier != "classify":
-                return -1  # contenido con saldo OpenRouter disponible: primera opción pagada
-            if _prefer_free:
-                if not p.paid:
-                    return 0  # gratis primero (Gemini/OpenRouter/Cloudflare/Cerebras/Groq/Zen)
-                if p.name in ("tier_fallback", "tier_flash"):
-                    return 1  # DeepSeek: pago barato, mejor que Anthropic si recupera crédito
-                return 2      # otros pagos (Anthropic premium/opus)
-            if p.name in ("tier_fallback", "tier_flash"):
-                return 0  # DeepSeek: pago barato con crédito activo, calidad superior
+            if p.name == "cloudflare":
+                return -3  # working-free verificado: primer intento del contenido
+            if p.name == "openrouter":
+                return -2  # nemotron-3-super-120b :free (OpenRouter)
+            if p.name == "cerebras_content":
+                return -1  # gratis de contenido
+            if p.name in ("tier_sonnet", "groq", "tier_flash", "tier_quality"):
+                return 9   # dead/degradado (Gemini AI Studio 20/día, Groq 404,
+                           # gemini-3.7-flash pago) → fallback profundo
             if not p.paid:
-                return 1  # gratis (Gemini/OpenRouter/Cloudflare/Cerebras)
-            return 2      # otros pagos (Anthropic premium/opus)
+                return 0   # otros gratis
+            return 2       # otros pagos (Anthropic premium/opus, DeepSeek si recupera crédito)
         fallback_pool = sorted(fallback_pool, key=_fallback_priority)
         if tier == "classify":
             # Clasificaciones: NUNCA deben escalar a Anthropic ni tier_quality
@@ -587,7 +585,15 @@ class ModelCascade:
         if preferred:
             ordered_providers = [preferred] + fallback_pool
         else:
-            ordered_providers = [p for p in self.providers if p.enabled and not p.explicit_only]
+            # ETAPA 1: sin preferred registrado, el pool cae con el mismo orden
+            # working-free (cloudflare → openrouter :free → ...) en lugar del
+            # orden de registro, que ponía dead providers al frente. classify
+            # conserva su orden histórico (registro).
+            _auto_candidates = [p for p in self.providers if p.enabled and not p.explicit_only]
+            if tier == "classify":
+                ordered_providers = _auto_candidates
+            else:
+                ordered_providers = sorted(_auto_candidates, key=_fallback_priority)
             # Visibilidad: el tier solicitado no resolvio a un provider
             # registrado/habilitado (p.ej. tier="default" -> ollama_local con
             # OLLAMA_ENABLED=false). Se cae al primer provider disponible, que
