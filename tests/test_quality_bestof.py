@@ -294,7 +294,7 @@ class TestPhaseBBestOfReply:
         def _fake_score(reply_text, source_text, log_context=None, block_ungrounded=False):
             return (60 if "BETA" in reply_text else 30, [])
 
-        pb._score_reply_draft = MagicMock(side_effect=_fake_score)
+        pb._score_reply_draft = AsyncMock(side_effect=_fake_score)
 
         with patch("phases.phase_b.orchestrator.is_example_recently_used", return_value=(False, [])):
             result, _ = await pb._generate_reply_for_post(
@@ -318,7 +318,7 @@ class TestPhaseBBestOfReply:
             "ONLY reply about data retention and circuit breakers.",
         ])
         pb._passes_quality_gate = MagicMock(return_value=True)
-        pb._score_reply_draft = MagicMock(
+        pb._score_reply_draft = AsyncMock(
             side_effect=lambda reply_text, source_text, log_context=None, block_ungrounded=False: (50, [])
         )
 
@@ -345,7 +345,7 @@ class TestPhaseBBestOfReply:
             RuntimeError("second candidate LLM down"),
         ])
         pb._passes_quality_gate = MagicMock(return_value=True)
-        pb._score_reply_draft = MagicMock(
+        pb._score_reply_draft = AsyncMock(
             side_effect=lambda reply_text, source_text, log_context=None, block_ungrounded=False: (50, [])
         )
 

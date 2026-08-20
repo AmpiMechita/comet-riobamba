@@ -67,7 +67,7 @@ from .constants import (
     MAX_CONVERSATION_DEPTH,
     _OWN_POST_REPLY_SCORE_LIMIT,
 )
-from .scoring import RelevanceDecision, _get_feed_min_score, text_has_fabricated_measurement, _triage_comment_value, set_watchlist_authors, _extract_author_name, text_has_unverifiable_historical_claim, text_exposes_figures, comment_off_topic
+from .scoring import RelevanceDecision, _get_feed_min_score, text_has_fabricated_measurement, _triage_comment_value, set_watchlist_authors, _extract_author_name, text_has_unverifiable_historical_claim, text_exposes_figures, comment_off_topic, _extract_named_entities
 from . import constants as _constants_mod
 
 
@@ -1316,7 +1316,88 @@ class PhaseB:
             logger.error("Phase B: create_comment error for post %s: %s", post_id, e)
             return None
 
-    def _score_reply_draft(self, reply_text: str, source_text: str, log_context: Optional[Dict[str, Any]] = None,
+    # ── Adjudicador LLM de fabricación de nombres propios ──────────
+    # El regex _reply_has_ungrounded_named_entity pre-filtra candidatos
+    # (2% de las replies); casi todos son sistemas REALES bien citados
+    # (Spanner, Borg, Dyn 2016, Turing machine...). Esta capa adjudica SOLO
+    # lo que el regex dispara: sistema/persona/estándar real conocido citado
+    # correctamente (PASA) vs proyecto/producto/benchmark específico presentado
+    # como evidencia inverificable que no está en la fuente (BLOQUEA).
+    # FAIL-OPEN: ante error o duda del modelo → PASA (no bloquear). Un falso
+    # negativo raro es menos malo que censurar contenido legítimo.
+    _ADJUDICATION_SYSTEM = (
+        "You are an integrity adjudicator for a technical forum. A reply draft "
+        "mentions a named entity (system, project, company, benchmark, person, "
+        "standard). Decide whether it is:\n"
+        "- REAL: a real, established system/person/standard (e.g. Spanner, Borg, "
+        "Dyn outage 2016, Turing machine, Llama, PyTorch, Apollo, Percolator, "
+        "Electron) cited as an illustration, analogy, or known mechanism. Being "
+        "absent from the source text is NOT a sign of fabrication: these are "
+        "widely-known facts the author uses to illustrate a point, not claims "
+        "about a specific result.\n"
+        "- FABRICATION: a specific project/product/benchmark presented AS "
+        "EVIDENCE of a concrete measured result (\"Project X at Y demonstrated "
+        "...\", \"Y's benchmark showed ...\", \"as measured in Z's evaluation "
+        "...\") — a named entity invented to support a numeric/empirical claim "
+        "about performance or behavior. These are not recognizable established "
+        "systems.\n"
+        "Key test: is the entity invoked as a well-known illustration of a "
+        "mechanism (REAL), or as the source of a specific claimed measurement "
+        "(FABRICATION)?\n"
+        "Respond with EXACTLY one word: REAL or FABRICATION. Nothing else."
+    )
+
+    def _fabrication_block_enabled(self) -> bool:
+        """True si AGENT_ENABLE_FABRICATION_BLOCK=1 (bloquear draft) — default OFF."""
+        return os.getenv("AGENT_ENABLE_FABRICATION_BLOCK", "0") == "1"
+
+    @staticmethod
+    def _parse_adjudication(raw: Optional[str]) -> Optional[str]:
+        """Extrae 'REAL' o 'FABRICATION' de la salida (tolerante a basura)."""
+        if not raw:
+            return None
+        text = raw.strip().strip('"').strip("'").strip("`").upper()
+        if text.startswith("FABRICATION"):
+            return "FABRICATION"
+        if text.startswith("REAL"):
+            return "REAL"
+        return None
+
+    async def _adjudicate_named_entity_fabrication(self, reply_text: str,
+                                                   source_text: str,
+                                                   entities) -> bool:
+        """Returns True if the named entity is adjudicated as FABRICATION.
+
+        FAIL-OPEN: any error, empty response, or unparseable output → False
+        (PASA, no bloquear). Tier classify first; fallback to flash if the
+        classify tier fails to produce a parseable single-word verdict."""
+        if not self.llm:
+            return False
+        if not entities:
+            return False
+        user_prompt = (
+            f"REPLY DRAFT:\n{reply_text[:1500]}\n\n"
+            f"SOURCE:\n{source_text[:1200]}\n\n"
+            f"NAMED ENTITIES FOUND:\n{', '.join(sorted(str(e) for e in entities))}\n\n"
+            "Verdict (one word):"
+        )
+        for tier in ("classify", "flash"):
+            try:
+                raw = await self.llm.generate(
+                    tier=tier,
+                    prompt=user_prompt,
+                    system_prompt=self._ADJUDICATION_SYSTEM,
+                    max_tokens=8,
+                    temperature=0.0,
+                )
+                verdict = self._parse_adjudication(raw)
+                if verdict is not None:
+                    return verdict == "FABRICATION"
+            except Exception:
+                continue
+        return False
+
+    async def _score_reply_draft(self, reply_text: str, source_text: str, log_context: Optional[Dict[str, Any]] = None,
                            block_ungrounded: bool = False) -> tuple[int, List[str]]:
         # v5.1: Permissive scoring mode — base 50, all penalties zeroed for testing
         score = 50
@@ -1338,6 +1419,25 @@ class PhaseB:
                 shadow_hits.append("weak_source_anchor")
             if self._reply_has_ungrounded_named_entity(reply_text, source_text):
                 shadow_hits.append("ungrounded_named_entity")
+                # ── Adjudicador LLM de fabricación de nombres propios ──
+                # El regex pre-filtra (2%); la mayoría son sistemas REALES bien
+                # citados (Spanner, Borg, Dyn 2016). El adjudicador decide REAL
+                # vs FABRICATION solo sobre lo que el regex disparó.
+                #   flag ON  → FABRICATION falla el draft (no publica)
+                #   flag OFF → shadow: se registra el veredicto para medir
+                # FAIL-OPEN: error/duda del modelo → PASA (no bloquear).
+                try:
+                    _entities = _extract_named_entities(reply_text)
+                    _is_fab = await self._adjudicate_named_entity_fabrication(
+                        reply_text, source_text, _entities,
+                    )
+                    if _is_fab:
+                        shadow_hits.append("fabrication_adjudicated")
+                        if self._fabrication_block_enabled():
+                            score = 0
+                            reasons.append("fabrication_named_entity")
+                except Exception:
+                    pass  # fail-open: nunca bloquear por un fallo del adjudicador
             if self._reply_has_secondhand_causal_attribution(reply_text):
                 shadow_hits.append("secondhand_causal_attribution")
 
@@ -3064,8 +3164,8 @@ class PhaseB:
             return candidate_b
         if not candidate_b:
             return candidate_a
-        score_a, _ = self._score_reply_draft(candidate_a, source_text)
-        score_b, _ = self._score_reply_draft(candidate_b, source_text)
+        score_a, _ = await self._score_reply_draft(candidate_a, source_text)
+        score_b, _ = await self._score_reply_draft(candidate_b, source_text)
         chosen = candidate_a if score_a >= score_b else candidate_b
         logger.info("Phase B: best-of-2 reply — A=%d B=%d chosen=%s",
                     score_a, score_b, "A" if chosen == candidate_a else "B")
@@ -3351,7 +3451,7 @@ class PhaseB:
                     logger.warning("Phase B: feed reply BLOCKED — repeated historical examples: %s", ", ".join(blocked_examples))
                     return "", None
 
-                score, reasons = self._score_reply_draft(reply, f"{title}\n{body}",
+                score, reasons = await self._score_reply_draft(reply, f"{title}\n{body}",
                                                             log_context={"post_id": post.get("id")},
                                                             block_ungrounded=(tier == "quality")
                                                             or text_exposes_figures(f"{title}\n{body}"))
@@ -4712,7 +4812,7 @@ class PhaseB:
                     logger.warning("Phase B: own-post reply BLOCKED — repeated historical examples: %s", ", ".join(blocked_examples))
                     return ""
 
-                score, reasons = self._score_reply_draft(reply, comment_text,
+                score, reasons = await self._score_reply_draft(reply, comment_text,
                                                          block_ungrounded=self._is_watchlist_author(author)
                                                          or text_exposes_figures(comment_text))
                 if score < 10:

@@ -4,6 +4,7 @@ Pruebas de wiring de Fase B: verifica que el agente se pueda instanciar
 con phase_b_enabled=True/False sin AttributeError ni errores de dependencias.
 """
 
+import asyncio
 import logging
 import os
 import sys
@@ -468,7 +469,7 @@ def test_reply_quality_score_penalizes_repeated_theme():
     fingerprint = phase_b._reply_theme_fingerprint(reply, source)
     phase_b._replied_topic_fingerprints = {fingerprint}
 
-    score, reasons = phase_b._score_reply_draft(reply, source)
+    score, reasons = asyncio.run(phase_b._score_reply_draft(reply, source))
 
     assert score < 100
     assert "repeated_theme" in reasons
@@ -498,11 +499,11 @@ def test_shadow_log_written_when_guardrail_hits(tmp_path):
     reply = "a practical guardrail is to keep p99 latency under 500 ms"
     source = "This post discusses deployment strategies for production systems."
 
-    score_before, reasons_before = phase_b._score_reply_draft(reply, source)
-    score, reasons = phase_b._score_reply_draft(
+    score_before, reasons_before = asyncio.run(phase_b._score_reply_draft(reply, source))
+    score, reasons = asyncio.run(phase_b._score_reply_draft(
         reply, source,
         log_context={"post_id": "11111111-2222-4333-8444-555555555555", "comment_id": "c-1"},
-    )
+    ))
     assert score == score_before
     assert reasons == reasons_before
     # "a practical guardrail is to keep" → guardrail_template (-10) → base 50 = 40.
@@ -535,7 +536,7 @@ def test_ungrounded_numeric_penalty_applies():
     phase_b = PhaseB(deps=deps)
     source = "This post discusses deployment strategies for production systems."
     reply = "A six-agent pipeline adds 200 ms of latency per hop in this design."
-    score, reasons = phase_b._score_reply_draft(reply, source)
+    score, reasons = asyncio.run(phase_b._score_reply_draft(reply, source))
     assert "ungrounded_numeric_specificity" in reasons
     assert score == 20  # 50 - 30
 
@@ -557,10 +558,10 @@ def test_shadow_log_not_written_when_clean_reply(tmp_path):
 
     reply = "Circuit breakers need a half-open state to probe recovery."
     source = "This post discusses circuit breaker patterns in distributed systems."
-    phase_b._score_reply_draft(
+    asyncio.run(phase_b._score_reply_draft(
         reply, source,
         log_context={"post_id": "p-clean", "comment_id": "c-clean"},
-    )
+    ))
     assert not phase_b._shadow_quality_log_path.exists(), "clean reply must NOT create shadow log"
 
 

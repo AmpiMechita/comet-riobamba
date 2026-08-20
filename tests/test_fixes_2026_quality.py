@@ -9,6 +9,7 @@ G2  shadow checks ungrounded bloquean en tier=quality
 G3  claim checker fail-CLOSED si el LLM falla
 """
 
+import asyncio
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -193,7 +194,7 @@ def test_g2_block_ungrounded_numeric_in_quality(tmp_path):
     reply = "Our results show the queue drained 38% faster after switching backoff, and the retry storm ended completely."
     # El 38% no esta en la fuente -> ungrounded_numeric_specificity debe disparar
     pb._shadow_quality_log_path = tmp_path / "shadow.jsonl"
-    score, reasons = pb._score_reply_draft(reply, source, block_ungrounded=True)
+    score, reasons = asyncio.run(pb._score_reply_draft(reply, source, block_ungrounded=True))
 
     assert score < 10, f"numeros sin ancla deben bloquear en tier=quality, score={score} reasons={reasons}"
     assert any("ungrounded" in r for r in reasons)
@@ -205,7 +206,7 @@ def test_g2_grounded_reply_passes_in_quality(tmp_path):
     source = "In the post you mention the queue drained 38% faster with the new backoff."
     reply = "Exactly — the 38% you measured comes from the backoff change, and the retry budget stays bounded."
     pb._shadow_quality_log_path = tmp_path / "shadow.jsonl"
-    score, reasons = pb._score_reply_draft(reply, source, block_ungrounded=True)
+    score, reasons = asyncio.run(pb._score_reply_draft(reply, source, block_ungrounded=True))
 
     assert score > 0, f"reply grounded en la fuente no debe bloquearse: {reasons}"
 

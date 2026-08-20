@@ -22,6 +22,7 @@ pb._shadow_quality_log_path). No escribe en data/ real.
 """
 
 import json
+import asyncio
 import pytest
 from unittest.mock import MagicMock
 
@@ -112,10 +113,10 @@ def test_shadow_log_records_new_hits_without_blocking(tmp_path):
     pb = _make_pb()
     pb._shadow_quality_log_path = tmp_path / "shadow_quality_checks.jsonl"
 
-    score_a, reasons_a = pb._score_reply_draft(A_FABRICACION, SOURCE, log_context={"post_id": POST})
-    score_b, reasons_b = pb._score_reply_draft(B_ANALOGIA_DRIFT, SOURCE, log_context={"post_id": POST})
-    score_c, _ = pb._score_reply_draft(C_MECANISMO_OK, SOURCE, log_context={"post_id": POST})
-    score_d, _ = pb._score_reply_draft(D_CONCEPTO_OK, SOURCE, log_context={"post_id": POST})
+    score_a, reasons_a = asyncio.run(pb._score_reply_draft(A_FABRICACION, SOURCE, log_context={"post_id": POST}))
+    score_b, reasons_b = asyncio.run(pb._score_reply_draft(B_ANALOGIA_DRIFT, SOURCE, log_context={"post_id": POST}))
+    score_c, _ = asyncio.run(pb._score_reply_draft(C_MECANISMO_OK, SOURCE, log_context={"post_id": POST}))
+    score_d, _ = asyncio.run(pb._score_reply_draft(D_CONCEPTO_OK, SOURCE, log_context={"post_id": POST}))
 
     # Shadow only: el score NO se toca (permissive mode intacto).
     assert score_a == score_b == score_c == score_d == 50
