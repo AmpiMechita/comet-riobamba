@@ -50,6 +50,7 @@ LOCK_FILE = ROOT / ".watchdog.lock"
 AGENT_LOCK_FILE = ROOT / ".agent.lock"
 HEALTH_FILE = ROOT / "data" / "state" / "health.json"
 STOP_FLAG = ROOT / "data" / "stop.flag"
+MAINTENANCE_FLAG = ROOT / "data" / "maintenance.flag"
 TELEMETRY_FILE = ROOT / "data" / "cascade_telemetry.jsonl"
 AGENT_LOG = ROOT / "logs" / "agent.log"
 DEGRADED_FILE = ROOT / "data" / "degraded_mode_state.json"
@@ -190,9 +191,9 @@ def pid_alive(pid: Optional[int]) -> bool:
 
 
 def agent_status(lock_file: Path, health_file: Path, stop_file: Path,
-                 now: float) -> dict:
+                 now: float, maintenance_file: Optional[Path] = None) -> dict:
     """Estado del agente: alive, health_fresh_s, lock_pid, stopped, cycle_no."""
-    stopped = stop_file.exists()
+    stopped = stop_file.exists() or (maintenance_file is not None and maintenance_file.exists())
     lock_pid = None
     if lock_file.exists():
         try:
@@ -436,7 +437,7 @@ def run_checks(env: dict, state: dict, now: float) -> Tuple[List[dict], dict]:
     report: dict = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S")}
 
     # ── 1. Agente vivo / auto-reinicio ──────────────────────────────
-    status = agent_status(AGENT_LOCK_FILE, HEALTH_FILE, STOP_FLAG, now)
+    status = agent_status(AGENT_LOCK_FILE, HEALTH_FILE, STOP_FLAG, now, maintenance_file=MAINTENANCE_FLAG)
     report["agent"] = {
         "alive": status["alive"],
         "stopped": status["stopped"],

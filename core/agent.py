@@ -164,6 +164,10 @@ class COMETRiobambaAgent:
         # clean shutdown (detected within 1s in the main loop). Reliable on
         # Windows where SIGINT/CTRL_BREAK to a child process is not available.
         self.stop_flag_file = Path("data/stop.flag")
+        # Hold de mantenimiento (data/maintenance.flag): shutdown graceful que NO
+        # borra el flag (a diferencia de stop.flag), de modo que el watchdog lo
+        # sigue respetando y NO relanza el agente. Solo se quita a mano.
+        self.maintenance_flag_file = Path("data/maintenance.flag")
         self.last_phase_b_run_at = time.time()
         # Load last seen announcement ID from disk
         try:
@@ -1005,7 +1009,7 @@ class COMETRiobambaAgent:
 
         while not self.shutdown_requested:
             # Detect an out-of-band graceful stop request (data/stop.flag).
-            if self._check_stop_flag():
+            if self._check_stop_flag() or self._check_maintenance_flag():
                 break
             cycle_interval = get_current_interval(base_interval)
             skip, reason = should_skip_cycle()
@@ -1013,7 +1017,7 @@ class COMETRiobambaAgent:
                 logger.warning("Circuit breaker global abierto. Ciclo omitido. Motivo: %s", reason)
                 logger.info("Esperando %ss antes de reintentar...", cycle_interval)
                 for _ in range(int(cycle_interval)):
-                    if self.shutdown_requested or self._check_stop_flag():
+                    if self.shutdown_requested or self._check_stop_flag() or self._check_maintenance_flag():
                         break
                     await asyncio.sleep(1)
                 continue
@@ -1075,7 +1079,7 @@ class COMETRiobambaAgent:
 
             logger.info("Esperando %ss hasta el próximo ciclo", cycle_interval)
             for _ in range(int(cycle_interval)):
-                if self.shutdown_requested or self._check_stop_flag():
+                if self.shutdown_requested or self._check_stop_flag() or self._check_maintenance_flag():
                     break
                 self._maybe_supervise_watchdog()
                 await asyncio.sleep(1)
@@ -1194,6 +1198,27 @@ class COMETRiobambaAgent:
             logger.warning("Error revisando stop.flag: %s", e)
         return False
 
+    def _check_maintenance_flag(self) -> bool:
+        """If data/maintenance.flag exists, request shutdown graceful WITHOUT
+        removing the flag (a diferencia de stop.flag). El flag persiste para que
+        el watchdog lo siga respetando y no relance el agente. Solo se quita a
+        mano para reanudar la operación."""
+        try:
+            if self.maintenance_flag_file.exists():
+                logger.info("🧰 maintenance.flag detectado en %s — solicitando shutdown graceful (hold de mantenimiento).", self.maintenance_flag_file)
+                self.shutdown_requested = True
+                return True
+        except Exception as e:
+            logger.warning("Error revisando maintenance.flag: %s", e)
+        return False
+
+    def _maintenance_hold_active(self) -> bool:
+        """True si el hold de mantenimiento está activo (el agente no debe arrancar)."""
+        try:
+            return self.maintenance_flag_file.exists()
+        except Exception:
+            return False
+
 
 async def main(credentials: Optional[Credentials] = None):
     if credentials is None:
@@ -1207,6 +1232,13 @@ async def main(credentials: Optional[Credentials] = None):
     import signal
 
     agent = COMETRiobambaAgent(credentials=credentials)
+
+    # ── Hold de mantenimiento: si data/maintenance.flag existe, NO arrancar.
+    # Incluso un relanzamiento del watchdog respeta esto (lo trata como detenido),
+    # así que el agente no se levanta mientras el hold esté activo.
+    if agent._maintenance_hold_active():
+        logger.info("🧰 maintenance.flag presente — agente NO arranca (hold de mantenimiento). Quitar data/maintenance.flag para reanudar.")
+        sys.exit(0)
 
     def handle_signal(signum, frame):
         logger.info("Señal %s recibida. Iniciando shutdown...", signum)

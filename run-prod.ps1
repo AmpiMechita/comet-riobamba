@@ -6,6 +6,13 @@ $env:PYTHONIOENCODING = "utf-8"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Set-Location $PSScriptRoot
 
+# ── Hold de mantenimiento: si data/maintenance.flag existe, no arrancar. ──
+if (Test-Path "data\maintenance.flag") {
+    Write-Host "maintenance.flag presente - agente NO se arranca (hold de mantenimiento)." -ForegroundColor Yellow
+    Write-Host "Quitar data/maintenance.flag para reanudar." -ForegroundColor Yellow
+    exit 0
+}
+
 # ── Python del proyecto (venv local) ───────────────────────────
 # Preferir .venv del proyecto; fallback a 'python' del PATH por si
 # el venv no existe (setup mínimo).
