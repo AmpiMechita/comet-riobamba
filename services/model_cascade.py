@@ -174,10 +174,20 @@ class ModelCascade:
                 )
             )
         else:
-            logger.warning(
-                "Falta ANTHROPIC_API_KEY en .env. La cascada LLM fallará al intentar "
-                "usar Claude 3.5 Sonnet."
-            )
+            if not anthropic_key:
+                logger.warning(
+                    "Falta ANTHROPIC_API_KEY en .env. La cascada LLM fallará al intentar "
+                    "usar Claude 3.5 Sonnet."
+                )
+            else:
+                # No es un error: PREFER_FREE=1 excluye proveedores pagos del
+                # registro a propósito (evita reintentos muertos sin saldo).
+                # Texto anterior ('Falta ANTHROPIC_API_KEY') era engañoso —
+                # auditoría 22/08/2026: despistó el diagnóstico real.
+                logger.info(
+                    "tier_premium (Anthropic) NO registrado por MODEL_CASCADE_PREFER_FREE=1. "
+                    "Tras recargar saldos, poner MODEL_CASCADE_PREFER_FREE=0 para reactivarlo."
+                )
             if creds.tier_opus is not None:
                 cfg = creds.tier_opus
                 self.providers.append(
