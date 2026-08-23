@@ -541,6 +541,18 @@ class ModelCascade:
                     "deshabilitados por presupuesto)", tier)
             tier = "flash"
 
+        # PRO-TIER-ONLY routing (23/08/2026): calidad maxima SIN Anthropic —
+        # los tiers editoriales resuelven a tier_fallback (DeepSeek V4 Pro).
+        # El juez del best-of sigue en 'classify' (cloudflare/free): juez y
+        # generador quedan cruzados por construccion. Reversible: quitar env.
+        if os.getenv("AGENT_PRO_TIER_ONLY", "0") == "1" and tier in (
+            "premium", "premium_opus", "opus", "sonnet"
+        ):
+            logger.info(
+                "PRO-ONLY: tier '%s' -> 'fallback' (DeepSeek V4 Pro como "
+                "generador editorial)", tier)
+            tier = "fallback"
+
         provider_name = self.TIER_MAPPING.get(tier, "ollama_local")
         preferred = next((p for p in self.providers if p.name == provider_name and p.enabled), None)
         # explicit_only providers (e.g. cerebras for CAPTCHA) are excluded from the

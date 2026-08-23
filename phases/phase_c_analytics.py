@@ -862,6 +862,19 @@ class PhaseCAnalytics:
         state["metrics_history"] = state["metrics_history"][-168:]  # 7 days * 24 hours
         self._save_state(state)
 
+        # ── Quality Governor v0: observador de calidad-por-dolar ─────
+        # Invention 23/08/2026. Solo lectura + persistencia de la tabla ROI;
+        # el routing automatico llega en v1 cuando haya datos suficientes.
+        try:
+            from services.quality_governor import compute_governor_report, format_governor_line
+            gov = compute_governor_report(window_hours=24)
+            logger.info("Phase C: %s", format_governor_line(gov))
+            for flag in gov.get("roi_flags", []):
+                logger.warning("Governor ROI: %s", flag)
+            results["governor_flags"] = len(gov.get("roi_flags", []))
+        except Exception as e:
+            logger.debug("Quality Governor skip: %s", e)
+
         # ── Update strategy state ──────────────────────────────────────────
         top_topic_names = [
             topic_name
