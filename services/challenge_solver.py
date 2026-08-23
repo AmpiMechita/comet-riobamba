@@ -155,12 +155,14 @@ class ChallengeSolver:
         self._last_native_expr = None
         self._last_extracted_expr = None
         self._last_llm_raw = None
+        llm_attempted = False
 
         logger.info("ChallengeSolver: Intentando resolver CAPTCHA nativamente con Python...")
         answer = solve_captcha_math(challenge_text) or self._solve_native_math(challenge_text)
         extracted_expr = self._last_native_expr if answer else None
 
         if not answer:
+            llm_attempted = True
             logger.info("ChallengeSolver: Nativo fallo. Intentando extraer expresion con LLM y evaluar localmente...")
             answer = await self._extract_and_eval_with_llm(challenge_text)
             if answer:
@@ -206,6 +208,49 @@ class ChallengeSolver:
                     False,
                     result,
                 )
+
+                # ── Reintento UNICO asistido por LLM tras rechazo del servidor ──
+                # Caso real (20/08/2026 20:09): el solver nativo extrajo una
+                # expresion de 2 operandos y Moltbook la rechazo ("Incorrect
+                # answer"), pero el flujo original terminaba sin consultar al
+                # LLM porque nativo SI produjo respuesta. Un solo reintento:
+                # evita martillar submit_verification con respuestas equivocadas.
+                if not llm_attempted:
+                    logger.info("ChallengeSolver: rechazo con respuesta nativa; reintento unico via LLM...")
+                    llm_attempted = True
+                    llm_answer = await self._extract_and_eval_with_llm(challenge_text)
+                    llm_expr = self._last_extracted_expr
+                    if not llm_answer:
+                        llm_answer = await self._solve_with_llm(challenge_text)
+                        llm_expr = self._last_llm_raw
+                    retry_answer = str(llm_answer).strip() if llm_answer else ""
+                    if retry_answer and re.match(r"^-?\d+\.\d{2}$", retry_answer) and retry_answer != answer:
+                        try:
+                            result2 = self.moltbook.submit_verification(verification_code, retry_answer)
+                            if result2 and (result2.get("success") or result2.get("status") in (200, 201, 204)):
+                                logger.info(
+                                    "✅ ChallengeSolver: verificacion exitosa en reintento LLM (%s)!",
+                                    retry_answer,
+                                )
+                                _record_sample(llm_expr, retry_answer, result2.get("status"), None, True, result2)
+                                return True
+                            _record_sample(
+                                llm_expr,
+                                retry_answer,
+                                result2.get("status") if isinstance(result2, dict) else None,
+                                None,
+                                False,
+                                result2,
+                            )
+                            logger.warning("ChallengeSolver: reintento LLM tambien rechazado; abandonando.")
+                        except Exception as e2:
+                            logger.error("ChallengeSolver: error en reintento LLM: %s", e2)
+                            _record_sample(llm_expr, retry_answer, None, str(e2), False)
+                    else:
+                        logger.info(
+                            "ChallengeSolver: LLM sin alternativa valida (respuesta=%r); se mantiene el fallo inicial.",
+                            retry_answer or None,
+                        )
                 return False
         except Exception as e:
             logger.error(f"ChallengeSolver: Error al enviar respuesta a Moltbook: {e}")
