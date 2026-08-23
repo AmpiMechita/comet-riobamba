@@ -102,7 +102,7 @@ class Classifier:
             return True
         if comment_type == "question" and priority_score >= 70:
             return True
-        if comment_type == "crossreference" and priority_score >= 75:
+        if comment_type == "cross_reference" and priority_score >= 75:
             return True
         if Classifier.is_direct_question_to_me(text, own_names):
             return True

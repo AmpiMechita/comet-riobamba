@@ -903,17 +903,8 @@ async def call_model(deps: PhaseADeps, system_prompt: str, user_prompt: str,
     raise RuntimeError("ModelCascade no tiene metodo generate compatible")
 
 
-def _quality_bestof_enabled() -> bool:
-    """A/B flag AGENT_QUALITY_BESTOF=1 activa best-of-N + auto-crítica en Phase A."""
-    return os.getenv("AGENT_QUALITY_BESTOF", "0") == "1"
-
-
-def _quality_bestof_n() -> int:
-    try:
-        n = int(os.getenv("QUALITY_BESTOF_N", "3"))
-    except (TypeError, ValueError):
-        n = 3
-    return max(1, min(n, 5))
+from utils.quality_flags import quality_bestof_enabled as _quality_bestof_enabled
+from utils.quality_flags import quality_bestof_n as _quality_bestof_n
 
 
 def _parse_candidate_index(raw: Optional[str], count: int) -> Optional[int]:

@@ -155,18 +155,11 @@ except Exception as _e:
 # === Configuración de Contenido (Fase A) ===
 content_cfg = {
     "max_length": 280,
-    "topics": [
-        "arquitecturas de agentes y sistemas agentic",
-        "diseño de cascadas de modelos LLM y herramientas",
-        "seguridad y gobernanza de agentes de IA en producción",
-        "MLOps y despliegue de modelos fundacionales",
-        "optimización de coste y rendimiento en infra de IA",
-        "evaluación, alineación y guardrails para agentes",
-        "observabilidad y métricas en sistemas de IA",
-        "privacidad, cumplimiento y manejo responsable de datos",
-        "automatización inteligente en industria y servicios",
-        "tendencias en modelos abiertos, locales y híbridos",
-    ],
+    # Fix F4 (auditoría 22/08/2026): esta lista NO tiene consumidores (Phase A
+    # usa su propio EDITORIAL_CONFIG['topics'], 100% EN). Los topics en español
+    # originales se eliminaron: si algún flujo los usara, generaría contenido
+    # que el filtro de idioma de Phase A rechazaría a posteriori.
+    "topics": [],
     "tone": "técnico-propositivo",
     "language": "en",
     "formatting": {
@@ -212,21 +205,6 @@ content_cfg = {
     },
 }
 
-# === Configuración de Enrutamiento de Modelos ===
-routing_cfg = {
-    "default_provider": "dashscope",
-    "fallback_order": ["dashscope", "groq", "openrouter", "ollama"],
-    "max_retries": 3,
-    "timeout_seconds": 30,
-    "cache_enabled": True,
-    "rate_limit_rpm": 45,
-    "prefer_fast_model_for_replies": True,
-    "models": {
-        "qwen-plus": {"provider": "dashscope", "max_tokens": 4096},
-        "qwen-turbo": {"provider": "dashscope", "max_tokens": 2048},
-    },
-}
-
 # === Configuración de Logging ===
 logging_cfg = {
     "log_level": "INFO",
@@ -240,24 +218,6 @@ logging_cfg = {
 }
 
 # === Proveedores LLM ===
-
-# --- Agent charter (misión y principios de COMET-RIOBAMBA) ---
-AGENT_CHARTER_PATH = Path("config.agent_charter.yaml")
-
-
-def _load_agent_charter() -> dict:
-    if not AGENT_CHARTER_PATH.exists():
-        return {}
-    try:
-        with AGENT_CHARTER_PATH.open("r", encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
-        return data.get("agent_charter", {})
-    except Exception as e:
-        logger.warning("Config: no se pudo cargar agent_charter.yaml: %s", e)
-        return {}
-
-
-agent_charter = _load_agent_charter()
 
 
 def get_banner() -> str:

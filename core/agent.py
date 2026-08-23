@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from config import behavior_cfg, content_cfg, agent_charter
+from config import behavior_cfg, content_cfg
 from config.agent_policy import POLICY
 from config.config import validate_config
 from config.credentials import Credentials

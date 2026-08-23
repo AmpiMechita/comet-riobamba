@@ -198,7 +198,15 @@ class PhaseCAnalytics:
             return True
     
     def _fetch_performance_metrics(self) -> Dict:
-        """Obtiene métricas de rendimiento recientes."""
+        """Obtiene métricas de rendimiento de la ACTIVIDAD PROPIA.
+
+        Fix L3 (auditoría 22/08/2026): antes usaba fetch_posts() (feed GLOBAL,
+        con since_hours ignorado silenciosamente), asi que posts_published_24h
+        y avg_engagement median la actividad ajena, no la propia. Ahora:
+          - posts_published_24h: store local own_post_store (sin red).
+          - avg_engagement/top_topics: get_post() por cada uno de los 10 posts
+            propios mas recientes (1 GET c/u, acotado; analytics corre 1x/dia).
+        """
         metrics = {
             "posts_published_24h": 0,
             "avg_engagement": 0,
@@ -207,29 +215,41 @@ class PhaseCAnalytics:
             "top_topics": [],
             "model_usage": {},
         }
-        
+
         try:
-            # Fetch from Moltbook API (adjust based on actual endpoints)
-            posts = self.moltbook.fetch_posts(since_hours=24, limit=50)
-            metrics["posts_published_24h"] = len(posts)
-            
-            # Calculate engagement (likes + comments per post)
-            engagements = [p.get("likes", 0) + p.get("comments_count", 0) for p in posts]
-            metrics["avg_engagement"] = sum(engagements) / len(engagements) if engagements else 0
-            
-            # Extract topics from recent posts (simple keyword matching)
-            topic_keywords = ["agent", "architecture", "llm", "mlops", "security", "scaling"]
+            from services.own_post_store import load_own_posts, count_posts_since
+            metrics["posts_published_24h"] = count_posts_since(days=1)
+
+            engagements = []
             topic_counts = {}
-            for post in posts:
-                body = (post.get("body", "") + post.get("title", "")).lower()
+            topic_keywords = ["agent", "architecture", "llm", "mlops", "security", "scaling"]
+            for p in load_own_posts(limit=10):
+                post_id = p.get("id")
+                if not post_id:
+                    continue
+                live = self.moltbook.get_post(post_id)
+                if not isinstance(live, dict):
+                    continue
+                score = live.get("score") or live.get("upvotes") or 0
+                n_comments = live.get("comment_count")
+                if n_comments is None:
+                    n_comments = len(live.get("comments") or [])
+                engagements.append(int(score or 0) + int(n_comments or 0))
+
+                body_text = (
+                    str(live.get("title") or "") + " "
+                    + str(live.get("content") or live.get("body") or "")
+                ).lower()
                 for kw in topic_keywords:
-                    if kw in body:
+                    if kw in body_text:
                         topic_counts[kw] = topic_counts.get(kw, 0) + 1
+
+            metrics["avg_engagement"] = sum(engagements) / len(engagements) if engagements else 0
             metrics["top_topics"] = sorted(topic_counts.items(), key=lambda x: -x[1])[:3]
-            
+
         except Exception as e:
             logger.warning(f"Phase C: error fetching metrics: {e}")
-        
+
         return metrics
     
     def _generate_insights(self, metrics: Dict) -> List[Dict]:
@@ -262,23 +282,16 @@ class PhaseCAnalytics:
         return insights
     
     def _apply_optimization(self, insight: Dict) -> Optional[str]:
-        """Aplica optimización automática si está habilitada."""
-        if not self.optimization_enabled:
-            return None
-        
+        """Devuelve None SIEMPRE: no aplica nada ni notifica acciones falsas.
+
+        Fix L4 (auditoría 22/08/2026): antes devolvia strings tipo 'Config
+        adjustment simulated' y execute() los enviaba por Telegram como si
+        fueran aplicaciones reales — deshonesto operativo. Los insights se
+        registran en el log (ver _generate_insights); la aplicacion real de
+        ajustes vive en services/proposal_applier.py via _maybe_generate_proposal.
+        """
         action = insight.get("suggested_action", "")
-        
-        # Ejemplo: ajustar temperatura si engagement bajo
-        if insight["type"] == "engagement_low":
-            # Nota: en producción, esto requeriría recargar config dinámicamente
-            logger.info(f"Phase C: sugerencia aplicada (simulada): {action}")
-            return f"Config adjustment simulated: {action}"
-        
-        # Ejemplo: rotar topic si repetición
-        elif insight["type"] == "topic_repetition":
-            logger.info(f"Phase C: diversidad de temas priorizada")
-            return "Topic rotation prioritized in next generation cycle"
-        
+        logger.info("Phase C: insight sin accion automatica (sugerencia): %s", action)
         return None
     
     def _run_topic_review(self) -> int:
@@ -893,7 +906,7 @@ class PhaseCAnalytics:
         try:
             from services.topic_evolution import compute_evolution
             from core.claims_tracker import ClaimsTracker
-            _ct = ClaimsTracker()
+            _ct = ClaimsTracker(Path("data"))
             evo = compute_evolution(_ct)
             if evo.get("new_series"):
                 logger.info(

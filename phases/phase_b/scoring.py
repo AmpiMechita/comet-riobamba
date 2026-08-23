@@ -419,39 +419,6 @@ def _compute_relationship_bonus(author) -> int:
     if count >= 3:
         return 5
     return 0
-    """Extract upvotes and comment_count from the post dict and return a
-    tiered visibility bonus (+0, +5, +10, or +15). Never negative."""
-    if not isinstance(post, dict):
-        return 0
-
-    upvotes = None
-    for k in ("score", "upvotes", "upvote_count", "points"):
-        v = post.get(k)
-        if isinstance(v, (int, float)):
-            upvotes = int(v)
-            break
-
-    comment_count = None
-    for k in ("comment_count", "comments_count"):
-        v = post.get(k)
-        if isinstance(v, int):
-            comment_count = v
-            break
-    if comment_count is None and isinstance(post.get("comments"), list):
-        comment_count = len(post["comments"])
-
-    if comment_count is None:
-        comment_count = 0
-    if upvotes is None:
-        upvotes = 0
-
-    if comment_count >= 100 or upvotes >= 50:
-        return 15
-    if comment_count >= 25 or upvotes >= 25:
-        return 10
-    if comment_count >= 5 or upvotes >= 5:
-        return 5
-    return 0
 
 
 def _decide_reply(

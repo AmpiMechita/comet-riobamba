@@ -169,9 +169,7 @@ from utils.phase_utils import phase_error_boundary, validate_phase_deps
 logger = logging.getLogger("phases.phase_b")
 
 
-def _quality_bestof_enabled() -> bool:
-    """A/B flag AGENT_QUALITY_BESTOF=1 activa best-of-2 selectivo en replies."""
-    return os.getenv("AGENT_QUALITY_BESTOF", "0") == "1"
+from utils.quality_flags import quality_bestof_enabled as _quality_bestof_enabled
 
 
 _EIN_TECH_KEYWORDS = {

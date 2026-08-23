@@ -1,4 +1,5 @@
 import sys
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -39,11 +40,9 @@ class TestPhaseCStrategyState:
     async def test_strategy_state_saved_on_analytics_run(self, deps):
         """StrategyState.save is called with expected keys when analytics runs."""
         analytics = self._make_analytics(deps)
-        analytics.moltbook.fetch_posts.return_value = [
-            {"likes": 3, "comments_count": 1, "title": "Agent architecture", "body": "agent llm scaling"},
-        ]
-
-        with patch("phases.phase_c_analytics.StrategyState") as MockSS:
+        with self._mock_own_metrics(analytics, [
+            {"score": 3, "comment_count": 1, "title": "Agent architecture", "content": "agent llm scaling"},
+        ]), patch("phases.phase_c_analytics.StrategyState") as MockSS:
             instance = MockSS.return_value
             result = await analytics.execute()
 
@@ -60,12 +59,10 @@ class TestPhaseCStrategyState:
     async def test_top_topics_extracted_from_metrics(self, deps):
         """Top-performing topic names appear in strategy state."""
         analytics = self._make_analytics(deps)
-        analytics.moltbook.fetch_posts.return_value = [
-            {"likes": 5, "comments_count": 2, "title": "LLM scaling", "body": "llm scaling agent architecture"},
-            {"likes": 3, "comments_count": 0, "title": "Agent loops", "body": "agent loops security"},
-        ]
-
-        with patch("phases.phase_c_analytics.StrategyState") as MockSS:
+        with self._mock_own_metrics(analytics, [
+            {"score": 5, "comment_count": 2, "title": "LLM scaling", "content": "llm scaling agent architecture"},
+            {"score": 3, "comment_count": 0, "title": "Agent loops", "content": "agent loops security"},
+        ]), patch("phases.phase_c_analytics.StrategyState") as MockSS:
             instance = MockSS.return_value
             await analytics.execute()
 
@@ -76,11 +73,9 @@ class TestPhaseCStrategyState:
     async def test_avoid_topics_empty_when_engagement_positive(self, deps):
         """When engagement > 0, avoid_topics should be empty."""
         analytics = self._make_analytics(deps)
-        analytics.moltbook.fetch_posts.return_value = [
-            {"likes": 2, "comments_count": 1, "title": "ML ops", "body": "mlops deployment"},
-        ]
-
-        with patch("phases.phase_c_analytics.StrategyState") as MockSS:
+        with self._mock_own_metrics(analytics, [
+            {"score": 2, "comment_count": 1, "title": "ML ops", "content": "mlops deployment"},
+        ]), patch("phases.phase_c_analytics.StrategyState") as MockSS:
             instance = MockSS.return_value
             await analytics.execute()
 
@@ -91,16 +86,33 @@ class TestPhaseCStrategyState:
     async def test_avoid_topics_filled_when_zero_engagement(self, deps):
         """When posts exist but engagement is 0, those topics go to avoid_topics."""
         analytics = self._make_analytics(deps)
-        analytics.moltbook.fetch_posts.return_value = [
-            {"likes": 0, "comments_count": 0, "title": "Security fail", "body": "security agent architecture tanked"},
-        ]
-
-        with patch("phases.phase_c_analytics.StrategyState") as MockSS:
+        with self._mock_own_metrics(analytics, [
+            {"score": 0, "comment_count": 0, "title": "Security fail", "content": "security agent architecture tanked"},
+        ], posts_published_24h=2), patch("phases.phase_c_analytics.StrategyState") as MockSS:
             instance = MockSS.return_value
             await analytics.execute()
 
         saved = instance.save.call_args[0][0]
         assert len(saved["avoid_topics"]) > 0
+
+    @staticmethod
+    def _mock_own_metrics(analytics, live_posts, posts_published_24h=1):
+        """Context manager: mete las métricas por la vía NUEVA (actividad propia):
+        own_post_store + get_post() por post. Sustituye al antiguo mock de
+        fetch_posts (feed global), que medía actividad ajena — ver fix L3,
+        auditoría 22/08/2026. Uso:
+            with self._mock_own_metrics(a, [...]), patch(StrategyState) as m: ..."""
+        stack = ExitStack()
+        stack.enter_context(patch(
+            "services.own_post_store.load_own_posts",
+            return_value=[{"id": f"pid-{i}"} for i in range(len(live_posts))],
+        ))
+        stack.enter_context(patch(
+            "services.own_post_store.count_posts_since",
+            return_value=posts_published_24h,
+        ))
+        analytics.moltbook.get_post.side_effect = list(live_posts)
+        return stack
 
     @pytest.mark.asyncio
     async def test_strategy_state_skipped_when_analytics_skipped(self, deps):
