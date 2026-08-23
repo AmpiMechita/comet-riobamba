@@ -46,7 +46,7 @@ _LOW_QUALITY_COMPOSITE = 0.5
 _LEAK_PATTERNS = (
     re.compile(r"here'?s a thinking process", re.IGNORECASE),
     re.compile(r"<think>", re.IGNORECASE),
-    re.compile(r"\*\*analyze the request\*\*", re.IGNORECASE),
+    re.compile(r"\*\*analyze the request\b", re.IGNORECASE),
     re.compile(r"^as an ai (language )?model", re.IGNORECASE),
 )
 
@@ -86,6 +86,19 @@ def _read_jsonl(path: Path, window_hours: float) -> List[Dict[str, Any]]:
     except OSError as e:
         logger.debug("QualityGovernor: no se pudo leer %s: %s", path.name, e)
     return out
+
+
+def text_has_reasoning_leak(text: str) -> bool:
+    """True si el texto parece fuga de razonamiento o eco del prompt.
+
+    GATE de publicación desde v0.1 (23/08/2026): antes era solo detección
+    post-hoc y 2 posts con el system prompt ecoado llegaron a Moltbook.
+    Ventana de 800 chars: las fugas reales arrancan en el arranque del texto.
+    """
+    if not text:
+        return False
+    head = text[:800]
+    return any(p.search(head) for p in _LEAK_PATTERNS)
 
 
 def compute_governor_report(window_hours: float = 24.0) -> Dict[str, Any]:

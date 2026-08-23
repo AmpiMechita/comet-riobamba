@@ -1022,7 +1022,13 @@ class PhaseB:
             "Do NOT use emojis, hashtags",
             "```json", "```python",
         ]
-        text_check = text[:500]
+        text_check = text[:800]
+        # Gate anti-fuga (23/08/2026): una sola senal fuerte de razonamiento/
+        # echo de prompt bloquea — no exigir 2 coincidencias debiles. Caso
+        # real publicado: 'Here's a thinking process:' en una reply.
+        from services.quality_governor import text_has_reasoning_leak
+        if text_has_reasoning_leak(text_check):
+            return True
         matches = sum(1 for s in leak_signals if s in text_check)
         return matches >= 2
 

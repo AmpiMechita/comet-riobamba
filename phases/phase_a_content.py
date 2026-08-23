@@ -48,6 +48,7 @@ from services.persistence import (
     store_post_hash,
     load_topic_engagement,
 )
+from services.quality_governor import text_has_reasoning_leak
 from phases.phase_b.scoring import text_has_fabricated_measurement, text_has_unverifiable_historical_claim
 
 logger = logging.getLogger("phases.phase_a_content")
@@ -493,6 +494,10 @@ def validate_post_text(text: str, required_citation: Optional[str] = None,
     # Nuevo: Rechazar textos que empiecen con las frases prohibidas
     first_line = text.split('\n')[0].strip()
     if FILLER_STARTS.match(first_line): return False, "contains_filler_opening"
+    # Gate anti-fuga (23/08/2026): 2 posts con el system prompt ecoado
+    # ('**Analyze the Request Thoroughly:**...') llegaron a publicarse porque
+    # pasaban longitud/sin-URL/sin-bullets. Bloquear y regenerar.
+    if text_has_reasoning_leak(text): return False, "prompt_or_reasoning_leak"
     if text.count("\n\n") < 1: return False, "single_paragraph"
     # own_incident queda exento del guard anti-fabricacion: su primera persona
     # esta respaldada por numeros verificados del store (incidents.jsonl).
