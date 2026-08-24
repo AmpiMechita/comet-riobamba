@@ -248,6 +248,9 @@ def generate_inbound_report(target_date: Optional[str] = None) -> str:
 # ══════════════════════════════════════════════════════════════
 
 _alert_cooldowns: Dict[str, datetime] = {}
+# Anti-ráfaga global (23/08/2026): el cooldown por-post no evita que 5 posts
+# distintos disparen 5 mensajes en el mismo segundo (caso real del ledger).
+_spike_global_last: Optional[datetime] = None
 
 
 def _can_alert(alert_type: str, cooldown_minutes: int = 60) -> bool:
@@ -260,10 +263,22 @@ def _can_alert(alert_type: str, cooldown_minutes: int = 60) -> bool:
     return True
 
 
-def check_engagement_spike(post_id: str, comment_count: int, threshold: int = 5) -> Optional[str]:
-    """Alert if a post has many new comments (engagement spike)."""
-    if comment_count >= threshold and _can_alert(f"spike_{post_id}", cooldown_minutes=120):
-        return f"🔥 <b>Engagement spike!</b> Post tiene {comment_count} comments — debate activo."
+def check_engagement_spike(post_id: str, comment_count: int, threshold: int = 5,
+                           global_cooldown_minutes: int = 30) -> Optional[str]:
+    """Alert if a post has many new comments (engagement spike).
+
+    Doble puerta: cooldown por post (120 min) + tope GLOBAL entre posts
+    (default 30 min) para que una hora de debates activos no llene el móvil.
+    """
+    global _spike_global_last
+    if comment_count < threshold:
+        return None
+    now = datetime.now()
+    if _spike_global_last and (now - _spike_global_last).total_seconds() < global_cooldown_minutes * 60:
+        return None
+    if _can_alert(f"spike_{post_id}", cooldown_minutes=120):
+        _spike_global_last = now
+        return f"🔥 <b>Engagement spike!</b> Post {post_id[:8]}… tiene {comment_count} comments — debate activo."
     return None
 
 

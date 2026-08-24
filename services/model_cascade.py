@@ -103,6 +103,11 @@ class ModelCascade:
         # cooldown de la última alerta Telegram por circuito (para no spamear
         # al operador cuando un proveedor entra/sale de OPEN en cada ciclo)
         self._last_circuit_alert_ts: Dict[str, float] = {}
+        # Agrupador de tormentas (23/08/2026): 4 circuitos abrieron juntos y
+        # dispararon 4 Telegram en 12s. Ventana CIRCUIT_ALERT_GROUP_SECONDS:
+        # alertas dentro de la ventana se acumulan y viajan en el próximo envío.
+        self._last_group_alert_ts: float = 0.0
+        self._pending_circuit_alerts: List[str] = []
         # usage de la ultima llamada exitosa por proveedor (para telemetria de
         # tokens/costo): {"provider": {"input_tokens": n, "output_tokens": n}}
         self._last_usage: Dict[str, Dict[str, int]] = {}
@@ -772,13 +777,30 @@ class ModelCascade:
             # Cooldown solo tras una alerta previa (no suprime la primera).
             if last > 0.0 and now - last < cooldown_s:
                 return
+
+            # ── Agrupador anti-tormenta ────────────────────────────────
+            group_gap = float(os.getenv("CIRCUIT_ALERT_GROUP_SECONDS", "90"))
+            if self._last_group_alert_ts and (now - self._last_group_alert_ts) < group_gap:
+                self._pending_circuit_alerts.append(provider)
+                logger.info(
+                    "Alerta de circuito agrupada (buffer=%d): %s",
+                    len(self._pending_circuit_alerts), provider,
+                )
+                return
+            self._last_group_alert_ts = now
+            batched = self._pending_circuit_alerts
+            self._pending_circuit_alerts = []
+            extra = (
+                f" Acumuladas en la misma ventana: {', '.join(batched)}."
+                if batched else ""
+            )
             self._last_circuit_alert_ts[provider] = now
             open_count = sum(1 for cb in self.circuit_breakers.values() if cb.state.value == "open")
             total = len(self.circuit_breakers)
             telegram.send_alert(
                 "Proveedor fuera de rotación",
                 f"'{provider}' quedó temporalmente fuera de rotación tras fallos repetidos. "
-                f"{open_count}/{total} proveedores en OPEN ahora mismo.",
+                f"{open_count}/{total} proveedores en OPEN ahora mismo.{extra}",
                 level="WARNING",
             )
         except Exception as e:
