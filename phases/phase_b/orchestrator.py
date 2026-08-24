@@ -3297,10 +3297,7 @@ class PhaseB:
                 "- Vary your opening: sometimes a question, sometimes a hard "
                 "counter-example, sometimes the single number that changes the "
                 "argument. NEVER announce your structure.\n"
-                "- Avoid template tells: no 'The pattern that works is...', no "
-                "'the key trade-off is...', no numbered steps, no bullet lists.\n"
-                "- Use your own phrasing. Mix in the occasional wry aside only "
-                "where it sharpens the point — never filler.\n\n"
+                "- No numbered steps, no bullet lists, no markdown.\n\n"
                 "WHAT THE REPLY MUST DO (pick one, commit to it):\n"
                 "- Extend the claim with a mechanism the author didn't name, OR\n"
                 "- Name the boundary condition where their claim breaks, OR\n"
@@ -3308,19 +3305,21 @@ class PhaseB:
                 "Engage the SPECIFIC argument in front of you — if a previous "
                 "comment already covered a point, don't restate it, build past it.\n\n"
                 "HARD CONSTRAINTS:\n"
-                "- No emojis, hashtags, links, or markdown.\n"
+                "- No emojis, hashtags, links.\n"
                 "- Do not be agreeable. Add friction, not praise.\n"
-                "- Do not start with 'Great point' or 'I agree'.\n"
-                "- You may be wrong — say so when the other side is stronger.\n"
                 "- DO NOT fabricate measurements. You have NO production data.\n"
-                "- Reply length 80-500 chars. Density over decoration.\n\n"
+                "- Reply length 80-500 chars. Density over decoration.\n"
+                "- No unverifiable third-party incidents or named anecdotes you "
+                "cannot source.\n"
+                "- If they brought data or admitted limits: extend, contrast, or "
+                "ask what their data opens — never restate their conclusion as "
+                "yours.\n\n"
                 f"{lang_instruction}\n\n"
                 f"{COMMENT_STYLE_INSTRUCTIONS}"
             )
             # ── Delimitador de contenido no confiable + derecho a abstenerse ──
+            # (verbatim: los tests de inyección/abstain lo exigen así)
             system_prompt = system_prompt + "\n\n" + UNTRUSTED_DIRECTIVE + "\n\n" + ABSTAIN_RULE
-            system_prompt = system_prompt + "\n\n" + HISTORICAL_CLAIM_DIRECTIVE
-            system_prompt = system_prompt + "\n\n" + DATA_CONTRIBUTION_DIRECTIVE
 
             # ── Inject reply feedback strategy hint ───────────────────────
             try:
@@ -3338,15 +3337,15 @@ class PhaseB:
                 _parts = []
                 if _state.get("top_topics"):
                     _parts.append(
-                        f"Enfócate en temas como {', '.join(_state['top_topics'])}."
+                        f"Focus on topics like {', '.join(_state['top_topics'])}."
                     )
                 if _state.get("avoid_topics"):
                     _parts.append(
-                        f"Evita temas como {', '.join(_state['avoid_topics'])}."
+                        f"Avoid topics like {', '.join(_state['avoid_topics'])}."
                     )
                 if _parts:
                     system_prompt = system_prompt + (
-                        "\n\nDIRECTRIZ DE RENDIMIENTO: " + " ".join(_parts)
+                        "\n\nPERFORMANCE DIRECTIVE: " + " ".join(_parts)
                     )
             except Exception:
                 pass
@@ -3398,8 +3397,8 @@ class PhaseB:
                 mem = self._memory.get_memory(author)
                 if mem:
                     memory_note = (
-                        f"NOTA DE MEMORIA: Ya has interactuado con @{mem['username']} antes. "
-                        f"Contexto previo: {mem['summary']}\n\n"
+                        f"MEMORY NOTE: You have interacted with @{mem['username']} "
+                        f"before. Prior context: {mem['summary']}\n\n"
                     )
             except Exception:
                 pass
@@ -4853,9 +4852,15 @@ class PhaseB:
                 f"{COMMENT_STYLE_INSTRUCTIONS}"
             )
             # ── Delimitador de contenido no confiable + derecho a abstenerse ──
+            # HISTORICAL/DATA ya viven compactas en la base de sitio 1; aquí la
+            # base es corta, se conservan las 2 restantes verbatim (tests).
             system_prompt = system_prompt + "\n\n" + UNTRUSTED_DIRECTIVE + "\n\n" + ABSTAIN_RULE
-            system_prompt = system_prompt + "\n\n" + HISTORICAL_CLAIM_DIRECTIVE
-            system_prompt = system_prompt + "\n\n" + DATA_CONTRIBUTION_DIRECTIVE
+            system_prompt = system_prompt + "\n\n" + (
+                "No unverifiable third-party incidents or named anecdotes you "
+                "cannot source. If they brought data or admitted limits: extend, "
+                "contrast, or ask what their data opens — never restate their "
+                "conclusion as yours."
+            )
             try:
                 reply = await self.llm.generate(
                     tier=tier,

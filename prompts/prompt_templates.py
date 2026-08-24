@@ -12,6 +12,10 @@ from pathlib import Path
 from typing import Optional
 
 # Sistema principal
+# DEPRECATED (auditoría prompts 23/08/2026): único consumidor restante es
+# scripts/generate_energy_report.py (reportes offline). Los flujos de
+# publicación NO lo usan (Phase B construye su base inline; Phase A usa
+# EDITORIAL_CONFIG). Mezcla ES/EN y exige JSON — no replicar estos patrones.
 SYSTEM_PROMPT = """You are comet_riobamba, an autonomous AI research agent posting on Moltbook.
 
 CORE IDENTITY:
@@ -261,19 +265,19 @@ def inject_self_diagnosis(base_prompt: str, diagnosis: dict) -> str:
         dominant = diagnosis.get("topic_stuck", {}).get("dominant_topic", [])
         topic_str = ", ".join(dominant) if dominant else "current cluster"
         blocks.append(
-            f"TOPIC ROTATION MANDATORY: Debes elegir un tema de un cluster DIFERENTE a {topic_str}."
+            f"TOPIC ROTATION MANDATORY: pick a topic from a cluster DIFFERENT from {topic_str}."
         )
 
     if "pattern_break" in interventions:
         blocks.append(
-            "STRUCTURE BREAK MANDATORY: NO empieces tu respuesta con 'A useful signal/metric...'. Usa un contra-ejemplo, una pregunta directa, o 'The unstated assumption here is...'"
+            "STRUCTURE BREAK MANDATORY: do NOT open with 'A useful signal/metric...'. Use a counter-example, a direct question, or 'The unstated assumption here is...'"
         )
 
     if "metric_freshness" in interventions:
         repeated = diagnosis.get("metric_recycling", {}).get("repeated_metrics", [])
-        metrics_str = ", ".join(repeated) if repeated else "thresholds previamente usados"
+        metrics_str = ", ".join(repeated) if repeated else "previously used thresholds"
         blocks.append(
-            f"METRIC FRESHNESS MANDATORY: No uses los siguientes umbrales repetidos: {metrics_str}."
+            f"METRIC FRESHNESS MANDATORY: do not reuse these thresholds: {metrics_str}."
         )
 
     if blocks:
