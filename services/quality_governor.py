@@ -1,224 +1,283 @@
-# -*- coding: utf-8 -*-
-"""Quality Governor v0 — gobernador de calidad-por-dolar (observador).
-
-Invention brief (23/08/2026): asignar modelo por tarea segun ROI MEDIDO,
-no por intuicion. v0 no enruta nada: observa, detecta modos de fallo
-caros y persiste la tabla que el router v1 usara para decidir.
-
-Fuentes (esquemas reales verificados):
-  - data/dual_scores.jsonl      {timestamp, phase, type, engagement,
-                                 research_value, composite, text_preview}
-  - data/cascade_telemetry.jsonl {ts, caller, provider, tier, latency_ms,
-                                 success, input_tokens, output_tokens, cost_usd}
-
-Salidas:
-  - compute_governor_report()  -> dict agregado por ventana temporal
-  - format_governor_line()     -> 1 linea para el cycle summary
-  - data/governor_roi.json     -> ultimo reporte (insumo del router v1)
-
-Detecciones v0:
-  - Fuga de razonamiento en texto publicado (patron real visto el 23/08:
-    una reply publicada empezaba 'Here's a thinking process:' y saco
-    composite 0.21).
-  - Costo 24h por tier/caller vs calidad media por fase: la base del ROI.
-"""
-
-from __future__ import annotations
-
-import json
-import logging
 import re
-from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+
+
+# Ejemplos conocidos a rastrear
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Tuple
+EJEMPLOS_CONOCIDOS = [
+    "kafka", "Einstein", "Newton", "Darwin", "Freud", "Jung",
+    "Tesla", "Gutenberg", "Turing", "Shakespeare", "Picasso"
+]
 
-logger = logging.getLogger("services.quality_governor")
+# Software conocido (para detectar versiones especificas)
+SOFTWARE_CONOCIDO = [
+    "kafka", "python", "java", "javascript", "typescript", "node", "docker",
+    "kubernetes", "redis", "postgres", "mysql", "mongodb", "nginx", "apache",
+    "tensorflow", "pytorch", "transformers", "langchain", "llama", "mistral"
+]
 
-_DUAL_SCORES_PATH = Path("data/dual_scores.jsonl")
-_TELEMETRY_PATH = Path("data/cascade_telemetry.jsonl")
-_ROI_STATE_PATH = Path("data/governor_roi.json")
-
-_LOW_QUALITY_COMPOSITE = 0.5
-
-# Patrones conservadores de fuga de razonamiento (calibrados con el caso
-# real del 23/08; evitar falsos positivos con prosa legitima tipo 'analyze').
-_LEAK_PATTERNS = (
-    re.compile(r"here'?s a thinking process", re.IGNORECASE),
-    re.compile(r"<think>", re.IGNORECASE),
-    re.compile(r"\*\*analyze the request\b", re.IGNORECASE),
-    re.compile(r"^as an ai (language )?model", re.IGNORECASE),
-)
+_COMMENTS_PATH = Path("data/published_comments.json")
+_POSTS_PATH = Path("data/published_posts.json")
 
 
-def _parse_ts(raw: Any):
-    if not raw:
-        return None
-    try:
-        ts = str(raw).replace("Z", "+00:00")
-        dt = datetime.fromisoformat(ts)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
-    except (ValueError, TypeError):
-        return None
-
-
-def _read_jsonl(path: Path, window_hours: float) -> List[Dict[str, Any]]:
-    if not path.exists():
-        return []
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=window_hours)
-    out: List[Dict[str, Any]] = []
-    try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except (json.JSONDecodeError, ValueError):
-                continue
-            ts = _parse_ts(rec.get("timestamp") or rec.get("ts"))
-            if ts is None or ts < cutoff:
-                continue
-            rec["_dt"] = ts
-            out.append(rec)
-    except OSError as e:
-        logger.debug("QualityGovernor: no se pudo leer %s: %s", path.name, e)
-    return out
-
-
-def text_has_reasoning_leak(text: str) -> bool:
-    """True si el texto parece fuga de razonamiento o eco del prompt.
-
-    GATE de publicación desde v0.1 (23/08/2026): antes era solo detección
-    post-hoc y 2 posts con el system prompt ecoado llegaron a Moltbook.
-    Ventana de 800 chars: las fugas reales arrancan en el arranque del texto.
+def text_has_ungrounded_named_entity(text: str) -> Tuple[bool, str]:
+    """Detecta entidades nombradas sin calificador ('por ejemplo', 'como').
+    
+    Retorna (True, razon) si detecta problema, (False, "") si esta OK.
     """
-    if not text:
-        return False
-    head = text[:800]
-    return any(p.search(head) for p in _LEAK_PATTERNS)
+    text_lower = text.lower()
+    
+    # Verificar si tiene calificadores genericos
+    tiene_calificador_generico = any([
+        "ejemplo" in text_lower,
+        "como" in text_lower,
+        "like" in text_lower,
+        "por ejemplo" in text_lower,
+        "such as" in text_lower
+    ])
+    
+    entidades_sin_calificar = []
+    for entidad in EJEMPLOS_CONOCIDOS:
+        if entidad.lower() in text_lower and not tiene_calificador_generico:
+            entidades_sin_calificar.append(entidad)
+    
+    if entidades_sin_calificar:
+        return True, f"ungrounded_named_entity:{','.join(entidades_sin_calificar)}"
+    
+    return False, ""
 
 
-def compute_governor_report(window_hours: float = 24.0) -> Dict[str, Any]:
-    """Agrega calidad (dual_scores) y costo (telemetria) de la ventana."""
-    scores = _read_jsonl(_DUAL_SCORES_PATH, window_hours)
-    telemetry = _read_jsonl(_TELEMETRY_PATH, window_hours)
-
-    # ── Calidad por fase ──────────────────────────────────────────
-    quality_by_phase: Dict[str, Dict[str, Any]] = {}
-    leaks: List[Dict[str, str]] = []
-    for rec in scores:
-        phase = str(rec.get("phase") or "?").lower()
-        comp = rec.get("composite")
-        try:
-            comp_f = float(comp)
-        except (TypeError, ValueError):
-            comp_f = None
-        bucket = quality_by_phase.setdefault(
-            phase,
-            {"n": 0, "composite_sum": 0.0, "low_quality": 0},
-        )
-        bucket["n"] += 1
-        if comp_f is not None:
-            bucket["composite_sum"] += comp_f
-            if comp_f < _LOW_QUALITY_COMPOSITE:
-                bucket["low_quality"] += 1
-        preview = str(rec.get("text_preview") or "")
-        if any(p.search(preview[:400]) for p in _LEAK_PATTERNS):
-            leaks.append({
-                "phase": phase,
-                "ts": rec.get("timestamp", ""),
-                "preview": preview[:120],
-            })
-
-    for phase, bucket in quality_by_phase.items():
-        n = bucket.pop("n")
-        total = bucket.pop("composite_sum")
-        bucket["avg_composite"] = round(total / n, 3) if n else None
-        bucket["n"] = n
-        bucket["leaks"] = sum(1 for lk in leaks if lk["phase"] == phase)
-
-    # ── Costo/uso por tier y caller ───────────────────────────────
-    cost_by_tier: Dict[str, Dict[str, Any]] = {}
-    for rec in telemetry:
-        tier = str(rec.get("tier") or "?")
-        bucket = cost_by_tier.setdefault(
-            tier, {"calls": 0, "ok": 0, "in": 0, "out": 0, "cost_usd": 0.0}
-        )
-        bucket["calls"] += 1
-        if rec.get("success"):
-            bucket["ok"] += 1
-            bucket["in"] += int(rec.get("input_tokens") or 0)
-            bucket["out"] += int(rec.get("output_tokens") or 0)
-            try:
-                bucket["cost_usd"] += float(rec.get("cost_usd") or 0.0)
-            except (TypeError, ValueError):
-                pass
-    for bucket in cost_by_tier.values():
-        bucket["cost_usd"] = round(bucket["cost_usd"], 4)
-
-    # ── Flags ROI accionables ─────────────────────────────────────
-    roi_flags: List[str] = []
-    for tier, bucket in sorted(cost_by_tier.items(), key=lambda kv: -kv[1]["cost_usd"]):
-        if bucket["cost_usd"] > 0 and bucket["ok"] == 0:
-            roi_flags.append(f"gasto ${bucket['cost_usd']:.4f} en '{tier}' sin exitos: revisar routing")
-    for phase, bucket in quality_by_phase.items():
-        if bucket["n"] >= 3 and bucket["low_quality"] / bucket["n"] > 0.5:
-            roi_flags.append(
-                f"fase {phase}: {bucket['low_quality']}/{bucket['n']} respuestas "
-                f"bajo composite {_LOW_QUALITY_COMPOSITE} — subir calidad del generador"
-            )
-    if leaks:
-        roi_flags.append(f"{len(leaks)} fuga(s) de razonamiento publicadas: activar/podar prompt o modelo")
-
-    report = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "window_hours": window_hours,
-        "quality_by_phase": quality_by_phase,
-        "cost_by_tier": cost_by_tier,
-        "leaks": leaks[:5],
-        "roi_flags": roi_flags,
-    }
-    _persist(report)
-    return report
+def text_has_ungrounded_software_version(text: str) -> Tuple[bool, str]:
+    """Detecta versiones de software sin calificador.
+    
+    Solo detecta software conocido seguido de version (ej: Kafka 0.11, Python 3.9).
+    Evita falsos positivos con parametros numericos (2.5, 0.3, 30%).
+    
+    Retorna (True, razon) si detecta problema, (False, "") si esta OK.
+    """
+    text_lower = text.lower()
+    
+    # Verificar si tiene calificadores
+    tiene_calificador = any([
+        "ejemplo" in text_lower,
+        "como" in text_lower,
+        "version" in text_lower,
+        "release" in text_lower,
+        "introduced" in text_lower,
+        "since" in text_lower,
+        "starting from" in text_lower
+    ])
+    
+    if tiene_calificador:
+        return False, ""
+    
+    versiones_sin_calificar = []
+    for software in SOFTWARE_CONOCIDO:
+        patron = rf"\b{software}\s+(\d+\.\d+(?:\.\d+)?)"
+        matches = re.finditer(patron, text_lower, re.IGNORECASE)
+        
+        for match in matches:
+            version_completa = match.group(0)
+            versiones_sin_calificar.append(version_completa)
+    
+    if versiones_sin_calificar:
+        return True, f"ungrounded_software_version:{','.join(versiones_sin_calificar)}"
+    
+    return False, ""
 
 
-def format_governor_line(report: Dict[str, Any]) -> str:
-    """Una linea compacta para el cycle summary."""
-    parts = []
-    for phase in ("a", "b"):
-        b = report["quality_by_phase"].get(phase)
-        if b and b.get("avg_composite") is not None:
-            parts.append(f"{phase}:Q{b['avg_composite']:.2f}(n={b['n']})")
-    total_cost = sum(b["cost_usd"] for b in report["cost_by_tier"].values())
-    parts.append(f"cost24h=${total_cost:.4f}")
-    if report["leaks"]:
-        parts.append(f"LEAKS={len(report['leaks'])}")
-    flags = len(report["roi_flags"])
-    if flags:
-        parts.append(f"flags={flags}")
-    return "Governor[{}] {}".format(
-        f"{report['window_hours']:.0f}h", " ".join(parts) or "sin datos"
-    )
-
-
-def _persist(report: Dict[str, Any]) -> None:
+def text_has_repeated_example_24h(text: str, lookback_hours: int = 24) -> Tuple[bool, str]:
+    """Verifica si un ejemplo conocido se uso en las ultimas 24h.
+    
+    Retorna (True, razon) si detecta repeticion, (False, "") si esta OK.
+    """
+    text_lower = text.lower()
+    ahora = datetime.now()
+    hace_24h = ahora - timedelta(hours=lookback_hours)
+    
+    # Encontrar ejemplos en el texto actual
+    ejemplos_en_texto = [e for e in EJEMPLOS_CONOCIDOS if e.lower() in text_lower]
+    
+    if not ejemplos_en_texto:
+        return False, ""
+    
+    # Cargar historial de comments
+    if not _COMMENTS_PATH.exists():
+        return False, ""
+    
     try:
-        _ROI_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _ROI_STATE_PATH.write_text(
-            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-    except OSError as e:
-        logger.debug("QualityGovernor: persistencia fallida: %s", e)
+        with open(_COMMENTS_PATH, "r", encoding="utf-8") as f:
+            historial = json.load(f)
+    except:
+        return False, ""
+    
+    # Verificar repeticion
+    ejemplos_repetidos = []
+    for ejemplo in ejemplos_en_texto:
+        usos_recientes = 0
+        for item in historial:
+            texto_item = item.get("content", item.get("comment", item.get("body", "")))
+            fecha_str = item.get("published_at", item.get("created_at", ""))
+            
+            if ejemplo.lower() in texto_item.lower():
+                try:
+                    fecha = datetime.fromisoformat(fecha_str.replace("Z", "+00:00"))
+                    if fecha >= hace_24h:
+                        usos_recientes += 1
+                except:
+                    continue
+        
+        if usos_recientes > 0:
+            ejemplos_repetidos.append(f"{ejemplo}({usos_recientes} veces)")
+    
+    if ejemplos_repetidos:
+        return True, f"repeated_example_24h:{','.join(ejemplos_repetidos)}"
+    
+    return False, ""
 
 
-def get_roi_state() -> Dict[str, Any]:
-    """Ultimo reporte persistido (insumo futuro del router v1)."""
-    try:
-        if _ROI_STATE_PATH.exists():
-            return json.loads(_ROI_STATE_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        pass
-    return {}
+def gate_calidad_entidades(text: str, title: str = "") -> Tuple[bool, str]:
+    """Gate completo para entidades, versiones y repeticion.
+    
+    Integra las 3 verificaciones en un solo llamado.
+    Retorna (aprobado, razon) donde:
+      - aprobado=True si no hay problemas
+      - razon="" si aprobado, o descripcion del problema si no aprobado
+    """
+    # Verificar texto completo (title + body si existe)
+    texto_completo = f"{title} {text}" if title else text
+    
+    # 1. Entidades nombradas sin calificador
+    tiene_problema, razon = text_has_ungrounded_named_entity(texto_completo)
+    if tiene_problema:
+        return False, razon
+    
+    # 2. Versiones de software sin calificador
+    tiene_problema, razon = text_has_ungrounded_software_version(texto_completo)
+    if tiene_problema:
+        return False, razon
+    
+    # 3. Repeticion de ejemplos en 24h
+    tiene_problema, razon = text_has_repeated_example_24h(texto_completo)
+    if tiene_problema:
+        return False, razon
+    
+    return True, ""
+
+
+def main():
+    """Test de las funciones con el comment de Kafka."""
+    print("=" * 80)
+    print("TEST GATE ENTIDADES v3")
+    print("=" * 80)
+    print()
+    
+    # Test con el comment problematico de Kafka
+    texto_kafka = """
+    Kafka 0.11 introduced exactly-once semantics with producer IDs and sequence 
+    numbers — the broker could detect a duplicate write because the write carried 
+    its own lineage. Your witness data is the same idea, but at the effect boundary 
+    instead of the transport layer.
+    """
+    
+    print("Texto: Kafka 0.11...")
+    print()
+    
+    aprobado, razon = gate_calidad_entidades(texto_kafka)
+    print(f"Aprobado: {aprobado}")
+    print(f"Razon: {razon}")
+    print()
+    
+    # Test con texto sin problemas
+    texto_limpio = """
+    The mechanism is a divergence gate between hops. Before a downstream stage 
+    consumes upstream output, the orchestrator re-embeds that output against 
+    the prior intent embedding and refuses passage when cosine distance exceeds 
+    0.3 of the hop's observed baseline.
+    """
+    
+    print("Texto: Divergence gate (sin ejemplos)...")
+    print()
+    
+    aprobado, razon = gate_calidad_entidades(texto_limpio)
+    print(f"Aprobado: {aprobado}")
+    print(f"Razon: {razon}")
+    print()
+    
+    # Test con ejemplo calificado
+    texto_calificado = """
+    For example, Kafka 0.11 introduced exactly-once semantics with producer IDs.
+    This is like how your witness data works at the effect boundary.
+    """
+    
+    print("Texto: Kafka con 'For example'...")
+    print()
+    
+    aprobado, razon = gate_calidad_entidades(texto_calificado)
+    print(f"Aprobado: {aprobado}")
+    print(f"Razon: {razon}")
+    print()
+    
+    print("=" * 80)
+    print("RESULTADOS ESPERADOS:")
+    print("  - Kafka sin calificador: RECHAZAR")
+    print("  - Divergence gate: APROBAR")
+    print("  - Kafka con 'For example': APROBAR")
+    print("=" * 80)
+
+
+
+
+
+def text_has_reasoning_leak(text: str):
+    scaffolds = ['primero,', 'segundo,', 'tercero,', 'en conclusion', 'finalmente,', 
+                 'por un lado', 'por otro lado', 'en resumen', 'para concluir']
+    text_lower = text.lower()
+    for scaffold in scaffolds:
+        if scaffold in text_lower:
+            return True, f'Contiene scaffold: {scaffold}'
+    return False, ''
+
+
+def title_has_scaffold(title: str):
+    # Patrones de clickbait SEO
+    seo_scaffolds = ['guia completa', 'todo sobre', 'todo lo que', 'como hacer', 'mejores', 'top ']
+    # Patrones de scaffold interno / reasoning leak (24/08/2026)
+    internal_scaffolds = [
+        "here's a thinking process:", "here's the thinking process:",
+        "thinking process:", "critique:**", "critique:", "**critique:",
+        "we need to critique", "let's critique", "draft...", "pre-critique",
+        "post-mortem:", "analysis:", "reasoning:", "step ", "step:",
+    ]
+    title_lower = title.lower()
+    
+    # Check SEO scaffolds
+    for scaffold in seo_scaffolds:
+        if scaffold in title_lower:
+            return True, f'Titulo con scaffold SEO: {scaffold}'
+    
+    # Check internal scaffolds / reasoning leaks
+    for scaffold in internal_scaffolds:
+        if scaffold in title_lower:
+            return True, f'Titulo con scaffold interno: {scaffold}'
+    
+    # Check si termina en ':' (instruccion, no titulo)
+    if title.rstrip().endswith(':'):
+        return True, 'Titulo termina en dos puntos (scaffold)'
+    
+    # Check si empieza como item de lista
+    if re.match(r'^\s*[-•*]\s', title) or re.match(r'^\s*\d+\.\s', title):
+        return True, 'Titulo es item de lista'
+    
+    return False, ''
+
+def text_template_fatigue(text: str):
+    import re
+    list_patterns = [r'^\s*[-•*]\s', r'^\s*\d+\.\s']
+    lines = text.split('\n')
+    list_count = sum(1 for line in lines if any(re.match(p, line) for p in list_patterns))
+    if list_count > len(lines) * 0.5 and len(lines) > 5:
+        return True, f'Exceso de listas: {list_count}/{len(lines)} lineas'
+    return False, ''
+
+

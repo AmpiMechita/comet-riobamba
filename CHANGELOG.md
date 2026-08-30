@@ -1,6 +1,18 @@
 \# Changelog — COMET-RIOBAMBA
 
 
+## [5.11.x] – 2026-08-29
+
+### Fix: title_has_scaffold() detecta reasoning leaks
+
+- **services/quality_governor.py**: Función 	itle_has_scaffold() reescrita para incluir patrones de scaffold interno además de clickbait SEO
+  - Patrones agregados: "here's a thinking process:", "critique:**", "we need to critique", "post-mortem:", "analysis:", "step ", "step:"
+  - Check agregado: títulos que terminan en : (instrucciones, no títulos declarativos)
+  - Check agregado: títulos que empiezan como items de lista (- , * , 1. )
+  - Agregado import re para soportar e.match() en los checks
+- **Impacto**: Títulos con fugas de razonamiento interno ahora son bloqueados correctamente en el gate de validación de Phase A
+- **Referencia**: docs/fixes/FIX-2026-08-29-title-has-scaffold-reasoning-leaks.md
+
 
 \## \[5.0.0] – 2026-06-07
 
