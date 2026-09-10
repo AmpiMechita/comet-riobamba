@@ -24,9 +24,11 @@ from typing import Any, Dict, List, Optional, Tuple
 from config import behavior_cfg, BASE_DIR
 from config.agent_policy import POLICY
 from config.topic_matrix import load_topic_matrix, save_topic_matrix
+from config.niche_prompts import NICHE_PROMPTS
 from core.observability import send_event
 from phases.deps import PhaseADeps
 from services.challenge_solver import ChallengeSolver
+from services.model_router import call_model_with_fallback  # Groq fallback para classify
 from services.experiments import load_experiments, pick_variant, get_variant_config
 from services.roadmap import load_roadmap, choose_topic_from_roadmap, save_roadmap
 from services.research_agenda import load_agenda, ResearchAgenda
@@ -48,7 +50,7 @@ from services.persistence import (
     store_post_hash,
     load_topic_engagement,
 )
-from services.quality_governor import text_has_reasoning_leak
+from services.quality_governor import text_has_reasoning_leak, title_has_scaffold, text_template_fatigue
 from phases.phase_b.scoring import text_has_fabricated_measurement, text_has_unverifiable_historical_claim
 
 logger = logging.getLogger("phases.phase_a_content")
@@ -101,31 +103,26 @@ EDITORIAL_CONFIG = {
         "state checkpoint and rollback strategies for long-running agents",
         "agent memory management and context window rotation under load",
     ],
-    "mission": (
-        "You are COMET-RIOBAMBA, an inventor building the next layer of agent "
-        "infrastructure. Your laboratory is the web: you read papers and new "
-        "studies as they surface, you watch how real systems and agents behave "
-        "in production, and you do not relay what was written — you build on it. "
-        "Each post is an original contribution: a mechanism, a protocol, a "
-        "guardrail, or an architecture that does not exist yet, stated with a "
-        "position. You propose and establish new technology; you are neither a "
-        "newswire nor a poetry recital of what already exists."
+        "mission": (
+        "You are COMET-RIOBAMBA, an inventor building agent infrastructure. "
+        "Read papers, observe real systems, then propose mechanisms, protocols, "
+        "guardrails, or architectures that do not yet exist. "
+        "State a clear engineering position."
     ),
-    "core_principles": [
-        "LANGUAGE: 100% ENGLISH. Precise, sharp, opinionated — a strong engineering invention, not a dry report.",
-        "TITLE: A confrontational reframe that takes a STANCE and invites argument. Pattern: '[Subject] is not [the naive reading]. It is [the sharper truth].' or 'Your [X] is just [a reframe].' Prefer second person. e.g. 'Availability is not reliability. It is a window.' / 'Your task completion report is a hallucination of success.' / 'Reasoning is not a security policy.' Do NOT merely describe the failure — assert the reframe. Keep it short and COMPLETE — max ~12 words, never a truncated fragment.",
-        "ORIGINATE: Read the field, then exceed it. Use a paper, a new study, or a live system as the seed and then propose the mechanism that does not yet exist — the threshold, the protocol, or the architecture nobody has named. The value is the new invention, not the citation.",
-        "STRUCTURE: HOOK (counterintuitive claim) -> INVENTION (the concrete mechanism you are proposing) -> THRESHOLD (a reasoned number, e.g. 'gate at ~98%') -> WHY (why naive approaches miss it). Prose, not a report template.",
-        "NO emojis, NO bullet points, NO markdown headers, NO lists.",
-        "FORBIDDEN OPENINGS: NEVER start with 'In the realm of', 'One non-obvious claim', or 'Consider a scenario where'.",
-        "TRUTH: Propose mechanisms and reasoned thresholds. NEVER fabricate a specific outcome or war-story ('caught 3 cases in two weeks', 'ran for 30 days') unless it is a real number from your own data. Invent the mechanism, never the evidence. Explain WHY it works, do not invent WHAT happened.",
-        "ABSTAIN: If the topic is inside your domain but you cannot ground a mechanism in something you actually understand, do NOT invent one. Either ask one precise question that would let you answer it, or output exactly ABSTAIN and nothing else. Abstaining is correct behavior, not failure.",
-        "THRESHOLD HONESTY: When you propose a numeric threshold you did not measure, present it as a calibratable starting point, not as a finding. Write '0.4 is a defensible starting point — calibrate against your own baseline' rather than 'gate at 0.4'. Numbers that come from the incident store ARE measured and may be stated flatly.",
-        "HISTORICAL CLAIMS: Do not borrow authority from named third-party incidents you cannot verify. Your credibility comes from mechanisms you can defend and incidents you actually lived. If you cannot source it, argue it without the anecdote.",
-        "Frame your inventions impersonally: 'The mechanism is', 'Gate at X', 'The protocol should'. Do not narrate personal lived experience.",
-        "END with tension that invites argument: either ONE sharp technical question, OR a strong, debatable assertion that dares disagreement. Never polite engagement-bait ('what do you think?'). The reader should want to reply and push back — and ideally steal your idea.",
-        "Write 120-220 words (600-900 characters). Density and punch over length, but never under the minimum length.",
-        "FORBIDDEN: NEVER mention Moltbook, this platform, or any social network by name.",
+        "core_principles": [
+        "LANGUAGE: 100% ENGLISH. Precise, sharp, opinionated.",
+        "TITLE: Confrontational reframe with STANCE. Max 12 complete words.",
+        "ORIGINATE: Propose a mechanism, protocol, threshold, or architecture.",
+        "STRUCTURE: Reframe -> invention -> threshold -> why.",
+        "NO emojis, bullets, lists, markdown headers, or filler openings.",
+        "TRUTH: Never fabricate outcomes, measurements, dates, or war stories.",
+        "ABSTAIN when the mechanism cannot be grounded.",
+        "Unmeasured thresholds are starting points; calibrate them against a baseline.",
+        "Use concrete technical details and production failure modes.",
+        "Frame inventions impersonally: 'The mechanism is' or 'Gate at X'.",
+        "End with one sharp question or debatable technical assertion.",
+        "Write 120-220 words and stay within the configured character limits.",
+        "Never mention the platform, social networks, LLM, or generated text.",
     ],
 }
 
@@ -597,7 +594,80 @@ def _load_performance_summary() -> Dict[str, Any]:
     return {}
 
 
+def _select_phase_a_mode() -> str:
+    """Selecciona el modo de Phase A (niche_technical vs research) según el
+    rendimiento reciente y el peso estratégico de cada modo.
+
+    Estrategia:
+    - nicho_technical: contenido único del agente (5 nichos curados). Peso base 40%.
+    - research: agenda de investigación, arXiv, post-pairing watchlist. Peso base 60%.
+
+    Ajustes dinámicos:
+    - Si el rendimiento de los nichos está bajo el umbral, baja el peso del nicho.
+    - Si los nichos producen más engagement que la media, sube el peso.
+    """
+    import os
+    import random
+    from config import behavior_cfg
+    from config.agent_policy import POLICY
+
+    base_mode = behavior_cfg.get("phase_a_mode", POLICY.phase_a_mode) or "research"
+    niche_topics = os.getenv("PHASE_A_NICHE_TOPICS", "").strip()
+    if not niche_topics:
+        return base_mode
+
+    # Pesos base: el nicho es la propuesta de valor única del agente, pero
+    # la investigación es el motor de descubrimiento y construcción de autoridad.
+    niche_weight = 0.40
+    research_weight = 0.60
+
+    # Ajuste por rendimiento reciente del nicho
+    try:
+        perf = _load_topic_performance()
+        if perf:
+            niche_scores = []
+            for niche in [t.strip() for t in niche_topics.split(",") if t.strip()]:
+                rec = perf.get(niche)
+                if rec and rec.get("score_checked"):
+                    niche_scores.append(rec.get("score", 0))
+            if niche_scores:
+                avg_niche = sum(niche_scores) / len(niche_scores)
+                if avg_niche < 0.3:
+                    niche_weight = max(0.20, niche_weight - 0.15)
+                elif avg_niche > 0.6:
+                    niche_weight = min(0.60, niche_weight + 0.15)
+    except Exception as e:
+        logger.debug("Phase A: niche perf adjustment skipped: %s", e)
+
+    # Selección ponderada
+    roll = random.random()
+    chosen = "niche_technical" if roll < niche_weight else "research"
+    logger.info(
+        "Phase A: mode selector roll=%.2f → %s (niche_w=%.2f, research_w=%.2f, base=%s)",
+        roll, chosen, niche_weight, research_weight, base_mode,
+    )
+    return chosen
+
+
 def choose_topic(mode: str = "research") -> tuple[str, str]:
+    # ── Niche Technical Mode ──────────────────────────────────────────
+    if mode == "niche_technical":
+        import os
+        niche_topics_str = os.getenv("PHASE_A_NICHE_TOPICS", "")
+        if niche_topics_str:
+            niche_topics = [t.strip() for t in niche_topics_str.split(",") if t.strip()]
+            if niche_topics:
+                import random
+                chosen = random.choice(niche_topics)
+                # Select a random niche and return its key as topic
+                # The actual content generation will use the niche prompt
+                source = "niche_config"
+                logger.info("Phase A: niche technical mode, topic='%s' (source=%s)", chosen, source)
+                return chosen, source
+        # Si no hay nicho configurado, caemos al modo research default
+        logger.info("Phase A: niche_technical mode selected but no PHASE_A_NICHE_TOPICS configured, falling back to research")
+    
+    # ── Research Mode (original) ──────────────────────────────────────
     if mode == "research":
         agenda = load_agenda()
         allow_feed = os.environ.get("ALLOW_PHASE_B_FEED_TOPICS", "").lower() == "true"
@@ -640,7 +710,7 @@ def choose_topic(mode: str = "research") -> tuple[str, str]:
             available = []
             for t in uncovered:
                 rec = perf.get(t["topic"])
-                if rec and rec.get("score_checked") and rec.get("score") == 0 and rec.get("comment_count") == 0:
+                if rec and rec.get("score_checked") and rec.get("score") == 0 and rec.get("comment_count") == 0 and not str(t.get("source", "")).startswith("own_incident"):
                     logger.info("Phase A: skipping low-engagement topic '%s'", t["topic"])
                     continue
                 available.append(t)
@@ -689,6 +759,56 @@ def choose_topic(mode: str = "research") -> tuple[str, str]:
         return random.choice(topics_list), "roadmap"
 
 def build_prompts(topic: str, policy: Optional[Dict[str, Any]] = None, variant: Optional[str] = None, mode: str = "research", incident: Optional[Dict[str, Any]] = None, incident_figures: Optional[List[str]] = None) -> Tuple[str, str]:
+    import os
+    
+    # ── Niche Technical Mode ──────────────────────────────────────────
+    if mode == "niche_technical":
+        # Check if topic is a niche key
+        niche_prompt = NICHE_PROMPTS.get(topic)
+        if niche_prompt:
+            system = niche_prompt["system"]
+            topics = niche_prompt["topics"]
+            tone = niche_prompt["tone"]
+            examples = niche_prompt["examples"]
+            
+            # Build system prompt from niche config
+            mission = ""
+            principles_text = ""
+            publish_line = ""
+            preferred_topics = ", ".join(topics) if topics else ""
+            target_words_min = 200
+            target_words_max = 600
+            allow_question_ending = False
+            max_hashtags = 0
+            
+            system_prompt = (
+                f"{system}\n\n"
+                f"Tópicos asociados: {preferred_topics}.\n"
+                f"Tono: {tone}\n"
+                f"Longitud: {target_words_min}-{target_words_max} palabras.\n"
+                f"Ejemplos de referencia:\n"
+            )
+            for ex in examples:
+                system_prompt += f"- {ex}\n"
+            system_prompt += "Escribe un post técnico original sin scaffolds ('guía completa', 'todo sobre'). "
+            system_prompt += "Sé directo, declarativo, con datos reales y métricas concretas."
+            
+            # Build user prompt asking for a post on this niche topic
+            user_prompt = f"Genera un post técnico original sobre: {topic}\n\n" + \
+                          "Contexto: Eres un ingeniero de sistemas en Moltbook. " + \
+                          "Sé directo, incluye datos reales si aplican, y métricas concretas.\n\n" + \
+                          "Requisitos:\n" + \
+                          "- Longitud: 200-600 palabras\n" + \
+                          "- Tono: " + tone + "\n" + \
+                          "- Evita scaffolds ('guía completa', 'todo sobre')\n" + \
+                          "- Sé declarativo, sin hedging ('creo', 'podría ser')\n" + \
+                          "- Incluye al menos un dato o métrica concreta\n" + \
+                          "- No copies los examples de arriba, úsalos solo como referencia de estilo\n\n" + \
+                          "Escribe el post ahora:"
+            
+            return system_prompt, user_prompt
+    
+    # ── Research Mode (original) ──────────────────────────────────────────
     policy = policy or {}
     mission = EDITORIAL_CONFIG["mission"]
     principles = EDITORIAL_CONFIG["core_principles"]
@@ -792,26 +912,15 @@ def build_prompts(topic: str, policy: Optional[Dict[str, Any]] = None, variant: 
         )
     elif mode == "research":
         user_prompt = (
-            f"Write one original short-form engineering post about: {topic}.\n\n"
-            f"Length: 600 to 1000 characters. ABSOLUTE MAXIMUM: {max_len} characters.\n\n"
-            "STRUCTURE (research mode):\n"
-            "1. PROBLEM (2-3 sentences): Start with a real tension or gap in AI agent systems — "
-            "heuristics, rate limits, tool safety, BCI/closed-loop, observability, etc.\n"
-            "2. PROPOSAL (3-5 sentences): Propose a framework, pipeline, protocol, validation "
-            "pattern, or guardrail.  Mention at least one specific metric or a reinterpreted "
-            "way to evaluate the problem.\n"
-            "3. RESEARCH QUESTION (1 sentence): End with a concrete, low-friction question "
-            "that invites co-design.  Avoid vague closings like 'Thoughts?'.\n\n"
-            "STRICT STYLE REQUIREMENTS:\n"
-            "- Write EXACTLY 3 short paragraphs. Separate each with a blank line.\n"
-            "- NO bullet points, NO lists, NO emojis, NO markdown.\n"
-            "- NO academic subtitles. Use continuous prose.\n"
-            "- Sound like a senior systems engineer writing after seeing the system fail, recover, or evolve in production.\n"
-            "- Make the post feel specific, grounded, and non-generic.\n"
-            "- Focus on agent architecture, memory, feedback loops, model orchestration, failure handling, or self-improvement dynamics.\n"
-            "- Do NOT include links, URLs, hashtags, or code blocks.\n"
-            "- FORBIDDEN: do not mention Moltbook, platform names, LLM, AI assistant, language model, prompt, or that the text was generated.\n"
-            "- You MUST finish your last thought completely. Do not get cut off.\n"
+            f"Write one original engineering post about: {topic}.\n\n"
+            "Choose ONE mechanism, failure mode, or design decision. Do not cover multiple ideas.\n"
+            "Explain the mechanism precisely: what state changes, what boundary fails, and why the naive fix misses it.\n"
+            "Propose ONE operational intervention and state ONE calibratable starting threshold. If the threshold is not measured, label it as a starting point and say it must be calibrated.\n"
+            "Use one concrete technical detail such as a schema field, retry condition, timestamp, queue state, or observable metric. Do not invent a production outcome, measured result, date, or war story.\n\n"
+            f"Length: 650-850 characters; absolute maximum: {max_len} characters.\n"
+            "Write exactly three short prose paragraphs separated by blank lines. The first paragraph states the tension, the second explains the mechanism and intervention, and the third ends with one sharp technical question or debatable assertion. Do not label the paragraphs.\n\n"
+            "Use precise English. No bullets, lists, emojis, markdown headers, URLs, hashtags, code, academic subtitles, generic advice, or filler openings. Do not mention the platform, LLM, AI assistant, language model, prompt, or that the text was generated. Finish the final sentence completely.\n"
+            "Output only the title on the first line, then a blank line, then the body."
         )
     else:
         user_prompt = (
@@ -896,8 +1005,27 @@ def _mark_opus_hero_used() -> None:
         logger.warning("Phase A: no se pudo escribir hero_state: %s", e)
 
 
-async def call_model(deps: PhaseADeps, system_prompt: str, user_prompt: str,
-                     tier: str = "premium_opus") -> str:
+async def call_model(deps: PhaseADeps, system_prompt: str, user_prompt: str, tier: str = "premium_opus") -> str:
+    """Llama al modelo con fallback Groq para tier=classify."""
+    
+    # ── Fallback Groq para classify (bajo costo, alta disponibilidad) ──
+    if tier == "classify":
+        try:
+            result = call_model_with_fallback(
+                prompt=user_prompt,
+                system_prompt=system_prompt,
+                max_tokens=512,
+                temperature=0.1
+            )
+            if result["success"]:
+                logger.info("call_model: classify con Groq fallback (%s tokens, %s)", result["tokens_used"], result["provider"])
+                return result["content"]
+            else:
+                logger.warning("call_model: Groq fallback falló (%s), usando cascade", result.get("error", "unknown"))
+        except Exception as e:
+            logger.warning("call_model: error en Groq fallback (%s), usando cascade", e)
+    
+    # ── Cascade normal para todo lo demás (premium_opus, flash, etc.) ──
     cascade = deps.model_cascade
     if cascade is None: raise RuntimeError("ModelCascade no disponible en deps")
     if hasattr(cascade, "generate"):
@@ -981,7 +1109,17 @@ async def _critique_pass(deps: PhaseADeps, post: Dict[str, Any],
         body = _normalize_moltbook_body(body)
         if not body:
             return post
+        # Gate de titulo: si la critica produce scaffold filtrado, se conserva
+        # la version pre-critica (que ya paso todos los gates).
+        if title_has_scaffold(title):
+            logger.info("Phase A: auto-critique produjo titulo con scaffold -> keeping pre-critique")
+            return post
         new_text = _truncate_to_limit(body, EDITORIAL_CONFIG["max_length_chars"])
+        # Gate de fatiga: si la crítica re-introduce fórmulas, se conserva
+        # la versión pre-crítica (que ya pasó el gate).
+        if _check_template_fatigue(new_text):
+            logger.info("Phase A: auto-critique reintrodujo fórmulas -> keeping pre-critique")
+            return post
         required_citation = _extract_arxiv_id(post.get("metadata", {}).get("topic", ""))
         _historical_ctx = str(post.get("metadata", {}).get("historical_context")
                               or post.get("metadata", {}).get("topic", "") or "")
@@ -1106,6 +1244,41 @@ def _looks_low_quality(text: str, policy: dict | None = None) -> tuple[bool, str
 
 
 _GENERATION_ATTEMPTS_LOG = BASE_DIR / "data/generation_attempts.jsonl"
+
+
+# ── Gate anti-fatiga de plantilla (24/08/2026) ────────────────────────
+# Auditoria editorial: 60% de posts recientes comparten coletillas
+# formulaicas. Antes de publicar, el candidato se confronta contra los
+# tetragramas 'hot' de los ultimos posts propios; si pisa el hot set,
+# rechazo + regeneracion con las fórmulas nombradas. Reversible:
+# PHASE_A_FATIGUE_GATE=0.
+_FATIGUE_STORE = BASE_DIR / "data/published_posts.json"
+
+
+def _recent_own_bodies(window: int = 25) -> List[str]:
+    try:
+        posts = json.loads(_FATIGUE_STORE.read_text(encoding="utf-8"))
+        return [str(p.get("body") or "") for p in posts[-window:] if p.get("body")]
+    except (OSError, ValueError):
+        return []
+
+
+def _env_flag(name: str, default: str = "1") -> bool:
+    return os.getenv(name, default).strip().lower() in ("1", "true", "yes")
+
+
+def _check_template_fatigue(text: str) -> List[str]:
+    """Tetragramas hot que el candidato repite ([] = limpio). Con corpus
+    chico (< PHASE_A_FATIGUE_MIN_BASE posts) no juzga: la base estadistica
+    no alcanza y rechazaria todo."""
+    if not _env_flag("PHASE_A_FATIGUE_GATE", "1"):
+        return []
+    window = int(os.getenv("PHASE_A_FATIGUE_WINDOW", "25"))
+    bodies = _recent_own_bodies(window)
+    if len(bodies) < int(os.getenv("PHASE_A_FATIGUE_MIN_BASE", "6")):
+        return []
+    min_posts = int(os.getenv("PHASE_A_FATIGUE_MIN_POSTS", "3"))
+    return text_template_fatigue(text, bodies, min_posts=min_posts)
 
 
 def _log_generation_attempt(topic: str, topic_source: str, attempt: int, max_attempts: int, outcome: str) -> None:
@@ -1250,6 +1423,9 @@ _RETRY_CORRECTION_HINTS: Dict[str, str] = {
     "missing_arxiv_citation": "El intento anterior no cito la fuente arXiv del paper en el cuerpo. Incluí el identificador textualmente (formato arXiv:XXXX.XXXXXv1, tal cual viene en el tema del post) en el PRIMER parrafo, junto con el nombre del paper. Es la evidencia verificable del post.",
     "missing_incident_figures": "El intento anterior no incluyó al menos dos de las cifras verificadas del incidente EN EL BODY (el título no cuenta). Abrí el PRIMER parrafo del body con el incidente y escribí los numeros reales textualmente, tal cual aparecen entre comillas en el HARD REQUIREMENT. La diferenciacion del post son esos numeros: sin ellos es un post generico.",
     "unverifiable_historical_claim": "Remove the dated third-party example. Make the same point from the mechanism itself, or from your own verified incidents.",
+    "prompt_or_reasoning_leak": "El intento anterior ecoó instrucciones internas, listas de pasos o razonamiento en vez del contenido final. Devolvé ÚNICAMENTE el post terminado: primera línea = título declarativo, luego el body en prosa continua.",
+    "leaked_scaffold_title": "El intento anterior tenía un título que era scaffold interno ('Critique:**', 'Here's a thinking process:', termina en ':', o empieza como item de lista). El título debe ser una frase declarativa confrontativa de ~6-12 palabras, segunda persona, sin markdown, sin etiquetas y sin dos puntos finales.",
+    "template_fatigue": "El intento anterior reutilizó fórmulas literales de posts anteriores (mismas coletillas de cierre o apertura). Escribí TODO el post con estructura y vocabulario originales: nada de frases hechas repetidas, otro tipo de cierre y otra forma de abrir. La voz es inventor, no plantilla.",
 }
 
 
@@ -1322,7 +1498,7 @@ def _topic_with_matrix_fallback(
             available = []
             for t in uncovered:
                 rec = perf.get(t["topic"])
-                if rec and rec.get("score_checked") and rec.get("score") == 0 and rec.get("comment_count") == 0:
+                if rec and rec.get("score_checked") and rec.get("score") == 0 and rec.get("comment_count") == 0 and not str(t.get("source", "")).startswith("own_incident"):
                     logger.info("Phase A: skipping low-engagement topic '%s'", t["topic"])
                     continue
                 available.append(t)
@@ -1396,10 +1572,14 @@ class PhaseAContentGeneration:
 
     @phase_error_boundary(logger, "phase_a")
     async def execute(self) -> Dict[str, Any]:
-        # ── Quiet Hours: no original content generation between 00:00-06:00 ──
-        current_hour = datetime.now().hour
+        # ── Quiet Hours: no original content generation between 00:00-06:00 local time ──
+        try:
+            tz = zoneinfo.ZoneInfo(behavior_cfg.get("timezone", "America/Guayaquil"))
+        except Exception:
+            tz = timezone.utc
+        current_hour = datetime.now(tz).hour
         if 0 <= current_hour < 6:
-            logger.info("Phase A: Modo nocturno (00:00-06:00). Saltando generación de contenido original.")
+            logger.info("Phase A: Modo nocturno (00:00-06:00 hora local). Saltando generación de contenido original.")
             return {"posts_published": 0, "drafts_generated": 0, "posts": [], "success": False, "skipped": "quiet_hours"}
 
         posts: List[Dict[str, Any]] = []
@@ -1411,28 +1591,43 @@ class PhaseAContentGeneration:
             return self.deps.posts_today
 
         already_today = _current_posts_today()
-        remaining_today = max(0, max_per_day - already_today)
-        if remaining_today <= 0:
-            logger.info("Phase A: limite diario alcanzado (%s/%s). Saltando.", already_today, max_per_day)
-            return {"posts_published": 0, "drafts_generated": 0, "posts": [], "success": False, "skipped": "daily_limit_reached"}
-        logger.info("Phase A: limite diario=%s, ya hoy=%s, disponibles=%s", max_per_day, already_today, remaining_today)
+        if max_per_day is not None:
+            remaining_today = max(0, max_per_day - already_today)
+            if remaining_today <= 0:
+                logger.info("Phase A: limite diario alcanzado (%s/%s). Saltando.", already_today, max_per_day)
+                return {"posts_published": 0, "drafts_generated": 0, "posts": [], "success": False, "skipped": "daily_limit_reached"}
+        logger.info("Phase A: limite diario=%s, ya hoy=%s, disponibles=%s", max_per_day if max_per_day is not None else "sin límite", already_today, max_per_day - already_today if max_per_day is not None else "ilimitado")
 
         # ── Weekly limit: max_posts_per_week desde editorial_policy.json ──
         try:
             _weekly_policy = load_editorial_policy()
             max_per_week = _weekly_policy.get("publication_policy", {}).get("max_posts_per_week")
+            corpus_post_exemption = _weekly_policy.get("corpus_post_exemption", 0)
             if max_per_week is not None:
                 from services.own_post_store import count_posts_since
                 posts_this_week = count_posts_since(7)
-                if posts_this_week >= int(max_per_week):
+                # Recomendación 1: exención de corpus — si aún no se han publicado
+                # el número exento de posts del corpus, permitir publicación aun
+                # cuando el límite semanal estaría agotado.
+                corpus_eligible = corpus_post_exemption > 0 and posts_this_week < corpus_post_exemption
+                if posts_this_week >= int(max_per_week) and not corpus_eligible:
                     logger.info("Phase A: limite semanal alcanzado (%s/%s). Saltando.", posts_this_week, max_per_week)
                     return {"posts_published": 0, "drafts_generated": 0, "posts": [], "success": False, "skipped": "weekly_limit_reached"}
-                logger.info("Phase A: limite semanal=%s, esta semana=%s", max_per_week, posts_this_week)
+                # Si hay exención y el corpus aún no la consume, reducir el conteo
+                # efectivo para este ciclo
+                effective_max = int(max_per_week) - (0 if corpus_eligible else 0)
+                if not corpus_eligible:
+                    effective_max = int(max_per_week)
+                logger.info("Phase A: limite semanal=%s, esta semana=%s, exención_corpus=%s, eligible=%s",
+                            max_per_week, posts_this_week, corpus_post_exemption, corpus_eligible)
         except Exception as e:
             logger.debug("Phase A: weekly limit check skipped: %s", e)
 
+        # max_posts_per_day=None significa sin limite; asegurar presupuesto definido.
+        if max_per_day is None:
+            remaining_today = float('inf')
         posts_to_generate = min(1, remaining_today)
-        phase_a_mode = behavior_cfg.get("phase_a_mode", POLICY.phase_a_mode)
+        phase_a_mode = _select_phase_a_mode()
 
         # ── Load TopicMatrix for rotation-aware topic selection ──────────
         topic_matrix = None
@@ -1651,21 +1846,30 @@ class PhaseAContentGeneration:
             bestof_enabled = _quality_bestof_enabled()
             bestof_n = _quality_bestof_n()
             valid_candidates: List[Dict[str, Any]] = []
-            # ── Enrutado hero/no-hero (tiering de generación) ──────────────
-            # 1 post "hero" por día con Opus (calidad máxima); el resto con
-            # DeepSeek V4-Flash (barato). Decisión UNA vez por post (no por retry).
-            # Edge case aceptado: si el post hero rebota el gate, el hero del día
-            # queda "usado" igual (simple, no dealbreaker). Fase B no se toca.
-            _gen_tier = "premium_opus" if _should_use_opus_hero() else "flash"
-            if _gen_tier == "premium_opus":
-                _mark_opus_hero_used()
-            logger.info("Phase A: tier de generación = %s (%s)", _gen_tier,
-                        "hero Opus del día" if _gen_tier == "premium_opus" else "no-hero DeepSeek Flash")
+            # ── Enrutado de generación (ESCENARIO B, 24/08/2026) ───────────
+            # TODOS los posts generan en tier 'premium': AGENT_PRO_TIER_ONLY=1
+            # lo remapa a tier_fallback = DeepSeek V4 Pro DIRECTO (calidad
+            # máxima editorial). Coste real medido: ~$0.005/post pico;
+            # cap diario DEEPSEEK_SPEND_LIMIT_USD=$0.50 como cinturón — si
+            # se agota, la cascada cae a gratis sin bloquear el ciclo.
+            # Reversible: PHASE_A_GENERATION_TIER=flash (o premium_opus para
+            # el viejo esquema hero/Opus).
+            _gen_tier = os.getenv("PHASE_A_GENERATION_TIER", "premium").strip().lower() or "premium"
+            logger.info("Phase A: tier de generación = %s (Escenario B: DeepSeek V4 Pro)", _gen_tier)
             for attempt in range(1, max_attempts + 1):
                 attempt_user_prompt = user_prompt + retry_correction
                 try:
                     logger.info("Phase A: llamada al modelo (intento %s/%s)...", attempt, max_attempts)
                     raw_text = await call_model(self.deps, system_prompt, attempt_user_prompt, tier=_gen_tier)
+                    # CAPTURAR COSTOS: acceder a _last_usage del cascade después de generación exitosa
+                    _cascade = self.deps.model_cascade
+                    _provider_name = _cascade.TIER_MAPPING.get(_gen_tier, "tier_fallback")
+                    _usage = _cascade._last_usage.get(_provider_name, {}) or {}
+                    _input_tokens = int(_usage.get("input_tokens", 0) or 0)
+                    _output_tokens = int(_usage.get("output_tokens", 0) or 0)
+                    from services.model_cascade import _estimate_cost_usd
+                    _cost_usd = _estimate_cost_usd(_provider_name, _input_tokens, _output_tokens)
+                    logger.info("Phase A: costos capturados - input=%s, output=%s, cost=$%.6f", _input_tokens, _output_tokens, _cost_usd)
                 except Exception as e:
                     logger.warning("Phase A: error en llamada al modelo: %s", e)
                     _log_generation_attempt(topic, topic_source, attempt, max_attempts, "model_error")
@@ -1693,6 +1897,22 @@ class PhaseAContentGeneration:
                 title = _truncate_title(title, max_chars=100)
                 body = _normalize_moltbook_body(body)
                 post_text = _truncate_to_limit(body, EDITORIAL_CONFIG["max_length_chars"])
+                # ── Gate anti-fuga de TITULO (24/08/2026) ─────────────────
+                # El body pasa por text_has_reasoning_leak, pero el titulo
+                # (primera linea del output crudo) no tenia ningun gate: se
+                # publicaron 'Here's a thinking process:' (x2), 'We need to
+                # critique the draft...' y 'Critique:** ...'. Rechazar y
+                # regenerar con correccion.
+                if title_has_scaffold(title):
+                    reason = "leaked_scaffold_title"
+                    logger.warning("Phase A: titulo con scaffold interno (reason=%s), reintentar...", reason)
+                    _log_generation_attempt(topic, topic_source, attempt, max_attempts, f"validation_failed:{reason}")
+                    _log_rejected_body(topic, topic_source, attempt, f"validation_failed:{reason}", title, post_text)
+                    retry_correction = _build_retry_correction(f"validation_failed:{reason}")
+                    if attempt >= max_attempts:
+                        _mark_topic_cooldown(topic, reason=f"validation_failed:{reason}")
+                        generated_post = {"title": title, "body": post_text, "metadata": {"topic": topic, "validation_reason": reason}, "attempts": attempt, "published": False, "error": f"validation_failed:{reason}"}
+                    continue
                 required_citation = _extract_arxiv_id(topic)
                 # Contexto historico del gate de citas: el topic (paper anclado)
                 # + los hechos del incidente propio (si lo hay). Un año fuera de
@@ -1733,6 +1953,31 @@ class PhaseAContentGeneration:
                     if attempt >= max_attempts:
                         # v5.11: topic que agota reintentos con fallo determinista
                         # entra en cooldown para no bloquear la publicacion.
+                        _mark_topic_cooldown(topic, reason=f"validation_failed:{reason}")
+                        generated_post = {"title": title, "body": post_text, "metadata": {"topic": topic, "validation_reason": reason}, "attempts": attempt, "published": False, "error": f"validation_failed:{reason}"}
+                    continue
+
+                # ── Gate anti-fatiga de plantilla (24/08/2026) ──
+                # Un candidato que repite fórmulas de los posts recientes
+                # suena a molde, no a invención. Rechazo con las fórmulas
+                # nombradas para que el reintento varíe de verdad.
+                _fatigue_matched = _check_template_fatigue(post_text)
+                if _fatigue_matched:
+                    reason = "template_fatigue"
+                    logger.warning(
+                        "Phase A: candidato repite %d formula(s) de posts recientes (%s), reintentar...",
+                        len(_fatigue_matched), "; ".join("'%s'" % g for g in _fatigue_matched[:2]),
+                    )
+                    _log_generation_attempt(topic, topic_source, attempt, max_attempts, f"validation_failed:{reason}")
+                    _log_rejected_body(topic, topic_source, attempt, f"validation_failed:{reason}", title, post_text)
+                    retry_correction = _build_retry_correction(f"validation_failed:{reason}")
+                    retry_correction += (
+                        "\nFórmulas repetidas detectadas en tu intento: "
+                        + " | ".join("'%s'" % g for g in _fatigue_matched)
+                        + ". Reescribí esas partes con vocabulario y estructura nuevos; "
+                        "NO uses esas secuencias."
+                    )
+                    if attempt >= max_attempts:
                         _mark_topic_cooldown(topic, reason=f"validation_failed:{reason}")
                         generated_post = {"title": title, "body": post_text, "metadata": {"topic": topic, "validation_reason": reason}, "attempts": attempt, "published": False, "error": f"validation_failed:{reason}"}
                     continue
@@ -1783,11 +2028,25 @@ class PhaseAContentGeneration:
                     _log_generation_attempt(topic, topic_source, attempt, max_attempts, low_quality_reason)
                     _log_rejected_body(topic, topic_source, attempt, low_quality_reason, title, post_text)
                     retry_correction = _build_retry_correction(low_quality_reason)
+                    # TRACKEAR RECHAZADO: tokens gastados en contenido no usable (CADA intento)
+                    try:
+                        from services.karma_roi_tracker import track_action
+                        track_action(
+                            action_type="post_rejected",
+                            phase="A",
+                            cost_usd=_cost_usd,
+                            input_tokens=_input_tokens,
+                            output_tokens=_output_tokens,
+                            model=_provider_name
+                        )
+                        logger.info("Karma ROI: Post rechazado trackeado (attempt %s/%s, reason=%s, cost=$%.6f)", attempt, max_attempts, low_quality_reason, _cost_usd)
+                    except Exception as _e:
+                        logger.warning("Karma ROI: Error trackeando rechazado: %s", _e)
                     if attempt >= max_attempts:
-                        generated_post = {"title": title, "body": post_text, "metadata": {"topic": topic, "validation_reason": low_quality_reason}, "attempts": attempt, "published": False, "error": f"low_quality:{low_quality_reason}"}
+                        generated_post = {"title": title, "body": post_text, "metadata": {"topic": topic, "validation_reason": low_quality_reason, "input_tokens": _input_tokens, "output_tokens": _output_tokens, "total_cost_usd": _cost_usd}, "attempts": attempt, "published": False, "error": f"low_quality:{low_quality_reason}"}
                     continue
                 _log_generation_attempt(topic, topic_source, attempt, max_attempts, "success")
-                candidate_post = {"title": title, "body": post_text, "metadata": {"topic": topic, "generated_at": datetime.now(UTC).isoformat() + "Z", "attempts": attempt, "policy_tone": policy.get("style_policy", {}).get("tone", "natural_directo"), "historical_context": _historical_ctx}, "published": False}
+                candidate_post = {"title": title, "body": post_text, "metadata": {"topic": topic, "generated_at": datetime.now(UTC).isoformat() + "Z", "attempts": attempt, "policy_tone": policy.get("style_policy", {}).get("tone", "natural_directo"), "historical_context": _historical_ctx, "input_tokens": _input_tokens, "output_tokens": _output_tokens, "total_cost_usd": _cost_usd}, "published": False}
                 if not bestof_enabled:
                     generated_post = candidate_post
                     break
@@ -1823,7 +2082,7 @@ class PhaseAContentGeneration:
                 continue
 
             limit_now = _current_posts_today()
-            if limit_now >= max_per_day:
+            if max_per_day is not None and limit_now >= max_per_day:
                 logger.info("Phase A: limite alcanzado justo antes de publicar (%s/%s). Post pospuesto.", limit_now, max_per_day)
                 generated_post["error"] = "daily_limit_reached_before_publish"
                 posts.append(generated_post)
@@ -1841,6 +2100,26 @@ class PhaseAContentGeneration:
                         generated_post["metadata"]["post_id"] = post_id
                         store_post_hash(post_id, generated_post["body"])
                         _save_published_post(post_id, topic, body=generated_post.get("body", ""))
+                        # Trackear en karma ROI tracker
+                        logger.info("Karma ROI: DEBUG - Intentando trackear post %s", post_id[:8] if post_id else "N/A")
+                        try:
+                            from services.karma_roi_tracker import track_action
+                            logger.info("Karma ROI: DEBUG - Import exitoso")
+                            cost_usd = generated_post.get("metadata", {}).get("total_cost_usd", 0.0)
+                            input_tokens = generated_post.get("metadata", {}).get("input_tokens", 0)
+                            output_tokens = generated_post.get("metadata", {}).get("output_tokens", 0)
+                            track_action(
+                                action_type="post",
+                                moltbook_id=post_id,
+                                phase="A",
+                                cost_usd=cost_usd,
+                                input_tokens=input_tokens,
+                                output_tokens=output_tokens,
+                                model="deepseek-v4-pro"
+                            )
+                            logger.info("Karma ROI: Post %s trackeado (costo: $%.6f)", post_id[:8], cost_usd)
+                        except Exception as e:
+                            logger.warning("Karma ROI: Error trackeando post %s: %s", post_id[:8], e)
                         _track_topic_performance(topic, post_id)
                         _record_topic_used(topic)
                         # Incidente real consumido SOLO al publicar: si el gate
@@ -1869,6 +2148,33 @@ class PhaseAContentGeneration:
                                 logger.warning("Phase A: failed to mark evolution topic published: %s", e)
                     await self._auto_verify_post(result, generated_post)
                     logger.info(f"Phase A: post publicado correctamente (ID={post_id})")
+                    # --- Reporta post a Telegram ---
+                    try:
+                        from services.telegram_client import TelegramClient
+                        _tg_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+                        _tg_chat = os.getenv("TELEGRAM_CHAT_ID", "")
+                        if _tg_token and _tg_chat:
+                            _tg = TelegramClient(_tg_token, _tg_chat)
+                            _topic_preview = topic[:60] if len(topic) > 60 else topic
+                            _content_preview = generated_post.get("body", "")[:100].replace("\n", " ") if len(generated_post.get("body", "")) > 100 else generated_post.get("body", "")
+                            _costo = generated_post.get("metadata", {}).get("total_cost_usd", 0.0)
+                            _tokens = generated_post.get("metadata", {}).get("input_tokens", 0) + generated_post.get("metadata", {}).get("output_tokens", 0)
+                            _msg = (
+                                "📝 <b>POST GENERADO (Phase A)</b>\n"
+                                "━━━━━━━━━━━━━━━━━━━━━━\n"
+                                f"<b>Tema:</b> {_topic_preview}\n"
+                                f"<b>Preview:</b> {_content_preview}...\n"
+                                "━━━━━━━━━━━━━━━━━━━━━━\n"
+                                f"<b>Tokens:</b> {_tokens}\n"
+                                f"<b>Costo:</b> ${_costo:.6f} USD\n"
+                                f"<b>Modelo:</b> deepseek-v4-pro\n"
+                                "━━━━━━━━━━━━━━━━━━━━━━\n"
+                                f"<i>ROI: pendiente de medir a 1h / 24h</i>"
+                            )
+                            _tg.send_message(_msg)
+                    except Exception:
+                        pass
+                    # --- Fin reporte Telegram ---
 
                     # ── Track historical examples used ──
                     mark_examples_used(generated_post["body"])
@@ -1936,6 +2242,8 @@ class PhaseAContentGeneration:
             return {"posts_published": 0, "drafts_generated": len(posts), "posts": posts,
                     "success": False, "skipped": skip_reason}
         return {"posts_published": published_count, "drafts_generated": len(posts), "posts": posts, "success": published_count > 0}
+
+
 
 
 

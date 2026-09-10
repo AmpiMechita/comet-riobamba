@@ -342,8 +342,8 @@ class TestWatchlistBonus:
             os.environ["AGENT_FLASH_ONLY"] = "1"
             from services.model_cascade import ModelCascade
             quality_tier = ModelCascade.TIER_MAPPING.get("quality", "")
-            assert quality_tier == "cloudflare", (
-                f"TIER_MAPPING should map quality -> cloudflare (ETAPA 1: working-free), got {quality_tier}"
+            assert quality_tier == "tier_fallback", (
+                f"TIER_MAPPING should map quality -> tier_fallback (Escenario B: watchlist replies V4 Pro), got {quality_tier}"
             )
             # Verify FLASH_ONLY list doesn't include quality
             tier_list = ("premium", "premium_opus", "opus", "sonnet", "fallback", "haiku")

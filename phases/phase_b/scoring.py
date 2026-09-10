@@ -125,13 +125,18 @@ def text_has_unverifiable_historical_claim(text: str, context: str,
                                            is_own_incident: bool = False) -> Optional[str]:
     """Devuelve el primer año del texto que NO esta en el contexto, o None.
 
-    is_own_incident=True exime: las fechas del modo own_incident son propias
-    y verificadas del store."""
-    if is_own_incident or not text:
+      Gate estricto para feed y own-posts: cualquier año no en contexto = rechazado.
+      is_own_incident NO exime de citar incidentes de terceros sin ground.
+    Para feed posts, mantiene gate estricto (any year not in context)."""
+    if not text:
         return None
+    
     years = extract_historical_years(text)
     if not years:
         return None
+    
+      # Gate estricto: cualquier año no en contexto = rechazado
+      # is_own_incident NO exime de citar incidentes de terceros sin ground
     context_years = extract_historical_years(context or "")
     missing = years - context_years
     return sorted(missing)[0] if missing else None

@@ -64,8 +64,9 @@ class TestHistoricalClaimGate:
         assert reason == "ok"
 
     def test_own_incident_exempt(self):
+        # is_own_incident NO exime incidentes de terceros sin ground
         valid, reason = validate_post_text(
-            _HIST_BODY, is_own_incident=True, historical_context="",
+            _HIST_BODY, is_own_incident=True, historical_context="Uber Michelangelo 2017",
         )
         assert valid is True
         assert reason == "ok"
@@ -95,9 +96,10 @@ class TestHistoricalClaimGate:
             "in 2017 Uber migrated", "the 2017 migration"
         ) is None
         assert text_has_unverifiable_historical_claim("no years here", "") is None
+        # is_own_incident=True NO exime años sin contexto
         assert text_has_unverifiable_historical_claim(
             "in 2017 we ran", "", is_own_incident=True
-        ) is None
+        ) == "2017"
 
     @pytest.mark.asyncio
     async def test_phase_b_reply_with_ungrounded_year_rejected(self):

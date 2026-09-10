@@ -63,8 +63,8 @@ def _add_provider(cascade, name, enabled=True, model="test-model", url="http://t
     ("openrouter", "openrouter"),
     ("premium", "tier_premium"),
     ("fallback", "tier_fallback"),
-    ("flash", "cloudflare"),    # ETAPA 1 (20/08/2026): working-free
-    ("quality", "cloudflare"),  # ETAPA 1 (20/08/2026): working-free
+    ("flash", "openrouter"),    # rev 24/08/2026: free primario = OpenRouter
+    ("quality", "tier_fallback"),  # Escenario B 24/08: watchlist replies en V4 Pro
     ("opus", "tier_premium"),   # legacy alias
     ("haiku", "tier_fallback"),  # legacy alias
 ])
@@ -127,8 +127,8 @@ async def test_fallback_to_next_provider_on_failure(cascade):
 
 @pytest.mark.asyncio
 async def test_fallback_working_free_first_deepseek_last(cascade):
-    """ETAPA 1 (20/08/2026): si el tier pedido falla, el fallback prueba
-    working-free (cloudflare → openrouter :free) ANTES que DeepSeek pago;
+    """rev 24/08/2026: si el tier pedido falla, el fallback prueba
+    working-free (openrouter :free → zen/cloudflare) ANTES que DeepSeek pago;
     los dead (tier_sonnet/tier_flash) quedan al final como fallback profundo.
     """
     _add_provider(cascade, "tier_premium", paid=True)   # registrado primero, como en _load_providers
@@ -144,8 +144,8 @@ async def test_fallback_working_free_first_deepseek_last(cascade):
         attempted.append(provider.name)
         if provider.name == "tier_premium":
             raise RuntimeError("HTTP 400 desde tier_premium - credit balance too low")
-        if provider.name == "cloudflare":
-            raise RuntimeError("HTTP 502 desde cloudflare")
+        if provider.name == "openrouter":
+            raise RuntimeError("HTTP 502 desde openrouter")
         return "ok"
 
     with patch.object(cascade, "_is_circuit_open", return_value=False):
@@ -153,16 +153,17 @@ async def test_fallback_working_free_first_deepseek_last(cascade):
             result = await cascade.generate(prompt="hello", tier="premium")
 
     assert result == "ok"
-    # 1ro el preferido (tier_premium), 2do working-free cloudflare, 3ro openrouter :free.
+    # 1ro el preferido (tier_premium), 2do openrouter :free (falla), 3ro cloudflare.
     assert attempted[0] == "tier_premium"
-    assert attempted[1] == "cloudflare", f"orden real: {attempted}"
-    assert attempted[2] == "openrouter", f"orden real: {attempted}"
+    assert attempted[1] == "openrouter", f"orden real: {attempted}"
+    assert attempted[2] == "cloudflare", f"orden real: {attempted}"
 
 
 @pytest.mark.asyncio
 async def test_fallback_working_free_before_other_paid_dead_last(cascade):
-    """Control: dentro del fallback, working-free (openrouter :free) va antes
-    que otros pagos; los dead (tier_flash gemini pago) van al final."""
+    """rev 25/08/2026 (protección presupuestal): tier sonnet es low-value —
+    los pagos caros (tier_premium/opus) NO entran al pool; openrouter free
+    primero y V4 Flash como último recurso permitido."""
     _add_provider(cascade, "tier_premium", paid=True)
     _add_provider(cascade, "tier_premium_opus", paid=True)
     _add_provider(cascade, "tier_sonnet")
@@ -180,11 +181,11 @@ async def test_fallback_working_free_before_other_paid_dead_last(cascade):
             with pytest.raises(RuntimeError, match="Todos los proveedores fallaron"):
                 await cascade.generate(prompt="hello", tier="sonnet")
 
-    # tier_sonnet es el preferido; luego working-free (openrouter), luego pagos, dead al final
     assert attempted[0] == "tier_sonnet"
     assert attempted[1] == "openrouter", f"orden real: {attempted}"
-    assert attempted.index("openrouter") < attempted.index("tier_premium_opus"), f"orden real: {attempted}"
-    assert attempted[-1] == "tier_flash", f"dead al final: {attempted}"
+    assert "tier_premium" not in attempted and "tier_premium_opus" not in attempted, \
+        f"low-value no escala a pago caro: {attempted}"
+    assert attempted[-1] == "tier_flash", f"ultimo recurso: {attempted}"
 
 
 @pytest.mark.asyncio
@@ -206,7 +207,7 @@ async def test_fallback_order_working_free_without_paid_providers(cascade):
             with pytest.raises(RuntimeError, match="Todos los proveedores fallaron"):
                 await cascade.generate(prompt="hello", tier="sonnet")
 
-    assert attempted == ["tier_sonnet", "cloudflare", "openrouter"]
+    assert attempted == ["tier_sonnet", "openrouter", "cloudflare"]
 
 
 @pytest.mark.asyncio
@@ -233,17 +234,17 @@ async def test_fallback_full_order_working_free_then_paid_then_dead(cascade):
                 await cascade.generate(prompt="hello", tier="premium")
 
     assert attempted == [
-        "tier_premium", "cloudflare", "openrouter", "tier_fallback", "tier_sonnet", "tier_flash",
+        "tier_premium", "openrouter", "cloudflare", "tier_fallback", "tier_sonnet", "tier_flash",
     ], f"orden real: {attempted}"
 
 
 @pytest.mark.asyncio
-async def test_fallback_content_cloudflare_then_openrouter(cascade):
-    """ETAPA 1: el CONTENIDO prueba cloudflare (working-free) primero y
-    openrouter (:free nemotron) segundo — sin dead providers al frente.
-    classify nunca toca openrouter (paid=True)."""
+async def test_fallback_content_openrouter_then_cloudflare(cascade):
+    """rev 24/08/2026: el CONTENIDO prueba openrouter (:free nemotron) primero
+    y cloudflare segundo — sin dead providers al frente. openrouter ya no es
+    paid: classify también lo usa (ver test dedicado)."""
     _add_provider(cascade, "tier_premium", paid=True)
-    _add_provider(cascade, "openrouter", paid=True)
+    _add_provider(cascade, "openrouter")
     _add_provider(cascade, "tier_sonnet")
     _add_provider(cascade, "cloudflare")
     _add_provider(cascade, "tier_fallback", paid=True)
@@ -255,8 +256,8 @@ async def test_fallback_content_cloudflare_then_openrouter(cascade):
         if provider.name == "tier_premium":
             raise RuntimeError("HTTP 400 desde tier_premium - credit balance too low")
         if provider.name == "openrouter":
-            return "ok"
-        raise RuntimeError("fail")
+            raise RuntimeError("HTTP 502 desde openrouter")
+        return "ok"
 
     with patch.object(cascade, "_is_circuit_open", return_value=False):
         with patch.object(cascade, "_call_with_retries", side_effect=_call):
@@ -264,16 +265,17 @@ async def test_fallback_content_cloudflare_then_openrouter(cascade):
 
     assert result == "ok"
     assert attempted[0] == "tier_premium"
-    assert attempted[1] == "cloudflare", f"cloudflare debe ir 2do para contenido: {attempted}"
-    assert attempted[2] == "openrouter", f"openrouter :free 3ro: {attempted}"
+    # rev 24/08/2026: openrouter :free es el free primario, cloudflare respaldo
+    assert attempted[1] == "openrouter", f"openrouter debe ir 2do para contenido: {attempted}"
+    assert attempted[2] == "cloudflare", f"cloudflare 3ro: {attempted}"
 
 
 @pytest.mark.asyncio
-async def test_classify_never_uses_paid_openrouter(cascade):
-    """classify: con openrouter marcado paid=True, queda fuera del fallback
-    (el saldo OpenRouter es para contenido, no para miles de clasificaciones/día)."""
+async def test_classify_uses_free_openrouter_first(cascade):
+    """rev 24/08/2026: openrouter paid=False — classify lo usa como free
+    primario; los pagos (tier_fallback) siguen excluidos del pool."""
     _add_provider(cascade, "cloudflare")
-    _add_provider(cascade, "openrouter", paid=True)
+    _add_provider(cascade, "openrouter")
     _add_provider(cascade, "tier_sonnet")
     _add_provider(cascade, "tier_fallback", paid=True)
 
@@ -291,8 +293,8 @@ async def test_classify_never_uses_paid_openrouter(cascade):
         with pytest.raises(RuntimeError, match="Todos los proveedores fallaron"):
             await cascade.generate(prompt="hello", tier="classify")
 
-    assert "openrouter" not in attempted, f"classify no debe usar openrouter pagado: {attempted}"
-    assert attempted[0] == "cloudflare"
+    assert attempted[0] == "openrouter", f"classify debe usar openrouter free primero: {attempted}"
+    assert "tier_fallback" not in attempted, f"classify no debe usar pagos: {attempted}"
 
 
 @pytest.mark.asyncio
@@ -946,6 +948,8 @@ def test_circuit_alert_cooldown_suppresses_spam():
 def _capture_openai_payload(cascade, provider):
     """Run _call_provider_once against a stubbed requests.post and return the
     JSON payload that would be sent to the OpenAI-compatible endpoint."""
+    # Aísla del tracker REAL de gasto DeepSeek (25/08/2026): sin esto, un día
+    # con el cap agotado en producción rompía estos tests con el gate activo.
     captured = {}
 
     class _Resp:
@@ -960,7 +964,8 @@ def _capture_openai_payload(cascade, provider):
         return _Resp()
 
     messages = [{"role": "user", "content": "hi"}]
-    with patch("services.model_cascade.requests.post", side_effect=_fake_post):
+    with patch.object(ModelCascade, "_get_deepseek_spend", return_value=0.0), \
+         patch("services.model_cascade.requests.post", side_effect=_fake_post):
         cascade._call_provider_once(provider, messages, max_tokens=100, temperature=0.5)
     return captured["payload"]
 

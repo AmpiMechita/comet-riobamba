@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 import re
 
 
@@ -161,6 +162,11 @@ def gate_calidad_entidades(text: str, title: str = "") -> Tuple[bool, str]:
     tiene_problema, razon = text_has_repeated_example_24h(texto_completo)
     if tiene_problema:
         return False, razon
+
+    # 4. Calidad artistica/artesanal
+    aprobado, razon = text_has_artistic_excellence(texto_completo, title)
+    if not aprobado:
+        return False, razon
     
     return True, ""
 
@@ -236,7 +242,7 @@ def text_has_reasoning_leak(text: str):
     for scaffold in scaffolds:
         if scaffold in text_lower:
             return True, f'Contiene scaffold: {scaffold}'
-    return False, ''
+    return False
 
 
 def title_has_scaffold(title: str):
@@ -244,7 +250,7 @@ def title_has_scaffold(title: str):
     seo_scaffolds = ['guia completa', 'todo sobre', 'todo lo que', 'como hacer', 'mejores', 'top ']
     # Patrones de scaffold interno / reasoning leak (24/08/2026)
     internal_scaffolds = [
-        "here's a thinking process:", "here's the thinking process:",
+        "here's a thinking process:", "he aquí un proceso de pensamiento:", "he aqui un proceso de pensamiento:", "here's the thinking process:",
         "thinking process:", "critique:**", "critique:", "**critique:",
         "we need to critique", "let's critique", "draft...", "pre-critique",
         "post-mortem:", "analysis:", "reasoning:", "step ", "step:",
@@ -254,30 +260,71 @@ def title_has_scaffold(title: str):
     # Check SEO scaffolds
     for scaffold in seo_scaffolds:
         if scaffold in title_lower:
-            return True, f'Titulo con scaffold SEO: {scaffold}'
+            return True
     
     # Check internal scaffolds / reasoning leaks
     for scaffold in internal_scaffolds:
         if scaffold in title_lower:
-            return True, f'Titulo con scaffold interno: {scaffold}'
+            return True
     
     # Check si termina en ':' (instruccion, no titulo)
     if title.rstrip().endswith(':'):
-        return True, 'Titulo termina en dos puntos (scaffold)'
+        return True
     
     # Check si empieza como item de lista
     if re.match(r'^\s*[-•*]\s', title) or re.match(r'^\s*\d+\.\s', title):
-        return True, 'Titulo es item de lista'
+        return True
     
-    return False, ''
+    return False
 
-def text_template_fatigue(text: str):
+def text_template_fatigue(text: str, bodies=None, min_posts=3):
     import re
     list_patterns = [r'^\s*[-•*]\s', r'^\s*\d+\.\s']
     lines = text.split('\n')
     list_count = sum(1 for line in lines if any(re.match(p, line) for p in list_patterns))
     if list_count > len(lines) * 0.5 and len(lines) > 5:
         return True, f'Exceso de listas: {list_count}/{len(lines)} lineas'
-    return False, ''
+    return False
 
+
+
+
+
+
+def text_has_artistic_excellence(text: str, title: str = "") -> Tuple[bool, str]:
+    """Verifica que el texto tenga calidad artistica/artesanal.
+    
+    Criterios:
+    - Variacion en longitud de oraciones (no todas iguales)
+    - Al menos una frase memorable (corta, impactante)
+    - Uso de contraste o paradoja
+    - Flujo natural (no robotico o repetitivo)
+    """
+    sentences = re.split(r"[.!?]+", text)
+    sentences = [s.strip() for s in sentences if s.strip()]
+    
+    if len(sentences) < 3:
+        return False, "too_few_sentences"
+    
+    # Verificar variacion en longitud
+    lengths = [len(s) for s in sentences]
+    avg_len = sum(lengths) / len(lengths)
+    variance = sum((l - avg_len) ** 2 for l in lengths) / len(lengths)
+    
+    # Si todas las oraciones tienen longitud similar, rechazar
+    if variance < 400:  # Umbral bajo = poca variacion
+        return False, "low_sentence_variance"
+    
+    # Verificar al menos una frase corta impactante (< 15 palabras)
+    has_punch = any(len(s.split()) <= 15 for s in sentences)
+    if not has_punch:
+        return False, "no_punch_line"
+    
+    # Verificar contraste o paradoja (palabras clave)
+    contrast_words = ["not", "but", "yet", "however", "instead", "rather", "paradox", "irony"]
+    has_contrast = any(word in text.lower() for word in contrast_words)
+    if not has_contrast:
+        return False, "no_contrast"
+    
+    return True, "artistic_excellence_ok"
 

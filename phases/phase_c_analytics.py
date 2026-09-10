@@ -55,8 +55,8 @@ class PhaseCAnalytics:
         self.telegram = deps.telegram_client or create_telegram_client()
         self.analytics_interval = behavior_cfg.get("phase_c_analytics_interval", 86400)
         self.optimization_enabled = behavior_cfg.get("phase_c_optimization_enabled", True)
-        self.max_replies_per_day = int(deps.max_phase_c_replies_per_day)
-        self.max_replies_per_cycle = int(deps.max_phase_c_replies_per_cycle)
+        self.max_replies_per_day = int(deps.max_phase_c_replies_per_day) if deps.max_phase_c_replies_per_day is not None else None
+        self.max_replies_per_cycle = int(deps.max_phase_c_replies_per_cycle) if deps.max_phase_c_replies_per_cycle is not None else None
         self.get_comments_today: Optional[Callable[[], int]] = deps.get_comments_today
         self.increment_comments_today: Optional[Callable[[], int]] = deps.increment_comments_today
         self.state_file = Path("data/state/phase_c_state.json")
@@ -460,6 +460,27 @@ class PhaseCAnalytics:
         except Exception as e:
             logger.warning("Energy Intel: weekly digest error — %s", e)
 
+    def _maybe_run_editorial_audit(self) -> None:
+        """Auditoria editorial con throttle propio (EDITORIAL_AUDIT_INTERVAL_MINUTES, default 360).
+
+        Nunca lanza: un fallo de auditoria no debe tumbar la Fase C."""
+        try:
+            from services.editorial_self_audit import run_if_due
+        except ImportError as e:
+            logger.warning("Editorial audit: cannot import module — %s", e)
+            return
+        try:
+            report = run_if_due(moltbook=self.moltbook)
+            if report:
+                logger.info("Auditoria editorial: %s", report.get("summary_line", ""))
+                if report.get("titles_artifacts"):
+                    logger.warning(
+                        "Auditoria editorial: %d titulo(s) con artefactos en los ultimos posts — revisar data/editorial_self_audit.json",
+                        report["titles_artifacts"],
+                    )
+        except Exception as e:
+            logger.warning("Editorial audit error — %s", e)
+
     @phase_error_boundary(logger, "phase_c_analytics")
     async def _maybe_generate_proposal(self, results: Dict, metrics: Dict) -> None:
         """Generate a self-improvement proposal grounded in REAL telemetry.
@@ -587,7 +608,7 @@ class PhaseCAnalytics:
                 if recent:
                     low_value = sum(
                         1 for e in recent
-                        if float(e.get("composite", e.get("score", 1.0)) or 0.0) < 0.5
+                        if float(e.get("composite", e.get("score", 1.0)) or 0.0) < 0.25
                     )
                     type_counts = Counter(str(e.get("type", "unknown")) for e in recent)
                     low_signal_types = ("repetition", "agreement", "clarification")
@@ -595,7 +616,7 @@ class PhaseCAnalytics:
                     if low_value:
                         lines.append(
                             f"En los últimos {len(recent)} ciclos, "
-                            f"{low_value} respuestas tuvieron composite score < 0.5 (bajo valor)."
+                            f"{low_value} respuestas tuvieron composite score < 0.25 (bajo valor)."
                         )
                     if low_signal:
                         top_type, top_n = max(
@@ -682,6 +703,12 @@ class PhaseCAnalytics:
         # solo corria ~1x/dia, perdiendo papers frescos de arXiv. ──
         self._maybe_run_energy_intel()
 
+        # ── Auditoria editorial propia (24/08/2026): diagnostico de como se
+        # presenta el agente en Moltbook (fatiga de plantilla, engagement por
+        # post, calibracion juez<->upvotes). Throttle propio (default 6h,
+        # EDITORIAL_AUDIT_INTERVAL_MINUTES). ──
+        self._maybe_run_editorial_audit()
+
         # ── R&D Lab: sintesis de ideas de proyectos I+D con throttle propio
         # (cada 10 ciclos ≈ 50 min), ANTES del gate de analytics de 24h — si
         # quedara dentro, solo correria ~1x/dia y ademas el gate de limites
@@ -725,7 +752,7 @@ class PhaseCAnalytics:
             return results
 
         # Daily consumption gate
-        if self.get_comments_today is not None and self.get_comments_today() >= self.max_replies_per_day:
+        if self.max_replies_per_day is not None and self.get_comments_today() >= self.max_replies_per_day:
             logger.info(f"Phase C: analytics skipped (daily limit {self.max_replies_per_day} reached, comments_today={self.get_comments_today()})")
             return results
         
@@ -1041,4 +1068,5 @@ class PhaseCAnalytics:
                 logger.debug("Phase C: R&D synthesis LLM unavailable: %s", e)
         except Exception as e:
             logger.warning("Phase C: R&D synthesis error: %s", e)
+
 

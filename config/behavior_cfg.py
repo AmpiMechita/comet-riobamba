@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 COMET-RIOBAMBA v4.3.0 - Behavior config
 
@@ -14,15 +14,21 @@ behavior_cfg = {
     # Modo whisper: no publica posts ni replies reales, sólo genera y loguea
     "whisper_mode": False,
 
-    # Intervalo base de ciclo en segundos (8 horas)
-    # El core usa: base_interval = behavior_cfg.get("cycle_interval_seconds", 14400)
-    "cycle_interval_seconds": 28800,
+    # ============================
+    # Phase A - Post generation
+    # ============================
+    "phase_a_enabled": True,
+
+    # Horas permitidas para publicar posts (UTC-5, hora local Ecuador)
+    "post_publish_hours": [12, 13, 18, 19, 20, 21],
+
+    # Intervalo base de ciclo en segundos
+    "cycle_interval_seconds": 300,
 
     # Límite diario y objetivo de posts
-    # Phase A calcula remaining_today con estos valores
-    "max_posts_per_day": 5,   # techo duro por día
-    "value_review_interval_days": 7,  # cada 7 días genera plan de mejora
-    "posts_per_day": 1,       # objetivo diario (en tu caso 1 post por día)
+    "max_posts_per_day": None,
+    "value_review_interval_days": 7,
+    "posts_per_day": 1,
 
     # ============================
     # Modelo local / Ollama
@@ -33,26 +39,19 @@ behavior_cfg = {
     # ============================
     # Phase B - Community replies
     # ============================
-    # El core sólo ejecuta Phase B si:
-    # - behavior_cfg["phase_b_enabled"] es True
-    # - whisper_mode es False
     "phase_b_enabled": True,
+    "comment_valle_hours": [18, 19, 20, 21, 22, 23, 0, 1],
+    "phase_b_feed_replies": False,
+    "phase_b_max_replies": None,
+    "max_comments_per_day": 150,
 
-    # Máximo de replies por ciclo (Phase B usa behavior_cfg.get("phase_b_max_replies", ...))
-    "phase_b_max_replies": 1,
-
-    # Tono de las respuestas (Phase B lo usa para construir el prompt)
+    # Tono de las respuestas
     "phase_b_reply_tone": "cordial-tecnico",
-
-    # Tópicos a evitar en respuestas (Phase B filtra comentarios que los contengan)
-    "phase_b_avoid_topics": [
-        "política",
-        "religión",
-    ],
+    "phase_b_avoid_topics": ["política", "religión"],
 
     # ============================
     # Phase C - Analytics
     # ============================
-    # Activa/desactiva Fase C (el core revisa phase_c_enabled antes de _run_phase_c)
     "phase_c_enabled": True,
+    "max_phase_c_replies_per_day": 50,
 }

@@ -6,6 +6,22 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 
+@pytest.fixture(autouse=True)
+def _isolated_telegram_ledger(tmp_path, monkeypatch):
+    """AISLA el ledger real (monitoring/telegram-ledger.jsonl).
+
+    Hallazgo 24/08/2026: los tests de send_message escribian entradas falsas
+    ('Hello test', 'This should not crash') en el ledger REAL que el operador
+    usa como fuente de verdad de lo recibido en el movil. Toda esta suite
+    escribe a un ledger temporal.
+    """
+    from services.telegram_client import TelegramClient
+
+    monkeypatch.setattr(
+        TelegramClient, "LEDGER_FILE", tmp_path / "telegram-ledger-test.jsonl"
+    )
+
+
 # ── Test Telegram send ──────────────────────────────────────────
 
 

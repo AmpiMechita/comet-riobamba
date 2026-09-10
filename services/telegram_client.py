@@ -204,6 +204,14 @@ class TelegramClient:
     async def listen_for_commands(self, agent):
         if not self.enabled: return
 
+        # ── Retry pending outbox first ──
+        sent = self.retry_outbox()
+        if sent > 0:
+            logger.info("Telegram: %d mensajes pendientes enviados", sent)
+
+        # ── Flush pending queue first ──
+        flushed_offset = self._flush_pending_updates()
+
         # ── Flush pending queue first ──
         flushed_offset = self._flush_pending_updates()
 
@@ -230,6 +238,8 @@ class TelegramClient:
                 logger.warning("Telegram: listener tick error: %s", e)
 
             await asyncio.sleep(3)
+            # Retry outbox periodically
+            self.retry_outbox()
 
     async def _process_update(self, agent, update: dict):
         """

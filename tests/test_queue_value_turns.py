@@ -413,7 +413,7 @@ class TestSemanticSnippetRehydration:
         """Un post reciente sin spam sigue entrando por semantic search."""
         pb = self._pb()
         pb.api.semantic_search.return_value = [
-            {"id": "p7", "content": "A normal body.", "created_at": "2026-08-17T07:00:00.000Z"},
+            {"id": "p7", "content": "A normal body.", "created_at": "2026-08-25T07:00:00.000Z"},
         ]
 
         results = await pb._fetch_semantic_search_posts()
@@ -428,9 +428,9 @@ class TestSemanticSnippetRehydration:
         resp.success = True
         resp.data = {"posts": [
             {"id": "f1", "content": "spam post", "is_spam": True,
-             "created_at": "2026-08-17T07:00:00.000Z", "submolt": "m/general"},
+             "created_at": "2026-08-25T07:00:00.000Z", "submolt": "m/general"},
             {"id": "f2", "content": "normal post",
-             "created_at": "2026-08-17T07:00:00.000Z", "submolt": "m/general"},
+             "created_at": "2026-08-25T07:00:00.000Z", "submolt": "m/general"},
         ]}
         pb.api.get_feed.return_value = resp
         pb.api.get_feed.side_effect = [resp, resp]

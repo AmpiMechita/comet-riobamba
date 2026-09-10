@@ -238,14 +238,24 @@ def score_comment(
     comment: Dict[str, Any],
     agent_claims: Optional[List[str]] = None,
     known_debaters: Optional[set] = None,
+    is_own_post: bool = False,
 ) -> float:
     """Score a comment from 0.0 to 1.0 for reply priority.
+    Inbound en posts propios tiene bonus alto - priorizar reciprocidad.
+    
 
     Args:
         comment: dict with at least "content"/"text" and "author"
         agent_claims: list of claim texts the agent has made (for alignment)
         known_debaters: set of author names who have engaged in multi-turn debates
+        is_own_post: True if comment is on agent own post (inbound)
     """
+
+    # Bonus por inbound en post propio (reciprocidad)
+    # Bonus por inbound en post propio (reciprocidad)
+    if is_own_post:
+        return 1.0  # Prioridad máxima para comentarios en posts propios
+
     text = (comment.get("content") or comment.get("text") or "").strip()
     author = _resolve_author(comment.get("author"))
     text_lower = text.lower()

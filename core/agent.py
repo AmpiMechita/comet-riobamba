@@ -52,6 +52,7 @@ from phases.deps import PhaseADeps, PhaseBDeps, PhaseCDeps
 from phases.phase_a_content import PhaseAContentGeneration
 from phases.phase_b import PhaseB
 from phases.phase_c_analytics import PhaseCAnalytics
+from phases.phase_c_watchlist import run_phase_c_if_enabled, PhaseCWatchlist
 from phases.engagement import PhaseCEngagement
 
 logger = logging.getLogger("core.agent")
@@ -310,7 +311,7 @@ class COMETRiobambaAgent:
         max_backoff = POLICY.outbox_max_backoff_seconds
 
         for item in post_items:
-            if self.state.posts_today >= max_posts:
+            if max_posts is not None and self.state.posts_today >= max_posts:
                 logger.info("Outbox: límite diario alcanzado, difiriendo posts restantes")
                 break
 
@@ -495,7 +496,7 @@ class COMETRiobambaAgent:
         max_backoff = POLICY.outbox_max_backoff_seconds
 
         for item in comment_items:
-            if int(self.state.posts_today) + int(self.state.comments_today) >= max_daily:
+            if max_daily is not None and int(self.state.posts_today) + int(self.state.comments_today) >= max_daily:
                 logger.info("Comment outbox: límite diario alcanzado, difiriendo %s items restantes", len(comment_items) - published)
                 break
 
@@ -797,7 +798,7 @@ class COMETRiobambaAgent:
         self._maybe_run_nightly_reflection()
 
         max_posts = behavior_cfg.get("max_posts_per_day", POLICY.max_posts_per_day)
-        phase_a_blocked = self.posts_today >= max_posts
+        phase_a_blocked = max_posts is not None and self.posts_today >= max_posts
         if phase_a_blocked:
             logger.info(
                 "Phase A: límite diario alcanzado (%s/%s). Saltando Phase A.",
@@ -911,6 +912,34 @@ class COMETRiobambaAgent:
                         except Exception as e:
                             logger.warning("⚠ Telegram alert error: %s", e)
 
+            # ── Phase C: Watchlist Comments (nuevo) ──
+            if behavior_cfg.get("phase_c_enabled") and not behavior_cfg.get("whisper_mode"):
+                logger.info("\nFASE C: Comentarios Watchlist")
+                try:
+                    phase_c_metrics = await run_phase_c_if_enabled(
+                        moltbook_client=self.moltbook_api_client,
+                        model_cascade=self.model_cascade,
+                        quota_manager=None,  # No quota_manager passed yet
+                        dedup_store=self._phase_b_deps.dedup if hasattr(self._phase_b_deps, 'dedup') else None,
+                        own_comment_store=self._phase_b_deps.own_comment_store if hasattr(self._phase_b_deps, 'own_comment_store') else None,
+                        config=behavior_cfg,
+                    )
+                    if phase_c_metrics:
+                        results["phase_c_watchlist"] = phase_c_metrics
+                        logger.info(
+                            "Phase C Watchlist: posts=%s, watchlist=%s, candidatos=%s, "
+                            "publicados=%s, costo=$%.4f",
+                            phase_c_metrics.get("posts_leidos", 0),
+                            phase_c_metrics.get("watchlist_posts", 0),
+                            phase_c_metrics.get("candidatos", 0),
+                            phase_c_metrics.get("comentarios_publicados", 0),
+                            phase_c_metrics.get("costo_total", 0.0),
+                        )
+                except Exception as e:
+                    logger.warning("Phase C Watchlist error: %s", e)
+                    results["phase_c_watchlist"] = {"error": str(e)}
+
+            # ── Phase C: Analytics & Optimización (existente) ──
             if behavior_cfg.get("phase_c_enabled"):
                 logger.info("\nFASE C: Analytics & Optimización")
                 c_results = await self._run_phase_c()
@@ -1033,9 +1062,8 @@ class COMETRiobambaAgent:
             )
 
             cycle_interval = register_cycle_result(
-                error=error,
-                had_activity=had_activity,
-                base_interval_seconds=base_interval,
+                success=error is None,
+                base_interval=base_interval,
             )
 
             # --- ADAPTIVE SCHEDULER ---
@@ -1081,7 +1109,6 @@ class COMETRiobambaAgent:
             for _ in range(int(cycle_interval)):
                 if self.shutdown_requested or self._check_stop_flag() or self._check_maintenance_flag():
                     break
-                self._maybe_supervise_watchdog()
                 await asyncio.sleep(1)
                 # Intra-sleep Phase B check: run Phase B-only if interval elapsed
                 if behavior_cfg.get("phase_b_enabled"):
@@ -1143,40 +1170,6 @@ class COMETRiobambaAgent:
             return f"{pid}" in text
         except Exception:
             return True  # ambigüo → no relanzar un proceso que podría vivir
-
-    def _maybe_supervise_watchdog(self) -> None:
-        """Supervisa el watchdog cada WATCHDOG_SUPERVISION_S (default 300s):
-        si su lock está ausente o con pid muerto, lo relanza. El agente es el
-        supervisor natural: corre 24/7 y su entorno de ejecución ya está
-        probado (a diferencia del Start-Process desde guard/scheduler)."""
-        interval = int(os.getenv("WATCHDOG_SUPERVISION_S", "300"))
-        if time.time() - self._last_watchdog_check < interval:
-            return
-        self._last_watchdog_check = time.time()
-        try:
-            from config import BASE_DIR
-            lock_file = BASE_DIR / ".watchdog.lock"
-            lock_alive = False
-            if lock_file.exists():
-                try:
-                    pid = int(lock_file.read_text(encoding="utf-8").strip())
-                    lock_alive = self._pid_alive(pid)
-                except ValueError:
-                    lock_alive = False
-            if lock_alive:
-                return
-            if (BASE_DIR / "data" / "stop.flag").exists():
-                return  # agente deteniéndose/parado → no relanzar el guard
-            python = sys.executable
-            proc = subprocess.Popen(
-                [python, "-u", "monitoring/watchdog.py"],
-                cwd=str(BASE_DIR),
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                close_fds=True,
-            )
-            logger.info("🛡️ Watchdog no estaba corriendo → relanzado (PID %s)", proc.pid)
-        except Exception as e:
-            logger.warning("Watchdog supervision falló: %s", e)
 
     def _check_stop_flag(self) -> bool:
         """If data/stop.flag exists, request shutdown and remove the flag.
@@ -1268,6 +1261,11 @@ if __name__ == "__main__":
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     asyncio.run(main())
+
+
+
+
+
 
 
 

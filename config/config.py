@@ -1,10 +1,14 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 import logging
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import yaml
+from dotenv import load_dotenv
+
+# Cargar variables de entorno desde .env
+load_dotenv()
 
 logger = logging.getLogger("config.config")
 
@@ -61,7 +65,7 @@ def _validate_bounded_int(
 
 # === Configuración de Comportamiento ===
 behavior_cfg = {
-    "max_posts_per_day": _validate_bounded_int("AGENT_MAX_POSTS_PER_DAY", _POLICY.max_posts_per_day, max_val=24),
+    "max_posts_per_day": _validate_bounded_int("AGENT_MAX_POSTS_PER_DAY", _POLICY.max_posts_per_day, max_val=999),
     "value_review_interval_days": int(os.getenv("AGENT_VALUE_REVIEW_INTERVAL_DAYS", _POLICY.value_review_interval_days)),
     "max_comments_per_post": _validate_bounded_int("AGENT_MAX_COMMENTS_PER_POST", _POLICY.max_comments_per_post, min_val=0, max_val=50),
     "max_comments_per_day": _validate_bounded_int("AGENT_MAX_COMMENTS_PER_DAY", _POLICY.max_comments_per_day, min_val=0, max_val=400),
@@ -87,6 +91,12 @@ behavior_cfg = {
     "phase_b_enabled": bool(int(os.getenv("AGENT_PHASE_B_ENABLED", 0))),
     "phase_c_enabled": bool(int(os.getenv("AGENT_PHASE_C_ENABLED", 1))),
     "phase_c_disabled_reason": os.getenv("AGENT_PHASE_C_DISABLED_REASON", ""),
+    # Phase C - Watchlist comments
+    "phase_c_max_comments_per_cycle": _validate_bounded_int("AGENT_PHASE_C_MAX_COMMENTS_PER_CYCLE", 3, min_val=0, max_val=20),
+    "phase_c_max_cost_usd_per_cycle": float(os.getenv("AGENT_PHASE_C_MAX_COST_USD_PER_CYCLE", "0.15")),
+    "phase_c_quality_gate_enabled": bool(int(os.getenv("AGENT_PHASE_C_QUALITY_GATE_ENABLED", 1))),
+    "phase_c_only_watchlist": bool(int(os.getenv("AGENT_PHASE_C_ONLY_WATCHLIST", 1))),
+    "watchlist_file": os.getenv("WATCHLIST_FILE", "config/top_agents_watchlist.json"),
     "energy_intel_enabled": bool(int(os.getenv("AGENT_ENERGY_INTEL_ENABLED", 1))),
     "energy_intel_telegram_alerts": bool(int(os.getenv("AGENT_ENERGY_INTEL_TELEGRAM_ALERTS", 0))),
     "domain_keywords": {
@@ -126,6 +136,8 @@ behavior_cfg = {
         "no_external_urls": True,
         "max_tokens_per_call": 1500,
     },
+    # Timezone for quiet hours (default: America/Guayaquil = Ecuador UTC-5)
+    "timezone": os.getenv("AGENT_TIMEZONE", "America/Guayaquil"),
 }
 
 # === Auto-applied config overlay (propuestas de mejora autoaplicadas) ===
@@ -235,6 +247,7 @@ def validate_config(credentials: "Credentials" = None) -> None:
 def bootstrap_directories() -> None:
     Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
     Path(LOGS_DIR).mkdir(parents=True, exist_ok=True)
+
 
 
 

@@ -36,7 +36,7 @@ def _cascade_with_providers():
 
 class TestClassifyTier:
     def test_tier_mapping_points_to_cloudflare(self):
-        assert ModelCascade.TIER_MAPPING["classify"] == "cloudflare"
+        assert ModelCascade.TIER_MAPPING["classify"] == "zen"  # rev 25/08 v2: bucket Zen (cuota OR = 1000/dia por cuenta)
 
     @pytest.mark.asyncio
     async def test_classify_uses_free_provider_first_and_never_anthropic(self):

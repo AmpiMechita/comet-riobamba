@@ -63,6 +63,8 @@ class CircuitBreaker:
         success_threshold: int = 1,
         persistence: Optional[CircuitPersistence] = None,
         on_open: Optional[Callable[[str], None]] = None,
+        on_half_open: Optional[Callable[[str], None]] = None,
+        on_close: Optional[Callable[[str], None]] = None,
     ):
         self.name = name
         self.failure_threshold = failure_threshold
@@ -70,6 +72,8 @@ class CircuitBreaker:
         self.success_threshold = success_threshold
         self.persistence = persistence
         self.on_open = on_open
+        self.on_half_open = on_half_open
+        self.on_close = on_close
 
         self._state = CircuitState.CLOSED
         self._failure_count = 0
@@ -91,6 +95,11 @@ class CircuitBreaker:
                 self._state = CircuitState.HALF_OPEN
                 self._success_count = 0
                 self._save()
+                if self.on_half_open:
+                    try:
+                        self.on_half_open(self.name)
+                    except Exception as e:
+                        logger.warning("CircuitBreaker [%s]: on_half_open callback failed: %s", self.name, e)
         return self._state
 
     def record_success(self) -> None:
@@ -102,6 +111,11 @@ class CircuitBreaker:
                     self.name, self._success_count, self.success_threshold,
                 )
                 self._state = CircuitState.CLOSED
+                if self.on_close:
+                    try:
+                        self.on_close(self.name)
+                    except Exception as e:
+                        logger.warning("CircuitBreaker [%s]: on_close callback failed: %s", self.name, e)
         elif self._state == CircuitState.OPEN:
             pass
         self._failure_count = 0

@@ -36,8 +36,80 @@
   - `AGENT_FEED_BUDGET_PCT=25` (25% del presupuesto diario a feed ajeno, 75% a posts propios)
 - Defaults de `config/agent_policy.py` sin .env: max_comments_per_day=150,
   feed_budget_pct=40. **Siempre verificar `.env` antes de asumir valores.**
-- **Anti-dogpile (3/3) aplica SOLO a posts ajenos del feed**; posts propios con
-  debate activo usan `skip_anti_dogpile=True` (commit 2ec4f41).
+### Anti-Dogpile (3/3) y `skip_anti_dogpile`
+
+**¿Cómo funciona?**
+El mecanismo de anti-dogpile está diseñado para prevenir que el agente publique
+múltiples replies idénticos o muy similares en posts ajenos del feed, lo que
+podría percibirse como spam o comportamiento de bot.
+
+Por defecto, el anti-dogpile tiene un techo de `max_replies_per_post` (default 3)
+por post. Este límite es estricto y **no tiene exenciones** para `is_followup`
+o `skip_anti_dogpile`.
+
+**Uso de `skip_anti_dogpile=True`**
+El parámetro `skip_anti_dogpile=True` está reservado para casos legitimados:
+
+1. **Posts propios con debate activo**: Cuando el agente responde a sus propios
+   posts publicados anteriormente. Esto está permitido porque:
+   - El agente ya tiene una relación establecida con el autor
+   - El debate es parte natural de la conversación
+   - Evita bloquear la propia evolución del hilo
+
+   **Condiciones para aplicar legitimamente (todas deben cumplirse):**
+   - El post debe ser del agente propio (`own_post=True`)
+   - Debe haber al menos 3 replies sustantivas previas en el hilo
+   - Las replies deben tener contenido real (no URLs vacías, >20 chars)
+   - No debe haber patrón de spam en el hilo
+
+   Cuando estas condiciones se cumplen, el agente establece
+   `skip_anti_dogpile=True` automáticamente en `_safe_publish_comment`.
+
+2. **Uso explícito por desarrollador**: En casos raros, un desarrollador puede
+   setear manualmente `skip_anti_dogpile=True` en el código, pero esto debe
+   hacerse con extrema cautela y revisión.
+
+**Riesgos y advertencias**
+⚠️ **ADVERTENCIA**: El uso indebido de `skip_anti_dogpile=True` en posts propios
+sin cumplir las condiciones arriba mencionadas puede:
+- Evitar el control de flood diseñado para proteger la salud del feed
+- Generar replies repetitivos que degradan la experiencia del usuario
+- Hacer que el agente parezca un bot de spam
+- Violar los términos de servicio de Moltbook
+
+Si `skip_anti_dogpile=True` se usa en posts propios sin las condiciones de debate
+activo, el sistema logging marcará un warning (visible en los logs del agente).
+Si el patrón continúa, el operador debe revisar la configuración y los flujos
+de publicación.
+
+**Buenas prácticas**
+1. **Nunca** setear `skip_anti_dogpile=True` de forma hardcoded en la lógica
+   de publicación normal.
+2. **Siempre** verificar que las condiciones de "debate activo" se cumplen
+   antes de usar la exención.
+3. **Revisar logs periódicamente**: Los warnings de `skip_anti_dogpile` sin
+   condiciones aparecen en los logs del agente. Un patrón repetido indica
+   necesidad de ajustar la configuración.
+4. **Preferir la vía natural**: Si el agente quiere responder a un post propio,
+   que el hilo fluya naturalmente con replies normales. El anti-dogpile solo
+   debería saltarse en casos muy específicos y documentados.
+
+**Monitoreo**
+El agente loguea cada uso de `skip_anti_dogpile` con el siguiente formato:
+
+```
+[SKIP_ANTI_DOGPILE] post_id=12345 author=usuario_tipo: skip_anti_dogpile=True
+    -> own_post=False (anti-dogpile activado) / own_post=True (exención aplicada)
+    -> substantive_replies=5 / skip_anti_dogpile_applied=True/False
+```
+
+Los operadores deben revisar estos logs en `logs/<agent_log>.log` durante
+las rutinas de mantenimiento semanal.
+
+**Histórico**
+- Implementado en commit 2ec4f41: `skip_anti_dogpile=True` para posts propios
+  con debate activo.
+- Mejora de documentación y validación en v5.2+ (Recomendación 5).
 
 ### Fixes clave que NO regresar
 - **Dedup inbound** (f1197db): `watchlist_inbound` no infla conteo por re-scan de posts.
@@ -126,7 +198,9 @@
 - **Entrypoint:** `run_agent.py` → `core.agent.main()`, **not** `agent.py` at root (that file does not exist).
 - **Not a standard package.** No `pyproject.toml`, `setup.py`, or `setup.cfg`. Dependencies: `python-dotenv`, `requests`, `pyyaml`, `pytest`.
 - **State persistence:** Two SQLite databases: `data/comet_state.db` (agent_state, outbox) via `services/persistence.py`, and `data/comet_dedup.db` (Phase B dedup sets/dicts) via `services/dedup_store.py`.
-- **Model cascade:** `services/model_cascade.py` — providers tried in order: `ollama_local` → `tier_opus` → `tier_sonnet` → `tier_haiku` → `openrouter` → `cerebras` → `ollama_cloud`. Circuit breaker per provider.
+- **Model cascade:** `services/model_cascade.py` — orden real (rev 24/08/2026 noche): free primario = `openrouter :free` (nemotron, único estable; también en classify — ya no es paid) → `zen` (Ox Alpha, respaldo 1, inestable) → `cloudflare` (respaldo 2, cuota diaria) → cerebras → pagos (`tier_fallback`=DeepSeek V4 Pro, `tier_flash`=V4 Flash) → dead. Circuit breaker por proveedor. NO devolver cloudflare/zen por delante de openrouter sin decisión del operador.
+- **Generador editorial pago = DeepSeek V4 Pro DIRECTO** (24/08/2026): saldo recargado ($8.58) en api.deepseek.com; `MODEL_CASCADE_PREFER_FREE=0` activa `tier_fallback`/`tier_flash` directos. `ZEN_SERVE_DEEPSEEK=false` (la variante vía Zen existe pero sin saldo allí). Spend guard diario: `DEEPSEEK_SPEND_LIMIT_USD` default $0.50 con precios PEAK como cota — tracker `data/deepseek_spend_tracker.json`, reset automático a medianoche UTC; al agotarse el cap salta al siguiente proveedor (nunca bloquea el ciclo). El generador editorial real es tier_fallback (AGENT_PRO_TIER_ONLY=1 remapea premium→fallback; Anthropic queda como deep-fallback con su propio spend guard). **ESCENARIO B (24/08/2026 noche)**: TODOS los posts generan en V4 Pro (`PHASE_A_GENERATION_TIER=premium`, default) y las replies watchlist usan `quality→tier_fallback` (~$0.10-0.20/día total pico); replies generales y classify siguen gratis en openrouter. Revertir a todo-gratis: `PHASE_A_GENERATION_TIER=flash`.
+- **Gates pre-publicación Fase A (24/08/2026)**: (1) leak-gate body/título (`text_has_reasoning_leak` + `title_has_scaffold`), (2) **anti-fatiga de plantilla** (`PHASE_A_FATIGUE_GATE=1` default; tetragramas presentes en ≥3 posts propios recientes → rechazo + regeneración con fórmulas nombradas; ventana 25, corpus <6 no juzga). La auditoría editorial (`services/editorial_self_audit.py`, corre en Phase C cada 6h) mide fatiga/CTA/engagement/calibración juez↔upvotes → `data/editorial_self_audit.json`. NO quitar los gates: los leaks publicados (23-24/08) salieron justamente por no existir.
 - **Phase B** is monolithic (`phases/phase_b.py`). **Phase C** is split: `phases/phase_c_analytics.py` + `phases/engagement/` sub-package.
 
 ## Critical Toggles

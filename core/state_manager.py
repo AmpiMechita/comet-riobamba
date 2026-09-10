@@ -10,7 +10,7 @@ from services.persistence import load_agent_state, save_agent_state
 
 logger = logging.getLogger("core.state_manager")
 
-PACING_MIN_HOURS = 1  # v5.1: minimum hours between consecutive posts
+PACING_MIN_HOURS = 0  # v5.3: sin limite artificial (agente decide autonomamente)
 
 
 class AgentState:
@@ -47,11 +47,14 @@ class AgentState:
     def _reconcile_from_persisted(self) -> None:
         today = datetime.now().date().isoformat()
         try:
-            published = _load_published_log()
-            actual = sum(1 for p in published if p.get("published_at", "").startswith(today))
-            if actual > self.posts_today:
-                logger.info("StateManager: cold-start reconciliation posts_today: %s -> %s", self.posts_today, actual)
-                self.posts_today = actual
+            # 
+            published = _load_published_log()  # DISABLED: cuenta posts de published_posts.json
+    # actual = sum(1 for p in published if p.get("published_at", "").startswith(today))  # DISABLED
+            # 
+            if actual > self.posts_today:  # DISABLED
+    # logger.info("StateManager: cold-start reconciliation posts_today: %s -> %s", self.posts_today, actual)  # DISABLED
+                # 
+                self.posts_today = actual  # DISABLED
         except Exception as e:
             logger.debug("StateManager: could not reconcile posts_today: %s", e)
         try:
@@ -146,3 +149,4 @@ class AgentState:
         self.last_post_date = None
         self.last_value_review = None
         self.consecutive_failures = 0
+

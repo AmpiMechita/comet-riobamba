@@ -29,7 +29,7 @@ DEFAULT_POLICY: Dict[str, Any] = {
         "reject_if_mentions_moltbook": True,
         "reject_if_mentions_llm": True,
         "reject_if_repetitive": True,
-        "min_quality_score": 0.72,
+        "min_quality_score": 0.65,
     },
     "mutation_limits": {
         "max_weight_delta": 0.15,

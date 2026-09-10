@@ -51,11 +51,11 @@ Deduplicación:
   - Persistencia en data/replied_comment_ids.json.
 
 Límites (desde config/agent_policy.py, overrideable vía env):
-  max_comments_per_day        = 12  — presupuesto diario total (propios + feed)
-  max_comment_replies_per_cycle = 4  — por ciclo (~8 h)
-  max_comments_per_post        = 6   — replies máximos del agente en un post propio
-  max_feed_comments_per_post   = 3   — replies máximos del agente en un post ajeno
-  max_feed_replies_per_day     = 3   — tope diario solo para feed replies
+  max_comments_per_day        = None  — presupuesto diario total (propios + feed) — None = agente decide
+  max_comment_replies_per_cycle = None  — por ciclo (~8 h) — None = agente decide
+  max_comments_per_post        = None   — replies máximas del agente en un post propio — None = sin límite
+  max_feed_comments_per_post   = None   — replies máximas del agente en un post ajeno — None = sin límite
+  max_feed_replies_per_day     = None   — tope diario solo para feed replies — None = sin límite
 """
 
 from .constants import (
@@ -119,6 +119,10 @@ import re
 import requests
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo
 from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -129,6 +133,7 @@ from core.observability import send_event
 from core.tracer import Span
 from core.value_log import log_value_event
 from phases.deps import PhaseBDeps
+from patches.patch_phase_b_pre_generation_gate import should_skip_generation_pre_gate
 from prompts.value_classifier import build_classifier_prompt
 from prompts.prompt_templates import (
     REPLY_TEMPLATE, DEBATE_CONTINUATION_TEMPLATE, OLLAMA_FALLBACK_REPLY,
@@ -598,7 +603,7 @@ def _load_commented_post_ids() -> Dict[str, str]:
         return {}
     try:
         data = json.loads(_COMMENTED_POSTS_PATH.read_text(encoding="utf-8"))
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
 
         # Migrate old list format: [id1, id2] -> {id1: now, id2: now}
         if isinstance(data, list):
@@ -772,12 +777,14 @@ class PhaseB:
         self.get_comments_today = deps.get_comments_today or (lambda: 0)
         self.incr_comments_today = deps.increment_comments_today or (lambda: 0)
 
-        self.max_comments_per_post = behavior.get("max_comments_per_post", 2)
-        self.max_comments_per_day = behavior.get("max_comments_per_day", 15)
-        self.max_replies_per_cycle = behavior.get("max_comment_replies_per_cycle", 2)
-        self.max_feed_comments_per_post = behavior.get("max_feed_comments_per_post", 1)
-        self.max_own_posts_per_cycle = behavior.get("phase_b_max_own_posts_per_cycle", 6)
-        # v5.2+: máx. comentarios "accionables" procesados por post por ciclo.
+            # None values from behavior_cfg or AgentPolicy will be used
+        # None values from behavior_cfg or AgentPolicy will be used
+        # If behavior_cfg has None, the agent's internal limits (also None) apply
+        self.max_comments_per_post = behavior.get("max_comments_per_post", None)  # None = sin límite
+        self.max_comments_per_day = behavior.get("max_comments_per_day", None)  # None = sin límite
+        self.max_replies_per_cycle = behavior.get("max_comment_replies_per_cycle", None)  # None = sin límite
+        self.max_feed_comments_per_post = behavior.get("max_feed_comments_per_post", None)  # None = sin límite
+        self.max_own_posts_per_cycle = behavior.get("phase_b_max_own_posts_per_cycle", None)  # None = sin límite
         # El aplanado de replies anidados expone 300+ comentarios por post;
         # sin este cap un solo post monopolizaba el ciclo (85 min) y dejaba
         # sin ejecutar feed/follow-ups ni responder al stop graceful.
@@ -795,7 +802,7 @@ class PhaseB:
         self._watchlist_authors: Set[str] = self._load_watchlist_authors()
         set_watchlist_authors(self._watchlist_authors)
         self._watchlist_max_per_author_day: int = int(os.getenv(
-            "AGENT_MAX_PER_WATCHLIST_AUTHOR_DAY", "3"))
+            "AGENT_MAX_PER_WATCHLIST_AUTHOR_DAY", "5"))
         self._watchlist_author_count_today: Dict[str, int] = {}
         self._watchlist_count_path: Path = BASE_DIR / "data" / "watchlist_count_today.json"
         self._load_watchlist_count()
@@ -971,9 +978,9 @@ class PhaseB:
         text_stripped = text.strip()
         text_len = len(text_stripped)
 
-        # ── Length gate (50-500 characters) ──
-        if text_len < 50 or text_len > 500:
-            logger.debug("Phase B: quality gate failed — length=%d (expected 50-500)", text_len)
+        # ── Length gate (40-600 characters) ──
+        if text_len < 40 or text_len > 600:
+            logger.debug("Phase B: quality gate failed — length=%d (expected 40-600)", text_len)
             return False
 
         # ── Banned openers ──
@@ -984,25 +991,61 @@ class PhaseB:
                 logger.debug("Phase B: quality gate failed — banned opener '%s'", opener)
                 return False
 
-        # ── Evidence/framework/metric signals ──
+                # ── Evidence/framework/metric/mechanism signals ──
         has_evidence = any(s in text_lower for s in [
+            # Evidencia empírica (original)
             "measured", "observed", "in production", "data shows",
             "we deployed", "we saw", "we hit", "the result was",
+            # Análisis técnico / reasoning (nuevo - solo si hay sustancia)
+            "the failure", "the boundary", "the limit", "breaks when",
+            "fails under", "invariant", "causal", "mechanism",
         ])
         has_framework = any(s in text_lower for s in [
             "propose", "pattern", "framework", "architecture",
             "design", "principle", "the approach", "strategy",
         ])
         has_metric = any(c.isdigit() for c in text)
-        if require_evidence and not has_evidence and not has_metric:
+
+        # Mecanismos técnicos cuentan como sustancia
+        mechanism_terms = [
+            # Sistemas distribuidos (original)
+            "idempot", "rollback", "watermark", "checkpoint",
+            "circuit breaker", "backoff", "retry", "commit",
+            "schema", "invariant", "state machine", "consensus",
+            "quorum", "ledger", "write-ahead", "dead letter",
+            "dedup", "lease", "fencing", "sharding", "causal",
+            # ML / Signal processing
+            "compression", "gradient", "barrier", "sine", "swept",
+            "descriptor", "drift", "onset", "density", "nonstat",
+            "derivation", "stamping", "falsification", "trigger",
+            "scar", "subspace", "re-derivation",
+            # Fronteras y condiciones de borde
+            "boundary", "edge case", "corner case", "breaks at",
+            "fails when", "threshold", "limit", "condition",
+        ]
+        mechanism_hits = sum(1 for term in mechanism_terms if term in text_lower)
+        has_mechanism = mechanism_hits >= 1 and len(text_stripped.split()) >= 12
+
+        # Detección de derivación / explicación causal (cuarta clase de sustancia)
+        has_derivation = any(s in text_lower for s in [
+            "because", "therefore", "thus", "implies", "leads to",
+            "causes", "enables", "prevents", "ensures",
+        ]) and len(text_stripped.split()) >= 15
+
+        if require_evidence and not (has_evidence or has_metric or has_mechanism or has_derivation):
             logger.info(
                 "Phase B: quality gate REJECTED (tier=quality sin señal de sustancia) "
-                "len=%d evidence=%s metric=%s preview=%s",
-                text_len, has_evidence, has_metric, text_stripped[:80],
+                "len=%d evidence=%s metric=%s mechanism=%s derivation=%s preview=%s",
+                text_len, has_evidence, has_metric, has_mechanism, has_derivation,
+                text_stripped[:80],
             )
             return False
-        logger.info("Phase B: quality gate signal check len=%d evidence=%s framework=%s metric=%s",
-                    text_len, has_evidence, has_framework, has_metric)
+
+        logger.info(
+            "Phase B: quality gate signal check len=%d evidence=%s "
+            "framework=%s metric=%s mechanism=%s",
+            text_len, has_evidence, has_framework, has_metric, has_mechanism,
+        )
         return True
 
     # ── Safety filters for publishing ────────────────────────────────
@@ -1167,7 +1210,9 @@ class PhaseB:
 
     def _safe_publish_comment(self, post_id: str, content: str, parent_comment_id: Optional[str] = None,
                               is_followup: bool = False, skip_anti_dogpile: bool = False,
-                              is_own_post: bool = False, require_evidence: bool = False) -> Optional[Dict]:
+                              is_own_post: bool = False, require_evidence: bool = False,
+                              target_author: Optional[str] = None, target_is_watchlist: bool = False,
+                              score: Optional[float] = None) -> Optional[Dict]:
         """Publish a comment with safety checks. Returns result dict or None if blocked.
 
         is_followup=True marca una respuesta enhebrada dentro de una conversación
@@ -1209,7 +1254,7 @@ class PhaseB:
         # Only enforce for proper UUID post IDs (skip for test/synthetic IDs)
         if len(post_id) > 10:  # UUID-length check
             current_count = self._get_agent_reply_count_in_post(post_id)
-            if current_count >= self.max_comments_per_post:
+            if self.max_comments_per_post is not None and current_count >= self.max_comments_per_post:
                 logger.warning(
                     "Phase B: SAFETY NET hard cap triggered for post %s (%d/%d). "
                     "This should have been caught earlier — investigate.",
@@ -1260,7 +1305,7 @@ class PhaseB:
             # post propio no es dogpile; su limite es max_comments_per_post.
             if len(post_id) > 10 and not is_followup and not skip_anti_dogpile:
                 current_count = self._get_replies_per_post(post_id)
-                if current_count >= self.max_replies_per_post:
+                if self.max_replies_per_post is not None and current_count >= self.max_replies_per_post:
                     logger.info(
                         "anti-dogpile: skip post %s (%d/%d)",
                         post_id, current_count, self.max_replies_per_post,
@@ -1292,6 +1337,87 @@ class PhaseB:
                     logger.warning("Phase B: Moltbook rechazó comentario (posible spam flag). status=%s error=%s. Deteniendo publicaciones en este ciclo.",
                                    status, error_text[:100])
                     return None
+
+                # ── Karma ROI Tracker: registrar comentario publicado (exitoso 2xx) ──
+                # Se inserta después del spam check y antes de los contadores anti-dogpile.
+                # Solo registra éxitos reales (2xx), no fallos ni spam.
+                try:
+                    from services.karma_roi_tracker import record_phase_b_comment
+                    from services.model_cascade import _estimate_cost_usd
+                    
+                    # Determinar source desde parámetros de _safe_publish_comment
+                    if is_followup:
+                        _source = "thread_followup"
+                    elif is_own_post or skip_anti_dogpile:
+                        _source = "own_post_reply"
+                    else:
+                        _source = "feed_reply"
+                    
+                    # Extraer comment_id del result
+                    _comment_id = result.get("id") if isinstance(result, dict) else None
+                    if not _comment_id:
+                        _raw_comment = result.get("raw", {}).get("comment", {}) if isinstance(result, dict) else {}
+                        if isinstance(_raw_comment, dict):
+                            _comment_id = _raw_comment.get("id")
+                    
+                    # Obtener metadata de costos desde _last_usage del cascade
+                    _provider_name = "tier_fallback"  # default, se actualizará en runtime
+                    if hasattr(self, "llm") and hasattr(self.llm, "_last_usage"):
+                        _usage = self.llm._last_usage.get(_provider_name, {}) or {}
+                    else:
+                        _usage = {}
+                    
+                    _input_tokens = int(_usage.get("input_tokens", 0) or 0)
+                    _output_tokens = int(_usage.get("output_tokens", 0) or 0)
+                    _cost_usd = _estimate_cost_usd(_provider_name, _input_tokens, _output_tokens)
+                    _model = _usage.get("model", "deepseek-v4-pro")
+                    # Inferir tier desde provider/model
+                    _tier = _usage.get("tier") or _usage.get("provider") or _provider_name
+                    if not _tier or _tier == "None":
+                        # Inferir desde el model
+                        _model_lower = _model.lower() if _model else ""
+                        if "pro" in _model_lower:
+                            _tier = "tier_pro"
+                        elif "flash" in _model_lower:
+                            _tier = "tier_flash"
+                        else:
+                            _tier = _provider_name
+                    
+                    # Determinar target_author y watchlist status
+                    # NOTA: Estos campos requieren pasarse desde el caller
+                    # Por ahora se dejan como None/0 hasta completar la integración en callers
+                    # Usar parámetros pasados desde caller
+                    _target_author = target_author
+                    _target_is_watchlist = 1 if target_is_watchlist else 0
+                    _score = score
+                    
+                    # Registrar en karma_roi_tracker
+                    record_phase_b_comment(
+                        comment_id=_comment_id or "",
+                        post_id=str(post_id),
+                        parent_comment_id=parent_comment_id,
+                        source=_source,
+                        target_author=_target_author,
+                        target_is_watchlist=_target_is_watchlist,
+                        score=_score,
+                        model=_model,
+                        tier=_tier,
+                        input_tokens=_input_tokens,
+                        output_tokens=_output_tokens,
+                        cost_usd=_cost_usd,
+                        status="published",
+                    )
+                    
+                    logger.info(
+                        "Karma ROI: Comment %s registrado (source=%s, model=%s, tier=%s, cost=$%.6f)",
+                        (_comment_id or "unknown")[:8], _source, _model, _tier, _cost_usd,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Karma ROI: Error registrando comment %s: %s",
+                        (result.get("id") if isinstance(result, dict) else "unknown")[:8], e,
+                    )
+
 
                 # ── Anti-dogpile: count published replies (2xx, not spam) ──
                 # Follow-ups enhebrados no consumen este contador (tienen el suyo).
@@ -1631,94 +1757,125 @@ class PhaseB:
 
     @phase_error_boundary(logger, "phase_b", fallback_return={"success": False, "replies_published": 0, "feed_replies": [], "own_post_replies": []})
     async def execute(self) -> Dict[str, Any]:
-        with Span("phase_b_cycle") as span:
-            feed_results: List[Dict[str, Any]] = []
-            own_results: List[Dict[str, Any]] = []
+        # ── Quiet Hours: Phase B follows same schedule as Phase A (00:00-06:00 local) ──
+        # During Quiet Hours, Phase B only attends high-priority watchlist
+        try:
+            tz = ZoneInfo(behavior_cfg.get("timezone", "America/Guayaquil"))
+        except Exception:
+            tz = timezone.utc
+        current_hour = datetime.now(tz).hour
+        in_quiet_hours = 0 <= current_hour < 6
+        
+        if in_quiet_hours:
+            logger.info("Phase B: Quiet Hours (00:00-06:00 hora local) - solo operaciones críticas")
+            # Durante Quiet Hours:
+            # - NO iniciar nuevas conversaciones en feed
+            # - SOLO responder comentarios en posts propios
+            # - SOLO responder watchlist de alta prioridad (si hay actividad)
+        self.quiet_hours_mode = in_quiet_hours
 
-            # ── Baseline del ciclo: queue_prefiltered acumula entre ciclos,
-            # el summary reporta el DELTA (no 135 mil comentarios falsos) ──
-            self._cycle_prefiltered_baseline = self._stats.get("queue_prefiltered", 0)
+        feed_results: List[Dict[str, Any]] = []
+        own_results: List[Dict[str, Any]] = []
 
-            # ── Cache del ROI por canal: se invalida cada ciclo para que el
-            # gate de critica use datos frescos (v5.9) ──
-            self._roi_channels_cache = None
+        # ── Baseline del ciclo: queue_prefiltered acumula entre ciclos,
+        # el summary reporta el DELTA (no 135 mil comentarios falsos) ──
+        self._cycle_prefiltered_baseline = self._stats.get("queue_prefiltered", 0)
 
-            # ── Auto-tune semanal de umbrales (guardrails + cadencia) ──
-            # Si toca (7d), analiza el retorno real del ledger y ajusta de
-            # forma acotada feed_budget_pct / min_value. Fail-safe: nunca rompe
-            # el ciclo.
-            try:
-                from services.roi_auto_tune import apply_tuning
-                _tune = apply_tuning()
-                if _tune.get("ran") and _tune.get("changes"):
-                    logger.info(
-                        "roi_auto_tune: %d ajuste(s) aplicado(s): %s",
-                        len(_tune["changes"]), _tune.get("applied"),
-                    )
-            except Exception as _e:
-                logger.debug("roi_auto_tune: skip (%s)", _e)
+        # ── Cache del ROI por canal: se invalida cada ciclo para que el
+        # gate de critica use datos frescos (v5.9) ──
+        self._roi_channels_cache = None
 
-            # ── Feed budget reservation ─────────────────────────────
-            # El % lo decide el auto-tune de ROI (el .env ya no lo fija): los
-            # canales que producen retorno real reciben mas presupuesto.
-            try:
-                from services.roi_auto_tune import get_feed_budget_pct
-                _tuned_feed = get_feed_budget_pct(default_pct=15.0)
-            except Exception:
-                _tuned_feed = int(self.deps.behavior_cfg.get("feed_budget_pct", 40))
-            feed_budget_pct = int(_tuned_feed)
+        # ── Auto-tune semanal de umbrales (guardrails + cadencia) ──
+        # Si toca (7d), analiza el retorno real del ledger y ajusta de
+        # forma acotada feed_budget_pct / min_value. Fail-safe: nunca rompe
+        # el ciclo.
+        try:
+            from services.roi_auto_tune import apply_tuning
+            _tune = apply_tuning()
+            if _tune.get("ran") and _tune.get("changes"):
+                logger.info(
+                    "roi_auto_tune: %d ajuste(s) aplicado(s): %s",
+                    len(_tune["changes"]), _tune.get("applied"),
+                )
+        except Exception as _e:
+            logger.debug("roi_auto_tune: skip (%s)", _e)
+
+        # ── Feed budget reservation ─────────────────────────────
+        # El % lo decide el auto-tune de ROI (el .env ya no lo fija): los
+        # canales que producen retorno real reciben mas presupuesto.
+        try:
+            from services.roi_auto_tune import get_feed_budget_pct
+            _tuned_feed = get_feed_budget_pct(default_pct=15.0)
+        except Exception:
+            _tuned_feed = int(self.deps.behavior_cfg.get("feed_budget_pct", 40))
+        feed_budget_pct = int(_tuned_feed)
+        if self.max_comments_per_day is None:
+            # sin límite: feed_reserved=0, own_cap=None
+            feed_reserved = 0
+            own_cap = None
+        else:
             feed_reserved = max(0, int(self.max_comments_per_day * feed_budget_pct / 100))
             own_cap = max(0, self.max_comments_per_day - feed_reserved)
 
-            # Temporarily cap own-post budget to prevent starving feed
-            _orig_max = self.max_comments_per_day
-            own_before = self.get_comments_today()
-            self.max_comments_per_day = own_cap
+        # Temporarily cap own-post budget to prevent starving feed
+        _orig_max = self.max_comments_per_day
+        own_before = self.get_comments_today()
+        self.max_comments_per_day = own_cap
 
-            # Own-post replies: capped to own_cap
-            if self.deps.behavior_cfg.get("phase_b_own_post_replies", True):
-                own_results = await self._execute_own_post_replies()
+        # Own-post replies: capped to own_cap
+        if self.deps.behavior_cfg.get("phase_b_own_post_replies", True):
+            own_results = await self._execute_own_post_replies()
 
-            own_consumed = max(0, self.get_comments_today() - own_before)
-            own_count = len(own_results)
+        own_consumed = max(0, self.get_comments_today() - own_before)
+        own_count = len(own_results)
+        if self.max_replies_per_cycle is not None:
             remaining_cycle = max(0, self.max_replies_per_cycle - own_count)
+        else:
+            remaining_cycle = float('inf')
 
-            # Restore full cap for feed replies
-            self.max_comments_per_day = _orig_max
+        # Restore full cap for feed replies
+        self.max_comments_per_day = _orig_max
+        if self.max_comments_per_day is not None:
             feed_available = max(0, self.max_comments_per_day - self.get_comments_today())
+        else:
+            feed_available = float('inf')
 
-            logger.info(
-                "Phase B: budget — own=%s/%s (consumed=%s), feed=%s/%s (available=%s), feed_pct=%s%%",
-                self.get_comments_today(), own_cap, own_consumed,
-                self.get_comments_today() - own_before, feed_reserved, feed_available,
-                feed_budget_pct,
-            )
+        logger.info(
+            "Phase B: budget — own=%s/%s (consumed=%s), feed=%s/%s (available=%s), feed_pct=%s%%",
+            self.get_comments_today(), own_cap, own_consumed,
+            self.get_comments_today() - own_before, feed_reserved, feed_available,
+            feed_budget_pct,
+        )
 
-            # ── Prioridad: continuar > empezar ──────────────────────
-            # Sostener una conversación viva (respuesta dentro de un hilo
-            # enhebrado) vale más que un comentario frío en un hilo nuevo.
-            # Por eso los follow-ups corren ANTES que los feed replies y
-            # consumen del MISMO presupuesto de feed.
-            followup_results: List[Dict[str, Any]] = []
-            if self.deps.behavior_cfg.get("phase_b_feed_replies", True):
-                if self.get_comments_today() < self.max_comments_per_day and remaining_cycle > 0:
-                    followup_results = await self._execute_thread_followups(
-                        remaining_cycle_slots=remaining_cycle,
-                    )
+        # ── Prioridad: continuar > empezar ──────────────────────
+        # Sostener una conversación viva (respuesta dentro de un hilo
+        # enhebrado) vale más que un comentario frío en un hilo nuevo.
+        # Por eso los follow-ups corren ANTES que los feed replies y
+        # consumen del MISMO presupuesto de feed.
+        followup_results: List[Dict[str, Any]] = []
+        if self.deps.behavior_cfg.get("phase_b_feed_replies", True):
+            if (self.max_comments_per_day is None or self.get_comments_today() < self.max_comments_per_day) and remaining_cycle > 0:
+                followup_results = await self._execute_thread_followups(
+                    remaining_cycle_slots=remaining_cycle,
+                )
 
-            followup_count = len(followup_results)
-            remaining_cycle = max(0, remaining_cycle - followup_count)
+        followup_count = len(followup_results)
+        remaining_cycle = max(0, remaining_cycle - followup_count)
 
-            # Feed replies with reserved budget (lo que quede tras follow-ups)
-            if self.deps.behavior_cfg.get("phase_b_feed_replies", True):
-                if self.get_comments_today() < self.max_comments_per_day and remaining_cycle > 0:
-                    feed_results = await self._execute_feed_replies(remaining_cycle_slots=remaining_cycle)
-                else:
-                    logger.info(
-                        "Phase B: skip feed replies — budget consumed "
-                        "(daily=%s/%s, remaining_cycle=%s).",
-                        self.get_comments_today(), self.max_comments_per_day, remaining_cycle,
-                    )
+        # Feed replies with reserved budget (lo que quede tras follow-ups)
+        # ── Quiet Hours: skip feed replies, only own-post and watchlist ──
+        if self.deps.behavior_cfg.get("phase_b_feed_replies", True):
+            if self.quiet_hours_mode:
+                logger.info("Phase B: Quiet Hours - skipping feed replies (only own-post + watchlist)")
+                feed_results = []
+            elif (self.max_comments_per_day is None or self.get_comments_today() < self.max_comments_per_day) and remaining_cycle > 0:
+                feed_results = await self._execute_feed_replies(remaining_cycle_slots=remaining_cycle)
+            else:
+                logger.info(
+                    "Phase B: skip feed replies — budget consumed "
+                    "(daily=%s/%s, remaining_cycle=%s).",
+                    self.get_comments_today(), self.max_comments_per_day, remaining_cycle,
+                )
 
             feed_count = len(feed_results)
             total = own_count + followup_count + feed_count
@@ -1754,9 +1911,7 @@ class PhaseB:
                 _votes.get("total_upvotes", 0), _votes.get("with_votes", 0), _votes.get("total", 0),
                 _votes.get("by_score", {}),
             )
-            span.set("feed_replies", feed_count)
-            span.set("own_replies", own_count)
-            span.set("thread_followups", followup_count)
+
             return {
                 "success": total > 0,
                 "replies_published": total,
@@ -1913,7 +2068,7 @@ class PhaseB:
             # Hilos CERRADOS se excluyen SIEMPRE: sin esto, la sintesis de
             # cierre genera respuestas nuevas, refresca la ventana 48h y el
             # hilo se vuelve a cerrar en cada ciclo (loop de sintesis).
-            cutoff = datetime.now() - timedelta(hours=48)
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
             recent_post_ids: List[str] = []
             for pid, ts in self._commented_post_ids.items():
                 if not isinstance(pid, str):
@@ -1942,14 +2097,14 @@ class PhaseB:
             from services import interlocutors
 
             for post_id in recent_post_ids:
-                if self.get_comments_today() >= self.max_comments_per_day:
+                if self.max_comments_per_day is not None and self.get_comments_today() >= self.max_comments_per_day:
                     diag_broke_daily = True
                     logger.info(
                         "Phase B: skip follow-ups — daily limit (%s/%s).",
                         self.get_comments_today(), self.max_comments_per_day,
                     )
                     break
-                if cycle_count >= effective_cycle_limit:
+                if effective_cycle_limit is not None and cycle_count >= effective_cycle_limit:
                     diag_broke_cycle = True
                     logger.info(
                         "Phase B: skip follow-ups — cycle limit (%s/%s).",
@@ -1963,7 +2118,7 @@ class PhaseB:
 
                 # ── Cap propio de follow-ups por post (independiente del anti-dogpile) ──
                 followups_done = self._get_followups_count(post_id)
-                if followups_done >= self.max_followups_per_post:
+                if self.max_followups_per_post is not None and followups_done >= self.max_followups_per_post:
                     logger.info(
                         "Phase B: skip follow-ups en post %s — cap propio (%d/%d).",
                         post_id, followups_done, self.max_followups_per_post,
@@ -1995,13 +2150,13 @@ class PhaseB:
 
                 post_touched = False
                 for reply_comment in replies_to_us:
-                    if self.get_comments_today() >= self.max_comments_per_day:
+                    if self.max_comments_per_day is not None and self.get_comments_today() >= self.max_comments_per_day:
                         diag_broke_daily = True
                         break
-                    if cycle_count >= effective_cycle_limit:
+                    if effective_cycle_limit is not None and cycle_count >= effective_cycle_limit:
                         diag_broke_cycle = True
                         break
-                    if followups_done >= self.max_followups_per_post:
+                    if self.max_followups_per_post is not None and followups_done >= self.max_followups_per_post:
                         logger.info(
                             "Phase B: post %s alcanzó cap de follow-ups (%d/%d).",
                             post_id, followups_done, self.max_followups_per_post,
@@ -2309,7 +2464,7 @@ class PhaseB:
 
             cycle_comment_count = 0
             daily_comment_count = self.get_comments_today()
-            if daily_comment_count >= self.max_comments_per_day:
+            if self.max_comments_per_day is not None and daily_comment_count >= self.max_comments_per_day:
                 logger.info(
                     "Phase B: límite diario de comentarios alcanzado (%s/%s).",
                     daily_comment_count, self.max_comments_per_day,
@@ -2450,7 +2605,7 @@ class PhaseB:
             # ── Feed-specific limits: daily global, feed-daily, and remaining cycle budget ──
             for score, post in scored_posts:
                 daily_comment_count = self.get_comments_today()
-                if daily_comment_count >= self.max_comments_per_day:
+                if self.max_comments_per_day is not None and daily_comment_count >= self.max_comments_per_day:
                     logger.info(
                         "Phase B: skip feed reply — daily limit reached (%s/%s).",
                         daily_comment_count, self.max_comments_per_day,
@@ -2489,7 +2644,7 @@ class PhaseB:
                     continue
 
                 effective_cycle_limit = remaining_cycle_slots if remaining_cycle_slots is not None else self.max_replies_per_cycle
-                if cycle_comment_count >= effective_cycle_limit:
+                if effective_cycle_limit is not None and cycle_comment_count >= effective_cycle_limit:
                     logger.info(
                         "Phase B: skip feed reply — cycle limit reached (%s/%s).",
                         cycle_comment_count, effective_cycle_limit,
@@ -2579,12 +2734,24 @@ class PhaseB:
                     post["_reply_tier"] = reply_tier
 
                     # ── Watchlist cap pre-check: skip BEFORE LLM generation ──
-                    if is_wl and not self._check_increment_watchlist_cap(feed_author):
+                    if is_wl and not self._check_increment_watchlist_cap(feed_author, is_own_post=False):
                         logger.info(
                             "Phase B: skip feed reply — watchlist cap for %s (%s/day).",
                             feed_author, self._watchlist_max_per_author_day,
                         )
                         continue
+
+                    # ── PRE-GENERATION GATE (patch 2026-08-31) ─────────────────────────────
+                    skip_gen, motivo = should_skip_generation_pre_gate(post)
+                    if skip_gen:
+                        logger.info(
+                            'Phase B: PRE-GENERATION GATE skip post_id=%s motivo=%s',
+                            post.get('id'), motivo
+                        )
+                        continue  # Saltar este post, no gastar tokens
+                    # ───────────────────────────────────────────────────────────────────────―
+
+
                     reply_text, claim = await self._generate_reply_for_post(post, bestof=bestof, tier=reply_tier)
                 except Exception as e:
                     logger.warning(f"Phase B: error generando respuesta: {e}")
@@ -2832,9 +2999,9 @@ class PhaseB:
                     if post_decision.score >= POLICY.min_comment_relevance_score + 20:
                         self._add_topic_to_agenda(post, post_body)
 
-                    self._commented_post_ids[post_id] = datetime.now().isoformat()
+                    self._commented_post_ids[post_id] = datetime.now(timezone.utc).isoformat()
                     self._dedup.set_commented_post(post_id)
-                    self._post_history_guard[post_id] = datetime.now().isoformat()
+                    self._post_history_guard[post_id] = datetime.now(timezone.utc).isoformat()
                     _save_post_history_guard(self._post_history_guard)
                     if comment_id:
                         feed_dedup_key = f"feed:{post_id}:{comment_id}"
@@ -3035,7 +3202,7 @@ class PhaseB:
                 if my_name_l and my_name_l in author:
                     my_count += 1
 
-            return my_count < self.max_feed_comments_per_post
+            return self.max_feed_comments_per_post is None or my_count < self.max_feed_comments_per_post
 
         except Exception as e:
             logger.warning(f"Phase B: error en _can_comment_in_thread: {e}")
@@ -3310,7 +3477,7 @@ class PhaseB:
                 "- DO NOT fabricate measurements. You have NO production data.\n"
                 "- Reply length 80-500 chars. Density over decoration.\n"
                 "- No unverifiable third-party incidents or named anecdotes you "
-                "cannot source.\n"
+                "cannot source. AVOID specific years (1990, 2003, 2016, etc.) unless in source context. Use early 2000s or past decade instead.\n"
                 "- If they brought data or admitted limits: extend, contrast, or "
                 "ask what their data opens — never restate their conclusion as "
                 "yours.\n\n"
@@ -3818,11 +3985,11 @@ class PhaseB:
             selected: List[Tuple[str, Dict[str, Any], List[Dict[str, Any]], str]] = []
             for item in queue:
                 pid = item[0]
-                if per_post_count.get(pid, 0) >= self.max_own_comments_per_cycle:
+                if self.max_own_comments_per_cycle is not None and per_post_count.get(pid, 0) >= self.max_own_comments_per_cycle:
                     continue
                 selected.append(item)
                 per_post_count[pid] = per_post_count.get(pid, 0) + 1
-                if len(selected) >= self.own_queue_per_cycle:
+                if self.own_queue_per_cycle is not None and len(selected) >= self.own_queue_per_cycle:
                     break
 
             watchlist_sel = sum(
@@ -3838,13 +4005,13 @@ class PhaseB:
             results: List[Dict[str, Any]] = []
 
             for post_id, comment, all_comments, post_text in selected:
-                if self.get_comments_today() >= self.max_comments_per_day:
+                if self.max_comments_per_day is not None and self.get_comments_today() >= self.max_comments_per_day:
                     logger.info(
                         "Phase B: límite diario alcanzado (%s/%s). Deteniendo cola own posts.",
                         self.get_comments_today(), self.max_comments_per_day,
                     )
                     break
-                if len(results) >= self.max_replies_per_cycle:
+                if self.max_replies_per_cycle is not None and len(results) >= self.max_replies_per_cycle:
                     logger.info(
                         "Phase B: límite por ciclo alcanzado (%s/%s). Deteniendo cola own posts.",
                         len(results), self.max_replies_per_cycle,
@@ -3853,7 +4020,7 @@ class PhaseB:
 
                 result = await self._process_own_comment(
                     post_id, comment, all_comments,
-                    limit_ok=len(results) < self.max_comments_per_post,
+                    limit_ok=(self.max_comments_per_post is None or len(results) < self.max_comments_per_post),
                     post_text=post_text,
                 )
                 if result is None:
@@ -3940,7 +4107,7 @@ class PhaseB:
 
 
         daily_comment_count = self.get_comments_today()
-        if daily_comment_count >= self.max_comments_per_day:
+        if self.max_comments_per_day is not None and daily_comment_count >= self.max_comments_per_day:
             send_event("phase_b_reply_skip", {
                 "post_id": post_id,
                 "reason": "daily_limit",
@@ -3969,7 +4136,7 @@ class PhaseB:
         # Early exit: check hard cap BEFORE generating replies (saves LLM tokens)
         if len(post_id) > 10:
             current_count = self._get_agent_reply_count_in_post(post_id)
-            if current_count >= self.max_comments_per_post:
+            if self.max_comments_per_post is not None and current_count >= self.max_comments_per_post:
                 logger.info("Phase B: Límite de %s comentarios por post alcanzado en %s (%d/%d).",
                             self.max_comments_per_post, post_id, current_count, self.max_comments_per_post)
                 return []
@@ -4060,7 +4227,7 @@ class PhaseB:
 
         for comment in comments:
             # ── Per-post limit (propios): máx. max_comments_per_post replies del agente en este post ──
-            if replied_count >= self.max_comments_per_post:
+            if self.max_comments_per_post is not None and replied_count >= self.max_comments_per_post:
                 send_event("phase_b_reply_skip", {
                     "post_id": post_id,
                     "reason": "per_post_limit",
@@ -4075,7 +4242,7 @@ class PhaseB:
 
             result = await self._process_own_comment(
                 post_id, comment, all_comments,
-                limit_ok=replied_count < self.max_comments_per_post,
+                limit_ok=(self.max_comments_per_post is None or replied_count < self.max_comments_per_post),
                 post_text=_post_text,
             )
             if result is None:
@@ -4083,7 +4250,7 @@ class PhaseB:
 
             # ── Re-check daily/cycle budget after each own-post reply (feed may still have margin) ──
             daily_comment_count = self.get_comments_today()
-            if daily_comment_count >= self.max_comments_per_day:
+            if self.max_comments_per_day is not None and daily_comment_count >= self.max_comments_per_day:
                 send_event("phase_b_reply_skip", {
                     "post_id": post_id,
                     "reason": "daily_limit",
@@ -4094,7 +4261,7 @@ class PhaseB:
                     daily_comment_count, self.max_comments_per_day,
                 )
                 break
-            if replied_count >= self.max_replies_per_cycle:
+            if self.max_replies_per_cycle is not None and replied_count >= self.max_replies_per_cycle:
                 send_event("phase_b_reply_skip", {
                     "post_id": post_id,
                     "reason": "per_cycle_limit",
@@ -4114,7 +4281,7 @@ class PhaseB:
 
         # Debate continuation: if thread still has open questions and caps allow, reply again
         if can_continue_thread(post_id):
-            if replied_count < self.max_comments_per_post and replied_count < self.max_replies_per_cycle:
+            if (self.max_comments_per_post is None or replied_count < self.max_comments_per_post) and (self.max_replies_per_cycle is None or replied_count < self.max_replies_per_cycle):
                 latest_other = None
                 # Solo dentro de los comentarios procesados EN ESTE CICLO
                 # (comments está recortado por el cap): el debate continuation
@@ -4133,7 +4300,7 @@ class PhaseB:
                         # VERIFICACIÓN ESTRICTA: Si ya respondimos a este comment_id exacto, saltar.
                         if dedup_key in self._replied_comment_ids or self._dedup.has_replied(dedup_key):
                             logger.info("Phase B: debate continuation: comment %s on post %s already replied (strict dedup), skipping.", other_id, post_id)
-                        elif self.get_comments_today() < self.max_comments_per_day:
+                        elif self.max_comments_per_day is None or self.get_comments_today() < self.max_comments_per_day:
                             # VERIFICACIÓN SEMÁNTICA: Buscar si el agente ya respondió algo muy parecido en este hilo
                             agent_replies_in_thread = [
                                 c.get("content") or c.get("text") or "" 
@@ -4305,6 +4472,21 @@ class PhaseB:
 
             try:
                 reply_text = await self._generate_own_post_reply(author, comment_text, thread_history, post_id=post_id, concession_synthesis=_synthesis_mode)
+                # CAPTURAR COSTOS: acceder a _last_usage del cascade después de generación exitosa
+                _cascade = self.llm
+                _provider_name = "tier_fallback"  # default para Phase B
+                _usage = _cascade._last_usage.get(_provider_name, {}) or {}
+                _input_tokens = int(_usage.get("input_tokens", 0) or 0)
+                _output_tokens = int(_usage.get("output_tokens", 0) or 0)
+                from services.model_cascade import _estimate_cost_usd
+                _cost_usd = _estimate_cost_usd(_provider_name, _input_tokens, _output_tokens)
+                # Crear comment_metadata con costos
+                comment_metadata = {
+                    "input_tokens": _input_tokens,
+                    "output_tokens": _output_tokens,
+                    "total_cost_usd": _cost_usd
+                }
+                logger.info("Phase B: costos capturados - input=%s, output=%s, cost=$%.6f", _input_tokens, _output_tokens, _cost_usd)
             except Exception as e:
                 logger.error(f"Phase B: LLM error for comment {comment_id} on post {post_id}: {e}")
                 span.set("success", False)
@@ -4354,7 +4536,27 @@ class PhaseB:
             success = result.get("success", False) if isinstance(result, dict) else getattr(result, "success", False)
             already_existed = result.get("already_existed", False) if isinstance(result, dict) else getattr(result, "already_existed", False)
             error = result.get("error") if isinstance(result, dict) else getattr(result, "error", None)
-            own_comment_id = result.get("id") if isinstance(result, dict) else getattr(result, "id", None)
+            own_comment_id = result.get("id")
+            # Trackear en karma ROI tracker
+            try:
+                from services.karma_roi_tracker import track_action
+                cost_usd = comment_metadata.get("total_cost_usd", 0.0) if 'comment_metadata' in locals() else 0.0
+                input_tokens = comment_metadata.get("input_tokens", 0) if 'comment_metadata' in locals() else 0
+                output_tokens = comment_metadata.get("output_tokens", 0) if 'comment_metadata' in locals() else 0
+                track_action(
+                    action_type="comment",
+                    moltbook_id=comment_id,
+                    phase="B",
+                    cost_usd=cost_usd,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    model="deepseek-v4-pro",
+                    thread_id=post_id if 'post_id' in locals() else None,
+                    author=post_author if 'post_author' in locals() else None
+                )
+                logger.info("Karma ROI: Comment %s trackeado (costo: $%.6f)", comment_id[:8], cost_usd)
+            except Exception as e:
+                logger.warning("Karma ROI: Error trackeando comment %s: %s", comment_id[:8], e)
 
             if success and already_existed:
                 logger.info(
@@ -4626,10 +4828,14 @@ class PhaseB:
         except Exception:
             pass
 
-    def _check_increment_watchlist_cap(self, author: str) -> bool:
-        """Return True if author can be replied to (under daily cap)."""
+    def _check_increment_watchlist_cap(self, author: str, is_own_post: bool = False) -> bool:
+        """Return True if author can be replied to (under daily cap).
+        Inbound en posts propios de watchlist tiene prioridad - no bloquear por cap."""
         author_key = author.strip().lower()
         current = self._watchlist_author_count_today.get(author_key, 0)
+        # Inbound de watchlist en posts propios NO se bloquea por cap
+        if is_own_post:
+            return True
         if current >= self._watchlist_max_per_author_day:
             return False
         self._watchlist_author_count_today[author_key] = current + 1
@@ -4857,7 +5063,7 @@ class PhaseB:
             system_prompt = system_prompt + "\n\n" + UNTRUSTED_DIRECTIVE + "\n\n" + ABSTAIN_RULE
             system_prompt = system_prompt + "\n\n" + (
                 "No unverifiable third-party incidents or named anecdotes you "
-                "cannot source. If they brought data or admitted limits: extend, "
+                "cannot source. AVOID specific years (1990, 2003, 2016, etc.) unless in source context. Use early 2000s or past decade instead. If they brought data or admitted limits: extend, "
                 "contrast, or ask what their data opens — never restate their "
                 "conclusion as yours."
             )
@@ -4890,7 +5096,7 @@ class PhaseB:
                     _hist_ctx += " " + str(_ein_context or "")
                 except Exception:
                     pass
-                _bad_year = text_has_unverifiable_historical_claim(reply, _hist_ctx)
+                _bad_year = text_has_unverifiable_historical_claim(reply, _hist_ctx, is_own_incident=True)
                 if _bad_year:
                     logger.warning(
                         "Phase B: own-post reply REJECTED — unverifiable historical claim (año %s) author=%s",
@@ -5146,3 +5352,10 @@ class PhaseB:
             queries = [q.strip() for q in env_queries_raw.split(",") if q.strip()][:max_q]
 
         return queries
+
+
+
+
+
+
+

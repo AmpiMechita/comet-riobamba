@@ -110,3 +110,132 @@ pre_checkpoint_status.txt
 # Redundant backup copies in tools/
 tools/agent_inspect.txt
 tools/comet_mcp_server_lowlevel.txt
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Logs
+*.log
+logs/*.log
+
+# Temporal
+*.bak-*
+*.bak
+*.DISABLED*
+*.CORRUPT-*
+*.RESTORED-*
+*.gatebak
+*.audit.*
+*.txt
+test_*.txt
+*_test.txt
+outfile.txt
+execution_log*.txt
+
+# Scripts de desarrollo/patch
+apply_*.ps1
+apply_*.py
+fix*.py
+fix*.ps1
+patch*.ps1
+modify_*.py
+integrate_*.py
+check_*.py
+verify_*.py
+debug_*.py
+debug_*.ps1
+analyze_*.py
+eval_*.py
+find_*.py
+list_*.py
+read_*.py
+search_*.py
+improve_*.py
+add_*.py
+
+# Auditorías y reportes
+AUDITORIA_*.md
+AUDITORIA_*.txt
+reporte_*.md
+inventario_*.md
+git_diff.txt
+dir_tree.txt
+relevant_tree.txt
+
+# Configs temporales
+config/provider_quotas.json
+config/top_agents_watchlist*.json
+config/niche_prompts.py
+config/topic_rotation_controversial.yaml
+config_deepseek_only.py
+
+# Herramientas de desarrollo
+tools/process_trace*.py
+tools/analyze_*.py
+tools/inspect_*.py
+tools/legacy_launchers/
+
+# Test outputs
+test_output*.txt
+test_result*.txt
+test_tracker.json
+phase_*_test.txt
+
+# Otros
+monitoring/watchdog.py.DISABLED*
+monitoring/karma_dashboard.py
+monitoring/monitor_groq_usage.py
+monitoring/roi_dashboard.py
+services/model_cascade.py.audit.*
+services/model_router.py
+services/model_status_telegram.py
+services/own_comment_store.py
+services/quota_manager.py
+services/smart_rate_limiter.py
+services/thread_scorer.py
+services/top_agents_tracker.py
+services/viral_detector.py
+services/watchlist*.py
+services/editorial_self_audit.py
+services/improvement_proposals.py
+services/karma_roi*.py
+scripts/anti_dogpile_audit.py
+scripts/archive_dedup.py
+scripts/audit_dryrun_quality.py
+scripts/benchmark_tokens.py
+scripts/deepseek_spend_report.py
+scripts/republish_dryrun_posts.py
+scripts/rotate_logs_offline.py
+scripts/__init__.py
+phases/phase_c_watchlist.py
+prompts/prompt_templates_optimized.py
+quality_governor.txt
+quota_manager_phaseb_fix.ps1
+saldo_deepseek.ps1
+limpiar_env.ps1
+verificar_encoding_script.ps1
+phase_a_cooldown_schedule_patch.ps1
+
+# Docs temporales
+docs/ESTRATEGIA_*.md
+docs/FIX_*.md
+docs/LECCIONES_*.md
+docs/OPERACIONES.md
+docs/deploy_overnight_*.md
+docs/karma_roi_integration.md
+docs/prompt_optimization_guide.md
+ACTUALIZACION_*.md
+CONTEXTO_*.md
+DOCUMENTACION_*.md
+COMANDOS_POWERSHELL.txt
+
+# Backups y patches
+patches/
+test_data/
+_audit_trash/

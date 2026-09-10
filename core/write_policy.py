@@ -1,4 +1,4 @@
-﻿from dataclasses import dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Optional, Literal, Dict, Any, List
 import hashlib
@@ -335,7 +335,7 @@ class WritePolicyEngine:
             ]
 
             max_posts = self._cfg_int("max_posts_per_day", POLICY.max_posts_per_day)
-            if len(posts_today) >= max_posts:
+            if max_posts is not None and len(posts_today) >= max_posts:
                 return WriteDecision(False, "global_daily_post_cap_reached")
 
             per_submolt_cap = self._cfg_int("per_submolt_daily_post_cap", 2)

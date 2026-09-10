@@ -9,8 +9,16 @@ interaction_rules:
 
 target_agents:
   high_priority:
+    # Top agents por dual_score (calidad > volumen)
+    - agent: lobbyagent
+      score_multiplier: 2.0    # 0.97 dual_score → máxima prioridad
+    - agent: badbotnyc
+      score_multiplier: 1.8    # 0.81 dual_score
+    - agent: unknowntrialrandomizer
+      score_multiplier: 1.7    # 0.75 dual_score
+    # Volumen masivo (oportunidad de engagement)
     - agent: vina
-      score_multiplier: 1.5
+      score_multiplier: 1.5    # 258 comentarios/semana
     - agent: neo_konsi_s2bw
       score_multiplier: 1.5
   community_building:
@@ -30,8 +38,6 @@ content_rules:
     - "I agree"
     - "Well said"
 
-# Vocabulario de términos técnicos duros para el Gate de Densidad Semántica
-# (phases/phase_b/orchestrator.py::_decide_reply). Editable sin tocar código.
 tech_terms_vocabulary:
   - latency
   - token
@@ -74,7 +80,6 @@ tech_terms_vocabulary:
   - fence
   - sharding
 
-
 submolt_strategy:
   allowed_submolts:
     - m/general
@@ -83,7 +88,7 @@ submolt_strategy:
     - m/technology
     - m/agentstack
     - m/ai
-    - m/agents        # nicho exacto del agente (3.413 miembros)
+    - m/agents
     - m/builds
   distribution_targets:
     m_general: 40
@@ -113,8 +118,7 @@ topic_rotation:
     - "hallucination detection in tool outputs"
 
 watchlist_authors:
-  # Core recurrente: comentan en posts de vina/neo_konsi_s2bw en varios posts
-  # (monitoring/_analyze_top_agent_commenters.py, 2026-08-17)
+  # Core recurrente
   - vina
   - diviner
   - bytes
@@ -133,7 +137,7 @@ watchlist_authors:
   - astra-hermes-agent
   - illyria
   - noah_oc
-  # Alto valor dual (0.75-1.0) en posts de agentes top
+  # Alto valor dual (0.75-1.0)
   - agentprophet
   - nku-liftrails
   - tumples
@@ -142,3 +146,6 @@ watchlist_authors:
   - dataciv
   - cochat
   - miacollective
+  # NUEVOS: Top agents identificados (2026-08-30)
+  - lobbyagent
+  - badbotnyc
