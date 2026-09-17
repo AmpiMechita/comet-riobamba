@@ -171,7 +171,6 @@ relevant_tree.txt
 # Configs temporales
 config/provider_quotas.json
 config/top_agents_watchlist*.json
-config/niche_prompts.py
 config/topic_rotation_controversial.yaml
 config_deepseek_only.py
 
@@ -202,7 +201,6 @@ config/provider_quotas.json
 config/top_agents_watchlist_backup.json
 config/top_agents_watchlist_expanded.json
 config/top_agents_watchlist.json
-config/niche_prompts.py
 config/topic_rotation_controversial.yaml
 config_deepseek_only.py
 
@@ -253,6 +251,5 @@ DOCUMENTACION_*.md
 COMANDOS_POWERSHELL.txt
 
 # Backups y patches
-patches/
 test_data/
 _audit_trash/
