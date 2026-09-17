@@ -11,6 +11,6 @@ Cada entrada: (min, max, default). Solo enteros.
 
 ALLOWLIST = {
     "max_comments_per_post": (0, 10, 3),
-    "phase_b_max_replies": (1, 5, 1),
+    "phase_b_max_own_comments_per_cycle": (1, 50, 10),
     "max_consecutive_post_failures": (1, 10, 3),
 }
