@@ -634,6 +634,32 @@ class COMETRiobambaAgent:
         except Exception as e:
             logger.warning("⚠ No se pudo escribir health.json: %s", e)
 
+    def _write_partial_health(self, reason: str = "partial") -> None:
+        """Snapshot ligero de health.json. No depende de results ni duration.
+
+        Se llama desde los paths de shutdown (watcher, run loop, main finally)
+        para persistir el estado aunque el ciclo no haya terminado normal.
+        Fix 2026-09-17: antes de este fix, un Ctrl+C durante el sleep entre
+        ciclos no actualizaba health.json — el archivo quedaba con datos del
+        ciclo previo (o peor, con el ultimo ciclo que si completo).
+        """
+        try:
+            self.health_file.parent.mkdir(parents=True, exist_ok=True)
+            snapshot = {
+                "cycle": self.cycle_count,
+                "posts_today": self.posts_today,
+                "comments_today": getattr(self.state, "comments_today", 0),
+                "partial": True,
+                "reason": reason,
+                "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "version": self.version,
+            }
+            _write_json_atomic(self.health_file, snapshot, ensure_ascii=False, indent=2)
+            logger.info("health.json parcial escrito (reason=%s, cycle=%s)", reason, self.cycle_count)
+        except Exception as e:
+            logger.warning("⚠ No se pudo escribir health.json parcial (%s): %s", reason, e)
+
+
     async def _run_phase_a(self) -> Dict[str, Any]:
         self._phase_a_deps.posts_today = self.posts_today
         if self._phase_a is None:
@@ -1036,6 +1062,11 @@ class COMETRiobambaAgent:
                     pass
                 except Exception as e:
                     logger.warning("Shutdown watcher: error al cancelar phase_b_task: %s", e)
+            try:
+                self._write_partial_health("shutdown_watcher")
+                self.state.save()
+            except Exception as _e:
+                logger.warning("Shutdown watcher: no se pudo guardar estado: %s", _e)
             logger.info("Shutdown watcher: completado")
         except asyncio.CancelledError:
             pass
@@ -1174,6 +1205,10 @@ class COMETRiobambaAgent:
                         await self._run_phase_b_only()
 
         logger.info("🛑 Agente detenido. Guardando estado final...")
+        try:
+            self._write_partial_health("run_shutdown")
+        except Exception as _e:
+            logger.warning("run(): no se pudo escribir health parcial: %s", _e)
         self.state.save()
 
         if self.telegram_client and self.telegram_client.enabled:
@@ -1309,6 +1344,11 @@ async def main(credentials: Optional[Credentials] = None):
         logger.info("Interrupción manual detectada")
     finally:
         agent.request_shutdown()
+        try:
+            agent._write_partial_health("main_finally")
+            agent.state.save()
+        except Exception:
+            pass
         # ── Cancel pending tasks (listener, phase_b_task, etc) ──
         try:
             current = asyncio.current_task()
