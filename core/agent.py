@@ -1324,17 +1324,41 @@ async def main(credentials: Optional[Credentials] = None):
         sys.exit(0)
 
     def handle_signal(signum, frame):
-        logger.info("Señal %s recibida. Iniciando shutdown...", signum)
-        agent.request_shutdown()
-        # ─── Shutdown notification ───────────────
-        if agent.telegram_client and agent.telegram_client.enabled:
-            try:
-                agent.telegram_client.send_message(
-                    "🛑 <b>Agente detenido</b>\nShutdown graceful completado."
-                )
-            except Exception as e:
-                logger.warning("No se pudo enviar notificación shutdown: %s", e)
+        # Fix 2026-09-17: blindaje total. Si una excepcion dentro del
+        # handler (encoding, telegram, logging) mata el proceso antes de
+        # request_shutdown(), el shutdown queda a medias y el flag nunca
+        # se setea. Ahora: 1) marcar shutdown_requested PRIMERO,
+        # 2) el resto con try/except por bloque.
+        try:
+            logger.info("Senal %s recibida. Iniciando shutdown...", signum)
+        except Exception:
+            pass
 
+        # CRITICO: setear el flag ANTES de cualquier otra cosa.
+        try:
+            agent.shutdown_requested = True
+        except Exception as e:
+            import sys as _sys
+            _sys.stderr.write("FATAL: no se pudo setear shutdown_requested: %s\n" % e)
+            _sys.stderr.flush()
+
+        # Diagnostico: confirmar que el flag quedo arriba.
+        try:
+            logger.info("handle_signal: shutdown_requested=%s", agent.shutdown_requested)
+        except Exception:
+            pass
+
+        # Notificacion Telegram: best-effort.
+        try:
+            if agent.telegram_client and agent.telegram_client.enabled:
+                agent.telegram_client.send_message(
+                    "Agente detenido\nShutdown graceful completado."
+                )
+        except Exception as e:
+            try:
+                logger.warning("No se pudo enviar notificacion shutdown: %s", e)
+            except Exception:
+                pass
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
 
