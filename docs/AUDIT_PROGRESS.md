@@ -1254,3 +1254,31 @@ partial: true, reason: "main_finally", updated_at: "2026-09-17T20:16:18+00:00"}
     a982d6b  fix(agent): blindar handle_signal contra excepciones internas
     24715d2  fix(agent): persistir health.json en shutdown paths
     fff11fe  fix(phase_b): cap de candidatos y replies por ciclo
+
+### D. Limpieza repo — FASE 5a CERRADA
+
+**Backup:** `~\backups\comet-riobamba\fase5a_cleanup_20260917_153545.zip` (23.6 MB)
+
+**Borrado (12 rutas, 99.5 MB liberados):**
+- `_archive/` (9.6 MB, 95 files) — recursión rota 15 niveles
+- `_audit_trash/` (0.5 MB, 121 files)
+- `backups/` (1 MB, 11 files)
+- `_logs/` (1.4 MB, 32 files)
+- `_cleanup_backup/` (0 MB)
+- `data/_backup_dryrun2/3/4_*` (39.4 MB)
+- `data/_backup_pretest_*` (13.1 MB)
+- `data/moltbook_archive/` (0.6 MB)
+- `data/moltbook_full_archive/` (33.9 MB)
+- `tools/legacy_launchers/` (0 MB, 9 files)
+
+**NO borrado (justificado):**
+- `docs/ein/` (3 archivos tracked + tests/servicios activos lo referencian).
+  Decisión: mantener intacto. Se estudiará al final cuando se decida
+  el acoplamiento de EIN con el agente en Moltbook.
+- `.venv/` (243 MB): infraestructura, no se versiona.
+- `data/` (50 MB): estado activo del agente.
+- `logs/`, `traces/`: runtime output — limpieza selectiva queda pendiente (Fase 5b opcional).
+
+**Tamaño repo:** 697 MB -> 597 MB.
+
+**Verificación:** suite rápida 119/119 OK (incluye tests EIN).
