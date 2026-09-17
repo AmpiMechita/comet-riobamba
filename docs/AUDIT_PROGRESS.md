@@ -1282,3 +1282,23 @@ partial: true, reason: "main_finally", updated_at: "2026-09-17T20:16:18+00:00"}
 **Tamaño repo:** 697 MB -> 597 MB.
 
 **Verificación:** suite rápida 119/119 OK (incluye tests EIN).
+
+### E. Limpieza logs/traces — FASE 5b CERRADA
+
+**Backup:** ~\backups\comet-riobamba\fase5b_cleanup_20260917_160558.zip (23.3 MB)
+
+**Borrado (342 archivos, 264.4 MB):**
+- logs/ (261 archivos, 233.1 MB): V63_*, V59_*, agent.log.1-5, comet_2026-05-21.*, REAL_*, OWNINCIDENT_*, etc.
+- traces/ (81 archivos, 31.3 MB)
+
+**Preservado:**
+- logs/agent.log (activo, 7.4 MB)
+- logs/fase_c_* y logs/run_obs_* (de hoy)
+- monitoring/ (nada >30 días)
+
+**Regla aplicada:** borrar archivos con LastWriteTime > 7 días,
+preservando agent.log activo y cualquier archivo del día actual.
+
+**Repo:** 597 MB -> 340 MB (acumulado del día: 697 -> 340 MB, -357 MB).
+
+Sin commit (logs/ y traces/ están en .gitignore).
