@@ -1330,3 +1330,36 @@ Ambos afectaban clone fresco (ImportError en Phase A y B).
 falsos positivos porque scripts CLI se invocan por linea de comandos, no por
 import. Corregido el criterio: solo se consideran criticos los .py ignorados
 que SI son importados por codigo tracked.
+
+### G. Fase 2.2 — Auditoría core/ — CERRADA
+
+**2.2.1 — Tests de `core/write_policy.py` (commit 8f54603):**
+- 33 tests, cubren TokenBucket, predicados de texto, hash/idempotency,
+  editorial fit, topic cooldown, decide(), log_write().
+- Archivo: `tests/test_write_policy.py`.
+- Resultado: 33/33 passed.
+
+**2.2.2 — Tests de `core/value_log.py` + `core/value_review.py` (commit ddfc4dc):**
+- 15 tests (8 + 7). Cubren JSONL, filtro por timestamp, línea inválida,
+  summarize_events, run_value_review con mocks del LLM, JSON válido/inválido,
+  markdown fence strip.
+- Archivos: `tests/test_value_log.py`, `tests/test_value_review.py`.
+- Resultado: 15/15 passed.
+
+**2.2.3 — Refactor de `core/agent.py` — DIFERIDO (deuda aceptada):**
+- 1262 L / 34 métodos. ~600 L son utilidades que podrían ir a submódulos
+  (notificaciones, outbox retry, dashboard, health, logs, flags).
+- Decisión: NO refactorizar ahora. Razones:
+  - Funciona, 7 tests existentes.
+  - Sin bugs reportados.
+  - Refactor de 1262 L sin causa = riesgo de regresión.
+  - El refactor del SHUTDOWN ya está hecho (commits 24715d2 + a982d6b).
+- Candidato a Fase 2.2.3 para sesión dedicada, si aparece dolor real.
+
+**Cobertura core/ post 2.2:**
+- 10 de 13 archivos con tests.
+- 3 sin tests (era 3): los dos anteriores + write_policy (cerrados).
+- Sin tests: ninguno → todos los archivos de core/ tienen cobertura.
+  (agent.py: 7 tests, challenge_solver: 1, claims_tracker: 1, daily_metrics: 3,
+  memory_store: 1, observability: 1, self_monitor: 1, state_manager: 4,
+  strategy_state: 1, tracer: 1, value_log: 8, value_review: 7, write_policy: 33)
