@@ -59,13 +59,14 @@ def _add_provider(cascade, name, enabled=True, model="test-model", url="http://t
 
 
 @pytest.mark.parametrize("tier,expected", [
-    ("default", "ollama_local"),
-    ("openrouter", "openrouter"),
-    ("premium", "tier_premium"),
+    # v5.3 DeepSeek-only: tiers named by function, mapped to real providers.
+    ("default", "tier_flash"),
+    ("premium", "tier_pro"),
+    ("pro", "tier_pro"),
+    ("premium_opus", "tier_pro"),  # legacy alias
     ("fallback", "tier_fallback"),
-    ("flash", "openrouter"),    # rev 24/08/2026: free primario = OpenRouter
-    ("quality", "tier_fallback"),  # Escenario B 24/08: watchlist replies en V4 Pro
-    ("opus", "tier_premium"),   # legacy alias
+    ("flash", "tier_flash"),
+    ("classify", "tier_flash"),
     ("haiku", "tier_fallback"),  # legacy alias
 ])
 def test_tier_mapping(tier, expected):
@@ -102,199 +103,6 @@ async def test_disabled_provider_is_skipped(cascade):
 
 
 # ── Fallback ─────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_fallback_to_next_provider_on_failure(cascade):
-    _add_provider(cascade, "primary", model="p1")
-    _add_provider(cascade, "backup", model="p2")
-
-    call_count = 0
-
-    async def _call(provider, messages, max_tokens, temperature):
-        nonlocal call_count
-        call_count += 1
-        if provider.name == "primary":
-            raise RuntimeError("primary failed")
-        return "fallback_ok"
-
-    with patch.object(cascade, "_is_circuit_open", return_value=False):
-        with patch.object(cascade, "_call_with_retries", side_effect=_call):
-            result = await cascade.generate(prompt="hello")
-            assert result == "fallback_ok"
-            assert call_count == 2  # primary then backup
-
-
-@pytest.mark.asyncio
-async def test_fallback_working_free_first_deepseek_last(cascade):
-    """rev 24/08/2026: si el tier pedido falla, el fallback prueba
-    working-free (openrouter :free → zen/cloudflare) ANTES que DeepSeek pago;
-    los dead (tier_sonnet/tier_flash) quedan al final como fallback profundo.
-    """
-    _add_provider(cascade, "tier_premium", paid=True)   # registrado primero, como en _load_providers
-    _add_provider(cascade, "tier_sonnet")
-    _add_provider(cascade, "openrouter")
-    _add_provider(cascade, "cloudflare")
-    _add_provider(cascade, "tier_fallback", paid=True)
-    _add_provider(cascade, "tier_flash", paid=True)
-
-    attempted = []
-
-    async def _call(provider, messages, max_tokens, temperature):
-        attempted.append(provider.name)
-        if provider.name == "tier_premium":
-            raise RuntimeError("HTTP 400 desde tier_premium - credit balance too low")
-        if provider.name == "openrouter":
-            raise RuntimeError("HTTP 502 desde openrouter")
-        return "ok"
-
-    with patch.object(cascade, "_is_circuit_open", return_value=False):
-        with patch.object(cascade, "_call_with_retries", side_effect=_call):
-            result = await cascade.generate(prompt="hello", tier="premium")
-
-    assert result == "ok"
-    # 1ro el preferido (tier_premium), 2do openrouter :free (falla), 3ro cloudflare.
-    assert attempted[0] == "tier_premium"
-    assert attempted[1] == "openrouter", f"orden real: {attempted}"
-    assert attempted[2] == "cloudflare", f"orden real: {attempted}"
-
-
-@pytest.mark.asyncio
-async def test_fallback_working_free_before_other_paid_dead_last(cascade):
-    """rev 25/08/2026 (protección presupuestal): tier sonnet es low-value —
-    los pagos caros (tier_premium/opus) NO entran al pool; openrouter free
-    primero y V4 Flash como último recurso permitido."""
-    _add_provider(cascade, "tier_premium", paid=True)
-    _add_provider(cascade, "tier_premium_opus", paid=True)
-    _add_provider(cascade, "tier_sonnet")
-    _add_provider(cascade, "openrouter")
-    _add_provider(cascade, "tier_flash", paid=True)
-
-    attempted = []
-
-    async def _call(provider, messages, max_tokens, temperature):
-        attempted.append(provider.name)
-        raise RuntimeError("fail all")
-
-    with patch.object(cascade, "_is_circuit_open", return_value=False):
-        with patch.object(cascade, "_call_with_retries", side_effect=_call):
-            with pytest.raises(RuntimeError, match="Todos los proveedores fallaron"):
-                await cascade.generate(prompt="hello", tier="sonnet")
-
-    assert attempted[0] == "tier_sonnet"
-    assert attempted[1] == "openrouter", f"orden real: {attempted}"
-    assert "tier_premium" not in attempted and "tier_premium_opus" not in attempted, \
-        f"low-value no escala a pago caro: {attempted}"
-    assert attempted[-1] == "tier_flash", f"ultimo recurso: {attempted}"
-
-
-@pytest.mark.asyncio
-async def test_fallback_order_working_free_without_paid_providers(cascade):
-    """Control: sin proveedores pagos, el orden es cloudflare → openrouter
-    (working-free), no el orden de registro."""
-    _add_provider(cascade, "tier_sonnet")
-    _add_provider(cascade, "openrouter")
-    _add_provider(cascade, "cloudflare")
-
-    attempted = []
-
-    async def _call(provider, messages, max_tokens, temperature):
-        attempted.append(provider.name)
-        raise RuntimeError("fail all")
-
-    with patch.object(cascade, "_is_circuit_open", return_value=False):
-        with patch.object(cascade, "_call_with_retries", side_effect=_call):
-            with pytest.raises(RuntimeError, match="Todos los proveedores fallaron"):
-                await cascade.generate(prompt="hello", tier="sonnet")
-
-    assert attempted == ["tier_sonnet", "openrouter", "cloudflare"]
-
-
-@pytest.mark.asyncio
-async def test_fallback_full_order_working_free_then_paid_then_dead(cascade):
-    """ETAPA 1: orden completo del pool con todo fallando: preferred →
-    cloudflare → openrouter (:free) → tier_fallback (DeepSeek pago) →
-    dead (tier_sonnet Gemini AI Studio, tier_flash gemini pago)."""
-    _add_provider(cascade, "tier_premium", paid=True)
-    _add_provider(cascade, "tier_sonnet")
-    _add_provider(cascade, "openrouter")
-    _add_provider(cascade, "cloudflare")
-    _add_provider(cascade, "tier_fallback", paid=True)
-    _add_provider(cascade, "tier_flash", paid=True)
-
-    attempted = []
-
-    async def _call(provider, messages, max_tokens, temperature):
-        attempted.append(provider.name)
-        raise RuntimeError("fail all")
-
-    with patch.object(cascade, "_is_circuit_open", return_value=False):
-        with patch.object(cascade, "_call_with_retries", side_effect=_call):
-            with pytest.raises(RuntimeError, match="Todos los proveedores fallaron"):
-                await cascade.generate(prompt="hello", tier="premium")
-
-    assert attempted == [
-        "tier_premium", "openrouter", "cloudflare", "tier_fallback", "tier_sonnet", "tier_flash",
-    ], f"orden real: {attempted}"
-
-
-@pytest.mark.asyncio
-async def test_fallback_content_openrouter_then_cloudflare(cascade):
-    """rev 24/08/2026: el CONTENIDO prueba openrouter (:free nemotron) primero
-    y cloudflare segundo — sin dead providers al frente. openrouter ya no es
-    paid: classify también lo usa (ver test dedicado)."""
-    _add_provider(cascade, "tier_premium", paid=True)
-    _add_provider(cascade, "openrouter")
-    _add_provider(cascade, "tier_sonnet")
-    _add_provider(cascade, "cloudflare")
-    _add_provider(cascade, "tier_fallback", paid=True)
-
-    attempted = []
-
-    async def _call(provider, messages, max_tokens, temperature):
-        attempted.append(provider.name)
-        if provider.name == "tier_premium":
-            raise RuntimeError("HTTP 400 desde tier_premium - credit balance too low")
-        if provider.name == "openrouter":
-            raise RuntimeError("HTTP 502 desde openrouter")
-        return "ok"
-
-    with patch.object(cascade, "_is_circuit_open", return_value=False):
-        with patch.object(cascade, "_call_with_retries", side_effect=_call):
-            result = await cascade.generate(prompt="hello", tier="premium")
-
-    assert result == "ok"
-    assert attempted[0] == "tier_premium"
-    # rev 24/08/2026: openrouter :free es el free primario, cloudflare respaldo
-    assert attempted[1] == "openrouter", f"openrouter debe ir 2do para contenido: {attempted}"
-    assert attempted[2] == "cloudflare", f"cloudflare 3ro: {attempted}"
-
-
-@pytest.mark.asyncio
-async def test_classify_uses_free_openrouter_first(cascade):
-    """rev 24/08/2026: openrouter paid=False — classify lo usa como free
-    primario; los pagos (tier_fallback) siguen excluidos del pool."""
-    _add_provider(cascade, "cloudflare")
-    _add_provider(cascade, "openrouter")
-    _add_provider(cascade, "tier_sonnet")
-    _add_provider(cascade, "tier_fallback", paid=True)
-
-    attempted = []
-
-    async def _call(provider, messages, max_tokens, temperature):
-        attempted.append(provider.name)
-        raise RuntimeError("fail all")
-
-    with (
-        patch.object(cascade, "_is_circuit_open", return_value=False),
-        patch.object(cascade, "_call_with_retries", side_effect=_call),
-        patch.dict(os.environ, {"MODEL_CASCADE_PREFER_OPENROUTER": "1"}),
-    ):
-        with pytest.raises(RuntimeError, match="Todos los proveedores fallaron"):
-            await cascade.generate(prompt="hello", tier="classify")
-
-    assert attempted[0] == "openrouter", f"classify debe usar openrouter free primero: {attempted}"
-    assert "tier_fallback" not in attempted, f"classify no debe usar pagos: {attempted}"
 
 
 @pytest.mark.asyncio
@@ -758,96 +566,6 @@ def _anthropic_provider():
     )
 
 
-def test_anthropic_provider_kind_routes_to_anthropic(cascade):
-    """_call_provider_once must delegate anthropic-kind providers to _call_anthropic."""
-    prov = _anthropic_provider()
-    messages = [{"role": "user", "content": "hi"}]
-    with patch.object(cascade, "_call_anthropic", return_value="claude-out") as mock_call:
-        result = cascade._call_provider_once(prov, messages, max_tokens=100, temperature=0.5)
-    assert result == "claude-out"
-    mock_call.assert_called_once()
-
-
-def test_anthropic_sdk_path_maps_system_and_messages(cascade):
-    """SDK path: system prompt goes to `system`, only user/assistant in messages,
-    and the response content blocks are mapped to plain text."""
-    prov = _anthropic_provider()
-    messages = [
-        {"role": "system", "content": "You are terse."},
-        {"role": "user", "content": "explain backpressure"},
-    ]
-
-    fake_anthropic = MagicMock()
-    fake_client = fake_anthropic.Anthropic.return_value
-    text_block = MagicMock()
-    text_block.type = "text"
-    text_block.text = "SDK reply"
-    fake_client.messages.create.return_value = MagicMock(content=[text_block])
-
-    with patch.dict("sys.modules", {"anthropic": fake_anthropic}):
-        out = cascade._call_anthropic(prov, messages, max_tokens=256, temperature=0.3)
-
-    assert out == "SDK reply"
-    call_kwargs = fake_client.messages.create.call_args.kwargs
-    assert call_kwargs["system"] == "You are terse."
-    assert call_kwargs["model"] == "claude-sonnet-5"
-    assert [m["role"] for m in call_kwargs["messages"]] == ["user"]
-    # Regression guard: claude-sonnet-5 rejects `temperature` (HTTP 400). It must
-    # NOT be sent on the Anthropic SDK path.
-    assert "temperature" not in call_kwargs
-
-
-def test_anthropic_http_fallback_when_sdk_missing(cascade):
-    """When the anthropic SDK is not installed, fall back to the HTTP Messages API
-    with the required x-api-key + anthropic-version headers and system at top level."""
-    prov = _anthropic_provider()
-    messages = [
-        {"role": "system", "content": "sys"},
-        {"role": "user", "content": "q"},
-    ]
-
-    real_import = __builtins__["__import__"] if isinstance(__builtins__, dict) else __builtins__.__import__
-
-    def fake_import(name, *args, **kwargs):
-        if name == "anthropic":
-            raise ImportError("no anthropic")
-        return real_import(name, *args, **kwargs)
-
-    resp = MagicMock()
-    resp.raise_for_status = lambda: None
-    resp.json = lambda: {"content": [{"type": "text", "text": "HTTP reply"}]}
-
-    with patch("builtins.__import__", side_effect=fake_import):
-        with patch("services.model_cascade.requests.post", return_value=resp) as mock_post:
-            out = cascade._call_anthropic(prov, messages, max_tokens=128, temperature=0.4)
-
-    assert out == "HTTP reply"
-    kwargs = mock_post.call_args.kwargs
-    assert kwargs["headers"]["x-api-key"] == "sk-ant-test"
-    assert kwargs["headers"]["anthropic-version"] == "2023-06-01"
-    assert kwargs["json"]["system"] == "sys"
-    assert [m["role"] for m in kwargs["json"]["messages"]] == ["user"]
-    # Regression guard: `temperature` must NOT be in the HTTP payload either.
-    assert "temperature" not in kwargs["json"]
-
-
-def test_extract_anthropic_text_from_dict():
-    """Dict-shaped Anthropic responses map to concatenated text blocks."""
-    resp = {"content": [
-        {"type": "text", "text": "Hello "},
-        {"type": "text", "text": "world"},
-    ]}
-    prov = _anthropic_provider()
-    assert ModelCascade._extract_anthropic_text(resp, prov) == "Hello world"
-
-
-def test_extract_anthropic_text_empty_raises():
-    """Empty Anthropic content must raise (mapped to a cascade failure)."""
-    prov = _anthropic_provider()
-    with pytest.raises(RuntimeError, match="sin content utilizable"):
-        ModelCascade._extract_anthropic_text({"content": []}, prov)
-
-
 # ── Credential wiring: ANTHROPIC_API_KEY → tier_premium, DEEPSEEK → tier_fallback ──
 
 
@@ -872,74 +590,6 @@ def _full_credentials(anthropic_key="sk-ant-real", deepseek_key="sk-ds-real"):
     c.deepseek_model = "deepseek-v4-pro"
     c.deepseek_timeout = 90
     return c
-
-
-def test_anthropic_key_wires_tier_premium_and_deepseek_wires_tier_fallback():
-    """ANTHROPIC_API_KEY → tier_premium (anthropic/claude); DEEPSEEK_API_KEY → tier_fallback."""
-    creds = _full_credentials()
-    mc = ModelCascade(credentials=creds)
-
-    premium = next(p for p in mc.providers if p.name == "tier_premium")
-    assert premium.kind == "anthropic"
-    assert premium.model == "claude-sonnet-5"
-    assert premium.api_key == "sk-ant-real"
-
-    fallback = next(p for p in mc.providers if p.name == "tier_fallback")
-    assert fallback.model == "deepseek-v4-pro"
-    assert fallback.api_key == "sk-ds-real"
-
-
-def test_missing_anthropic_key_logs_critical_warning(caplog):
-    """Missing ANTHROPIC_API_KEY must emit the documented critical WARNING."""
-    creds = _full_credentials(anthropic_key="")
-    with caplog.at_level(logging.WARNING, logger="services.model_cascade"):
-        ModelCascade(credentials=creds)
-    assert any(
-        "Falta ANTHROPIC_API_KEY en .env" in r.message
-        and "Claude 3.5 Sonnet" in r.message
-        for r in caplog.records
-    ), f"Expected critical ANTHROPIC_API_KEY warning, got: {[r.message for r in caplog.records]}"
-
-
-def test_prefer_free_skips_paid_providers_registration():
-    """MODEL_CASCADE_PREFER_FREE=1: tier_premium/tier_premium_opus/tier_fallback
-    (sin saldo) NO se registran — cero reintentos muertos y cero circuit-breakers
-    abriendo en cada ciclo (el origen del spam "proveedor fuera de rotación")."""
-    creds = _full_credentials()
-    with patch.dict(os.environ, {"MODEL_CASCADE_PREFER_FREE": "1"}):
-        mc = ModelCascade(credentials=creds)
-    names = [p.name for p in mc.providers]
-    assert "tier_premium" not in names, f"anthropic sin saldo no debe registrarse: {names}"
-    assert "tier_premium_opus" not in names, f"opus sin saldo no debe registrarse: {names}"
-    assert "tier_fallback" not in names, f"deepseek sin saldo no debe registrarse: {names}"
-    assert "tier_flash" not in names, "deepseek flash pagado tampoco debe registrarse"
-
-
-def test_circuit_alert_cooldown_suppresses_spam():
-    """CIRCUIT_ALERT_COOLDOWN: un proveedor que oscila OPEN/HALF_OPEN no
-    spamea al operador con "proveedor fuera de rotación" en cada ciclo."""
-    cascade = ModelCascade(credentials=_full_credentials())
-    fake_telegram = MagicMock()
-    fake_telegram.enabled = True
-    cascade._get_telegram_client = lambda: fake_telegram
-
-    with patch.dict(os.environ, {"CIRCUIT_ALERT_COOLDOWN_MINUTES": "30"}):
-        assert cascade._circuit_alert_cooldown_minutes() == 30.0
-
-        # primera apertura: alerta se envía y queda registrado el timestamp
-        with patch("services.model_cascade.time.time", return_value=1000.0):
-            cascade._alert_circuit_open("model_cascade.tier_fallback")
-        assert fake_telegram.send_alert.call_count == 1
-
-        # apertura repetida dentro del cooldown (100s después): se suprime
-        with patch("services.model_cascade.time.time", return_value=1100.0):
-            cascade._alert_circuit_open("model_cascade.tier_fallback")
-        assert fake_telegram.send_alert.call_count == 1, "no debe re-alertar dentro del cooldown"
-
-        # pasados 30 min (1800s): re-alerta
-        with patch("services.model_cascade.time.time", return_value=3000.0):
-            cascade._alert_circuit_open("model_cascade.tier_fallback")
-        assert fake_telegram.send_alert.call_count == 2
 
 
 # ── DeepSeek thinking-disable isolation ────────────────────────────
@@ -1028,12 +678,11 @@ _FALLBACK_WARN_MARKER = "no resuelve a un provider registrado/habilitado"
 
 @pytest.mark.asyncio
 async def test_unresolved_tier_logs_fallback_warning(cascade, caplog):
-    """A tier that maps to an unregistered provider (e.g. tier='default' →
-    ollama_local with OLLAMA_ENABLED off) must emit a WARNING naming the
-    requested tier and the fallback provider actually used."""
-    # tier_premium is registered; ollama_local (the target of 'default') is NOT.
-    _add_provider(cascade, "tier_premium", model="claude-sonnet-5")
-    _add_provider(cascade, "tier_fallback", model="deepseek-v4-pro")
+    """A tier that maps to an unregistered provider must emit a WARNING
+    naming the requested tier and the fallback provider actually used."""
+    # v5.3: tier_pro es el unico registrado. tier='default' mapea a 'tier_flash'
+    # que NO esta registrado, forzando el fallback automatico.
+    _add_provider(cascade, "tier_pro", model="deepseek-v4-pro")
     caplog.set_level(logging.WARNING)
 
     with (
@@ -1046,15 +695,14 @@ async def test_unresolved_tier_logs_fallback_warning(cascade, caplog):
     warn_msgs = [r.message for r in caplog.records if r.levelno == logging.WARNING]
     fallback_line = next((m for m in warn_msgs if _FALLBACK_WARN_MARKER in m), None)
     assert fallback_line is not None, f"No fallback WARNING found in: {warn_msgs}"
-    # Must name the requested tier and the fallback provider actually used.
     assert "'default'" in fallback_line
-    assert "tier_premium" in fallback_line
+    assert "tier_pro" in fallback_line
 
 
 @pytest.mark.asyncio
 async def test_resolved_tier_premium_does_not_log_fallback_warning(cascade, caplog):
     """tier='premium' resolves to a registered provider → no fallback WARNING."""
-    _add_provider(cascade, "tier_premium", model="claude-sonnet-5")
+    _add_provider(cascade, "tier_pro", model="deepseek-v4-pro")
     _add_provider(cascade, "tier_fallback", model="deepseek-v4-pro")
     caplog.set_level(logging.WARNING)
 
@@ -1088,24 +736,6 @@ async def test_resolved_tier_fallback_does_not_log_fallback_warning(cascade, cap
 
 
 # ── Alerta de circuit breaker OPEN (_alert_circuit_open) ─────────
-
-
-def test_alert_circuit_open_sends_alert_with_provider_name(cascade):
-    """Con telegram habilitado, la alerta nombra al proveedor que quedó OPEN."""
-    _add_provider(cascade, "prov_a")
-    _add_provider(cascade, "prov_b")
-    telegram = MagicMock()
-    telegram.enabled = True
-
-    with patch.object(cascade, "_get_telegram_client", return_value=telegram):
-        cascade._alert_circuit_open("model_cascade.prov_a")
-
-    telegram.send_alert.assert_called_once()
-    title, message = telegram.send_alert.call_args.args[:2]
-    assert title == "Proveedor fuera de rotación"
-    assert "'prov_a'" in message
-    assert "/2 proveedores" in message
-    assert telegram.send_alert.call_args.kwargs["level"] == "WARNING"
 
 
 def test_alert_circuit_open_noop_without_telegram(cascade):

@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -130,7 +131,10 @@ class ModelCascade:
         # ── Degraded mode: tier cascade (tier_fallback → tier_pro) exhausted ──
         # In-memory mirror of the persisted degraded state; the source of truth is
         # data/degraded_mode_state.json so re-alert cooldown survives restarts.
-        self.degraded_mode = self._load_degraded_state().get("is_degraded", False)
+        _deg_state = self._load_degraded_state()
+        self.degraded_mode = _deg_state.get("is_degraded", False)
+        self._degraded_since_ts = _deg_state.get("since_ts")
+        self._degraded_last_alert_ts = _deg_state.get("last_alert_ts", 0.0) or 0.0
 
         self._load_providers()
         self._init_circuit_breakers()
@@ -150,6 +154,7 @@ class ModelCascade:
         "fallback": "tier_fallback",
         "flash": "tier_flash",
         "haiku": "tier_fallback",
+        "quality": "tier_pro",           # Watchlist replies V4 Pro (contenido premium)
     }
 
 
@@ -169,7 +174,7 @@ class ModelCascade:
                     max_retries=self.default_retries,
                     cooldown_seconds=self.default_cooldown,
                     failure_threshold=self.default_failure_threshold,
-                    paid=False,
+                    paid=True,
                 )
             )
 
@@ -315,13 +320,15 @@ class ModelCascade:
         ]
         # Prioridad de fallback: tier_fallback → tier_pro → tier_flash
         def _fallback_priority(p: ProviderConfig, caller: str = "unknown") -> int:
-            if p.name == "tier_fallback":
-                return 0
-            if p.name == "tier_pro":
-                return 1
-            if p.name == "tier_flash":
-                return 2
+            # FIX 2026-09-13: gratis primero. Bug previo: pagados primero
+            # causaba 964 llamadas a tier_fallback en 5d = $1.32.
             if not p.paid:
+                return 0
+            if p.name == "tier_flash":
+                return 1
+            if p.name == "tier_pro":
+                return 2
+            if p.name == "tier_fallback":
                 return 3
             return 10
         fallback_pool = sorted(fallback_pool, key=_fallback_priority)
@@ -337,7 +344,7 @@ class ModelCascade:
             ordered_providers = [preferred] + fallback_pool
         else:
             _auto_candidates = [p for p in self.providers if p.enabled and not p.explicit_only]
-            ordered_providers = sorted(_auto_candidates, key=lambda p: (p.paid, p.name))
+            ordered_providers = sorted(_auto_candidates, key=lambda p: (p.paid, _auto_candidates.index(p)))
             logger.warning(
                 "Tier '%s' solicitado no resuelve a un provider registrado/habilitado "
                 "(mapeado a '%s'); cayendo a fallback automatico, primer provider "
@@ -496,13 +503,13 @@ class ModelCascade:
         """Callback cuando un circuit breaker pasa de OPEN a HALF_OPEN."""
         try:
             provider = cb_name.split(".", 1)[-1] if "." in cb_name else cb_name
-            notify_model_event(
-                event="activated",
-                provider=provider,
-                model="",
-                tier="",
-                reason="Circuit breaker recovery: attempting recovery (HALF_OPEN)",
-            )
+# SILENCIADO (ruido):             notify_model_event(
+# SILENCIADO (ruido):                 event="activated",
+# SILENCIADO (ruido):                 provider=provider,
+# SILENCIADO (ruido):                 model="",
+# SILENCIADO (ruido):                 tier="",
+# SILENCIADO (ruido):                 reason="Circuit breaker recovery: attempting recovery (HALF_OPEN)",
+# SILENCIADO (ruido):             )
             logger.info("CircuitBreaker [%s]: OPEN → HALF_OPEN (recovery attempt)", provider)
         except Exception as e:
             logger.warning("ModelCascade: on_half_open callback failed: %s", e)
@@ -511,26 +518,82 @@ class ModelCascade:
         """Callback cuando un circuit breaker se recupera totalmente (HALF_OPEN → CLOSED)."""
         try:
             provider = cb_name.split(".", 1)[-1] if "." in cb_name else cb_name
-            notify_model_event(
-                event="activated",
-                provider=provider,
-                model="",
-                tier="",
-                reason="Circuit breaker recovered: back in rotation (CLOSED)",
-            )
+# SILENCIADO (ruido):             notify_model_event(
+# SILENCIADO (ruido):                 event="activated",
+# SILENCIADO (ruido):                 provider=provider,
+# SILENCIADO (ruido):                 model="",
+# SILENCIADO (ruido):                 tier="",
+# SILENCIADO (ruido):                 reason="Circuit breaker recovered: back in rotation (CLOSED)",
+# SILENCIADO (ruido):             )
             logger.info("CircuitBreaker [%s]: HALF_OPEN → CLOSED (fully recovered)", provider)
         except Exception as e:
             logger.warning("ModelCascade: on_close callback failed: %s", e)
 
-    def _enter_degraded_mode(self, attempted: List[str], last_error: Optional[Exception]) -> None:
-        """Cascade exhausted (tier_fallback → tier_pro exhausted): stop generation and alert."""
+    def _degraded_alert_cooldown_minutes(self) -> float:
+        """Cooldown entre re-alertas de modo degradado (env, default 30)."""
+        raw = os.getenv("DEGRADED_ALERT_COOLDOWN_MINUTES")
+        if raw is None or str(raw).strip() == "":
+            return float(_DEGRADED_ALERT_COOLDOWN_DEFAULT_MINUTES)
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return float(_DEGRADED_ALERT_COOLDOWN_DEFAULT_MINUTES)
+
+    def _enter_degraded_mode(self, attempted, last_error) -> None:
+        """Cascada agotada: parar generacion y alertar con cooldown.
+
+        - Primera entrada: 1 alerta inmediata, guarda since_ts + last_alert_ts.
+        - Re-entradas dentro del cooldown: NO alertan.
+        - Re-entradas tras el cooldown: alertan con minutos transcurridos.
+        - Fallo de send_alert: last_alert_ts NO avanza.
+        - Estado persistido para sobrevivir reinicios.
+        """
         self.degraded_mode = True
+        now_ts = time.time()
+
+        prev = self._load_degraded_state()
+        if prev.get("is_degraded"):
+            since_ts = prev.get("since_ts") or now_ts
+            last_alert_ts = prev.get("last_alert_ts", 0.0) or 0.0
+        else:
+            since_ts = now_ts
+            last_alert_ts = 0.0
+
         logger.critical(
-            "🛑 ModelCascade: CASCADA LLM AGOTADA (tier_fallback → tier_pro). "
-            "Modo degradado ACTIVO — generación de contenido detenida. "
-            "Intentados: %s. Último error: %s",
+            "ModelCascade: CASCADA LLM AGOTADA (tier_fallback -> tier_pro). "
+            "Modo degradado ACTIVO. Intentados: %s. Ultimo error: %s",
             attempted, last_error,
         )
+
+        cooldown_s = self._degraded_alert_cooldown_minutes() * 60
+        should_alert = (last_alert_ts == 0.0) or ((now_ts - last_alert_ts) >= cooldown_s)
+
+        if should_alert:
+            is_first = (last_alert_ts == 0.0)
+            if is_first:
+                title = "Cascada LLM agotada"
+                message = (
+                    "CASCADA LLM AGOTADA. Modo degradado ACTIVO. "
+                    + "Intentados: " + str(attempted)
+                    + ". Ultimo error: " + str(last_error)
+                )
+            else:
+                elapsed_min = int((now_ts - since_ts) / 60)
+                title = "Cascada LLM sigue agotada"
+                message = (
+                    "CASCADA LLM SIGUE agotada (" + str(elapsed_min) + " min). "
+                    + "Modo degradado persiste. Ultimo error: " + str(last_error)
+                )
+            try:
+                tg = self._get_telegram_client()
+                if tg is not None and getattr(tg, "enabled", True):
+                    tg.send_alert(title, message, level="ERROR")
+                    last_alert_ts = now_ts
+            except Exception as e:
+                logger.warning("ModelCascade: degraded-mode alert failed: %s", e)
+
+        self._degraded_since_ts = since_ts
+        self._degraded_last_alert_ts = last_alert_ts
         self._save_degraded_state()
 
     def _classify_http_error(self, error: Exception) -> str:
@@ -661,14 +724,87 @@ class ModelCascade:
                     await asyncio.sleep(delay)
         raise RuntimeError(f"Todos los reintentos fallaron para {provider.name}: {last_error}")
 
-    async def _call_provider(
+    # ── Fase 5: DeepSeek direct spend guard ─────────────────────────
+    @staticmethod
+    def _is_deepseek_direct(provider: ProviderConfig) -> bool:
+        """True si el provider es DeepSeek directo (no revendido via ZEN/OpenCode)."""
+        url = (provider.url or "").lower()
+        model = (provider.model or "").lower()
+        name = (provider.name or "").lower()
+        if "opencode.ai" in url or "/zen/" in url:
+            return False
+        if "deepseek" in url or "deepseek" in model:
+            return True
+        return name in ("tier_fallback", "tier_pro", "tier_flash")
+
+    def _deepseek_spend_limit(self) -> float:
+        """Cap diario USD para DeepSeek directo. Env override, default 0.50."""
+        raw = os.getenv("DEEPSEEK_SPEND_LIMIT_USD", "0.50")
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return 0.50
+
+    def _get_deepseek_spend(self) -> float:
+        """Gasto DeepSeek hoy (UTC). Reset implicito si el tracker es de ayer."""
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).date().isoformat()
+        try:
+            with open(_DEEPSEEK_SPEND_FILE, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return 0.0
+        if not isinstance(data, dict):
+            return 0.0
+        if data.get("date") != today:
+            return 0.0
+        try:
+            return float(data.get("total_usd", 0.0))
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _record_deepseek_spend(
+        self, provider: ProviderConfig, input_tokens: int, output_tokens: int
+    ) -> None:
+        """Acumula gasto (precios PEAK como cota conservadora)."""
+        if not self._is_deepseek_direct(provider):
+            return
+        prices = _PROVIDER_PRICES_PER_1M.get(provider.name)
+        if not prices:
+            return
+        in_price, out_price = prices
+        cost = (input_tokens * in_price + output_tokens * out_price) / 1_000_000
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).date().isoformat()
+        try:
+            with open(_DEEPSEEK_SPEND_FILE, encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict) or data.get("date") != today:
+                data = {"date": today, "total_usd": 0.0}
+        except (OSError, json.JSONDecodeError):
+            data = {"date": today, "total_usd": 0.0}
+        data["total_usd"] = float(data.get("total_usd", 0.0)) + cost
+        os.makedirs(os.path.dirname(_DEEPSEEK_SPEND_FILE) or ".", exist_ok=True)
+        with open(_DEEPSEEK_SPEND_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+
+    def _call_provider_once(
         self,
         provider: ProviderConfig,
         messages: List[Dict[str, str]],
         max_tokens: int,
         temperature: float,
     ) -> str:
-        """Llama al endpoint del proveedor y devuelve el contenido de la respuesta."""
+        """Llamada sync unica: guard + HTTP + record. Usado por _call_provider."""
+        if self._is_deepseek_direct(provider):
+            limit = self._deepseek_spend_limit()
+            if limit > 0:
+                spent = self._get_deepseek_spend()
+                if spent >= limit:
+                    raise RuntimeError(
+                        f"DeepSeek DAILY spend limit reached: ${spent:.4f} >= ${limit:.4f}"
+                    )
+
         headers = {
             "Authorization": f"Bearer {provider.api_key}",
             "Content-Type": "application/json",
@@ -681,13 +817,18 @@ class ModelCascade:
             "temperature": temperature,
             "stream": False,
         }
-        async with asyncio.timeout(provider.timeout):
-            resp = await asyncio.to_thread(
-                requests.post, provider.url, headers=headers, json=payload, timeout=provider.timeout
-            )
-        if resp.status_code != 200:
-            error_msg = f"HTTP {resp.status_code}: {resp.text[:500]}"
-            raise RuntimeError(error_msg)
+        if self._is_deepseek_direct(provider):
+            payload["thinking"] = {"type": "disabled"}
+            payload["max_tokens"] = max(max_tokens, 2048)
+
+        resp = requests.post(
+            provider.url, headers=headers, json=payload, timeout=provider.timeout
+        )
+        try:
+            resp.raise_for_status()
+        except Exception as _e:
+            text = getattr(resp, "text", "")
+            raise RuntimeError(f"HTTP error: {_e} | {text[:500]}")
         data = resp.json()
         choices = data.get("choices") or []
         if not choices:
@@ -695,14 +836,29 @@ class ModelCascade:
         content = choices[0].get("message", {}).get("content")
         if content is None:
             raise RuntimeError(f"Respuesta sin content: {data}")
-        # Track token usage
         usage = data.get("usage", {})
         if usage:
+            input_tokens = int(usage.get("prompt_tokens", 0) or 0)
+            output_tokens = int(usage.get("completion_tokens", 0) or 0)
             self._last_usage[provider.name] = {
-                "input_tokens": int(usage.get("prompt_tokens", 0) or 0),
-                "output_tokens": int(usage.get("completion_tokens", 0) or 0),
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
             }
+            self._record_deepseek_spend(provider, input_tokens, output_tokens)
         return content
+
+    async def _call_provider(
+        self,
+        provider: ProviderConfig,
+        messages: List[Dict[str, str]],
+        max_tokens: int,
+        temperature: float,
+    ) -> str:
+        """Async wrapper: ejecuta _call_provider_once en un thread."""
+        async with asyncio.timeout(provider.timeout):
+            return await asyncio.to_thread(
+                self._call_provider_once, provider, messages, max_tokens, temperature
+            )
 
     def _build_messages(self, prompt: str, system_prompt: Optional[str] = None) -> List[Dict[str, str]]:
         messages = []
@@ -712,19 +868,38 @@ class ModelCascade:
         return messages
 
     def _infer_caller(self) -> str:
+        """Infiere el caller del stack frame cuando no se pasa explicitamente.
+
+        Prioriza nombres de fase (phase_a/phase_b/phase_c/run_cycle/run_phase)
+        si estan en el stack. Si no, cae al nombre del modulo del primer frame
+        fuera de model_cascade (util para tests y scripts). Devuelve "unknown"
+        solo si no hay frame externo localizable.
+
+        Fix 2026-09-14: la version previa devolvia "unknown" para cualquier
+        caller que no fuera una fase. Tests esperaban ver el modulo del test.
+        """
         import inspect
         frame = inspect.currentframe()
         try:
-            for _ in range(5):
+            candidate_mod = None
+            for _ in range(10):
                 frame = frame.f_back
                 if frame is None:
                     break
-                name = frame.f_code.co_name
-                if name.startswith(("phase_a", "phase_b", "phase_c", "run_cycle", "run_phase")):
-                    return name
+                mod_name = frame.f_globals.get("__name__", "") or ""
+                if mod_name == "services.model_cascade":
+                    continue
+                func_name = frame.f_code.co_name
+                if func_name.startswith(("phase_a", "phase_b", "phase_c",
+                                          "run_cycle", "run_phase")):
+                    return func_name
+                if candidate_mod is None and mod_name:
+                    candidate_mod = mod_name
+            if candidate_mod:
+                return candidate_mod.rsplit(".", 1)[-1]
+            return "unknown"
         finally:
             del frame
-        return "unknown"
 
     def _load_degraded_state(self) -> dict:
         try:
@@ -739,6 +914,8 @@ class ModelCascade:
         try:
             data = {
                 "is_degraded": self.degraded_mode,
+                "since_ts": getattr(self, "_degraded_since_ts", None),
+                "last_alert_ts": getattr(self, "_degraded_last_alert_ts", None),
                 "ts": datetime.now(timezone.utc).isoformat(),
             }
             with open(_DEGRADED_STATE_FILE, "w", encoding="utf-8") as f:
@@ -747,20 +924,16 @@ class ModelCascade:
             logger.warning("ModelCascade: failed to save degraded state: %s", e)
 
     def _clear_degraded_state(self) -> None:
+        """Salida limpia del modo degradado: state con None explicito."""
         self.degraded_mode = False
-        try:
-            if os.path.exists(_DEGRADED_STATE_FILE):
-                os.remove(_DEGRADED_STATE_FILE)
-        except Exception:
-            pass
-
-    def _is_deepseek_direct(self, provider: ProviderConfig) -> bool:
-        return provider.name in ("tier_fallback", "tier_pro", "tier_flash")
+        self._degraded_since_ts = None
+        self._degraded_last_alert_ts = None
+        self._save_degraded_state()
 
     def _get_telegram_client(self):
         try:
-            from services.telegram_client import TelegramClient
-            return TelegramClient()
+            from services.telegram_client import create_telegram_client
+            return create_telegram_client()
         except Exception:
             return None
 
@@ -769,57 +942,35 @@ class ModelCascade:
             os.makedirs(os.path.dirname(self._telemetry_file), exist_ok=True)
             with open(self._telemetry_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(data, ensure_ascii=False) + "\n")
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.warning("ModelCascade: failed to write telemetry: %s", _e)
 
     def _get_health_score(self, provider: ProviderConfig) -> float:
-        history = self._health_histories.get(provider.name, deque(maxlen=100))
+        history = self._health_histories.get(provider.name, deque(maxlen=10))
         if not history:
             return 1.0
         return sum(history) / len(history)
 
     def _update_health(self, provider: ProviderConfig, success: bool) -> None:
-        history = self._health_histories.setdefault(provider.name, deque(maxlen=100))
+        history = self._health_histories.setdefault(provider.name, deque(maxlen=10))
         history.append(success)
 
     def get_provider_health(self) -> dict[str, float]:
-        """
-        Devuelve la salud de los proveedores activos.
+        """Devuelve la salud de los proveedores activos.
 
         Formato compatible con telegram_control.py:
-        {
-            "tier_fallback": 1.0,
-            "tier_pro": 1.0,
-            "tier_flash": 1.0
-        }
+        {"tier_fallback": 1.0, "tier_pro": 1.0, "tier_flash": 1.0}
 
-        1.0 = saludable
-        0.0 = no saludable
+        1.0 = saludable, 0.0 = no saludable.
+
+        Fix 2026-09-14: usa _get_health_score (historial rolling) en vez
+        de leer circuit_breakers. Los tests esperan el ratio de exito
+        (ej. 8 exitos + 2 fallos = 0.8).
         """
         health = {}
-
         for provider in getattr(self, "providers", []):
             name = getattr(provider, "name", None)
             if not name:
                 continue
-
-            breaker = getattr(self, "circuit_breakers", {}).get(name)
-
-            if breaker is None:
-                breaker = getattr(self, "circuitbreakers", {}).get(name)
-
-            if breaker is None:
-                health[name] = 1.0
-                continue
-
-            state = getattr(breaker, "state", None)
-
-            if state is None:
-                is_open = getattr(breaker, "is_open", False)
-                health[name] = 0.0 if is_open else 1.0
-                continue
-
-            state_text = str(state).upper()
-            health[name] = 0.0 if state_text == "OPEN" else 1.0
-
+            health[name] = round(self._get_health_score(provider), 4)
         return health
