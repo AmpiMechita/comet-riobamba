@@ -1150,3 +1150,107 @@ Post ebe9f9d9 (~18:35 UTC, ciclo #13):
   proceso muere limpio, solo imprime feo. Anotado como bug #5.
 - Documentacion general (CONFIG_TRUTH.md, README.md, consolidar
   operacion.md / OPERACIONES.md / RUNBOOK_AGENT.md).
+
+---
+
+## 2026-09-17 — Fixes A/B/C: cap Phase B, persistencia health, SIGINT blindado
+
+Tres fixes cerrados el mismo dia, todos con verificacion empirica.
+
+### A. Cap de Phase B — CERRADO (commit fff11fe)
+
+**Problema:** Phase B procesaba la cola COMPLETA de comentarios sin responder
+en posts propios sin limite. Con ~200 candidatos x ~3s por llamada LLM, un
+ciclo tardaba 10+ minutos y gastaba sin techo (~$0.03 por corrida). Los 3
+caps existian en config pero estaban en None.
+
+**Diagnostico:**
+- behavior_cfg.phase_b_own_queue_per_cycle = None -> L4029 nunca corta
+- behavior_cfg.max_comment_replies_per_cycle = None -> L4051 nunca corta
+- El overlay data/auto_applied_config.json {"phase_b_max_replies": 1}
+  era DECORATIVO: la clave no existia en behavior_cfg ni tenia lector.
+- La allowlist de config/auto_appliable.py permitia un parametro fantasma.
+
+**Fix:**
+1. .env: AGENT_PHASE_B_OWN_QUEUE_PER_CYCLE=30
+   .env: AGENT_MAX_COMMENT_REPLIES_PER_CYCLE=15
+2. config/auto_appliable.py: reemplazado parametro fantasma
+   phase_b_max_replies por phase_b_max_own_comments_per_cycle.
+3. Overlay reseteado a {}.
+
+**Efecto medido:** Phase B acotada a 30 candidatos. Ciclos terminan.
+health.json se escribe al final (antes nunca llegaba).
+
+### B. Persistencia health.json en shutdown — CERRADO (commit 24715d2)
+
+**Problema:** health.json solo se escribia en el path NORMAL del ciclo
+(L1006, dentro del else del try/except). Si el agente recibia SIGINT durante
+el sleep entre ciclos, o una excepcion cancelaba el ciclo, el archivo quedaba
+con datos del ciclo anterior. Se observo cycle: 1, updated_at: <hace 46 min>
+tras matar el proceso mid-Phase-B.
+
+**Diagnostico:**
+- AgentState._save() escribe data/comet_state.db (SQLite).
+- _write_health_snapshot() escribe data/state/health.json.
+- Dos sistemas de estado separados con writers separados.
+- asyncio.CancelledError no es atrapado por except Exception (hereda de
+  BaseException) -> sale de _run_cycle sin persistir.
+
+**Fix:**
+- Nuevo metodo _write_partial_health(reason) en core/agent.py.
+- Llamado en 3 paths:
+  1. _shutdown_watcher() tras cancelar phase_b_task.
+  2. run() shutdown loop antes del mensaje Telegram final.
+  3. main() finally, ultimo guardado defensivo.
+
+**Efecto verificado:** tras Ctrl+C, health.json tiene
+{partial: true, reason: "...", updated_at: <fresco>} en cada path.
+
+### C. Blindaje handle_signal — CERRADO (commit a982d6b)
+
+**Problema:** en la primera prueba SIGINT real (foreground + Ctrl+C), el log
+cortaba en "Senal 2 recibida. Iniciando shutdown..." sin llegar a
+"Shutdown solicitado..." (que esta en request_shutdown()). El handler moria
+ANTES de marcar shutdown_requested.
+
+**Diagnostico:** alguna excepcion dentro del handler (encoding de emoji,
+Telegram, logging) mataba el flujo antes de setear el flag. Los 2 intentos
+previos con redireccion > log.txt y Tee-Object mataban el proceso antes por
+BrokenPipeError cuando PowerShell cerraba stdout al recibir Ctrl+C.
+
+**Fix:**
+1. agent.shutdown_requested = True PRIMERO, sin logging previo.
+2. Cada bloque en su propio try/except (log signal, setear flag, log
+   diagnostico, telegram).
+3. Emoji cambiado a texto plano en el log del handler.
+4. Fallback a stderr directo con FATAL si el flag no se puede setear.
+
+**Verificacion empirica (prueba real con Start-Transcript):**
+- Senal 2 recibida. Iniciando shutdown...                 [OK]
+- handle_signal: shutdown_requested=True                  [OK]
+- Shutdown watcher: shutdown_requested                    [OK]
+- Shutdown watcher: cancelando phase_b_task               [OK]
+- health.json parcial escrito (watcher)                   [OK]
+- health.json parcial escrito (run)                       [OK]
+- Agente detenido / Shutdown completado                   [OK]
+- Sin tracebacks                                          [OK]
+
+**health.json final:** {cycle: 19, posts_today: 4, comments_today: 5,
+partial: true, reason: "main_finally", updated_at: "2026-09-17T20:16:18+00:00"}
+
+### Pendientes documentados
+
+- **BrokenPipeError con redirecciones PowerShell:** python run_agent.py >
+  log.txt en foreground mata el proceso antes de completar shutdown porque
+  PowerShell cierra el handle de stdout al recibir Ctrl+C. Workaround para
+  pruebas: Start-Transcript (sin pipe). En produccion (run-prod.ps1)
+  el patron es distinto y no afecta.
+- **Phase A no aborta on SIGINT:** el shutdown cooperativo termina la fase
+  en curso (Phase A completo publico un post verificado tras Ctrl+C). Es
+  comportamiento deseable: no arrancar trabajo nuevo, no abortar el actual.
+
+### Commits
+
+    a982d6b  fix(agent): blindar handle_signal contra excepciones internas
+    24715d2  fix(agent): persistir health.json en shutdown paths
+    fff11fe  fix(phase_b): cap de candidatos y replies por ciclo
