@@ -33,7 +33,7 @@ def _do_send_event(event_type: str, payload: Optional[Dict[str, Any]] = None) ->
         record["payload"] = payload
     logger.info("EVENT %s | %s", event_type, json.dumps(payload or {}, default=str, ensure_ascii=False))
 
-    from core.metrics import ingest_event as _ingest
+    from core.daily_metrics import ingest_event as _ingest
     _ingest(event_type, payload)
 
 

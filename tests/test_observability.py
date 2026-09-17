@@ -35,6 +35,6 @@ def test_send_event_no_payload():
 
 
 def test_do_send_event_metrics_error_propagates():
-    with patch("core.metrics.ingest_event", side_effect=RuntimeError("metrics down")):
+    with patch("core.daily_metrics.ingest_event", side_effect=RuntimeError("metrics down")):
         with pytest.raises(RuntimeError, match="metrics down"):
             _do_send_event("cycle_start", {"cycle": 1})

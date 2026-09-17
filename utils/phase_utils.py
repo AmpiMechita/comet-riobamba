@@ -4,7 +4,7 @@ import logging
 import traceback
 from typing import Any, Dict, List, Optional
 
-from services.metrics import incr
+from services.counters import incr
 
 ERROR_METRICS: Dict[str, str] = {
     "phase_a": "phase_a_errors",

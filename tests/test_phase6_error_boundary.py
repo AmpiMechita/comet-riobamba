@@ -18,7 +18,7 @@ from phases.phase_b import PhaseB
 from phases.engagement import PhaseCEngagement
 from phases.phase_a_content import PhaseAContentGeneration
 from phases.phase_c_analytics import PhaseCAnalytics
-from services.metrics import snapshot, incr
+from services.counters import snapshot, incr
 
 
 class FailingModel:
@@ -70,14 +70,15 @@ def test_phase_c_engagement_error_boundary():
 
 
 def test_metrics_incremented():
+    """Dispara los errores en este test (aislado bajo pytest).
+
+    El archivo tambien se puede correr como script via __main__.
+    """
+    # Disparar errores para poblar las metricas en este scope
+    test_phase_b_error_boundary()
+    test_phase_c_engagement_error_boundary()
+
     metrics = snapshot()
     assert metrics.get("phase_b_errors", 0) >= 1, f"phase_b_errors={metrics.get('phase_b_errors', 0)}"
     assert metrics.get("phase_c_engagement_errors", 0) >= 1, f"phase_c_engagement_errors={metrics.get('phase_c_engagement_errors', 0)}"
     print(f"  Metrics verified: phase_b_errors={metrics.get('phase_b_errors', 0)}, phase_c_engagement_errors={metrics.get('phase_c_engagement_errors', 0)}")
-
-
-if __name__ == "__main__":
-    test_phase_b_error_boundary()
-    test_phase_c_engagement_error_boundary()
-    test_metrics_incremented()
-    print("ALL PHASE 6 ERROR BOUNDARY TESTS PASS")
