@@ -129,6 +129,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from config.agent_policy import POLICY
 from config import BASE_DIR
+from config import behavior_cfg
 from core.observability import send_event
 from core.tracer import Span
 from core.value_log import log_value_event
@@ -1757,23 +1758,28 @@ class PhaseB:
 
     @phase_error_boundary(logger, "phase_b", fallback_return={"success": False, "replies_published": 0, "feed_replies": [], "own_post_replies": []})
     async def execute(self) -> Dict[str, Any]:
-        # ── Quiet Hours: Phase B follows same schedule as Phase A (00:00-06:00 local) ──
-        # During Quiet Hours, Phase B only attends high-priority watchlist
+        # ─── Quiet Hours: Phase B follows configured hours ───────────────
         try:
             tz = ZoneInfo(behavior_cfg.get("timezone", "America/Guayaquil"))
-        except Exception:
-            tz = timezone.utc
+        except Exception as e:
+            logger.warning(
+                "Timezone %r no resoluble (%s). Fallback a UTC-5 fijo.",
+                behavior_cfg.get("timezone"), e,
+            )
+            tz = timezone(timedelta(hours=-5))
         current_hour = datetime.now(tz).hour
-        in_quiet_hours = 0 <= current_hour < 6
-        
+        quiet = behavior_cfg.get("quiet_hours", [])
+        comment_hours = behavior_cfg.get("comment_hours", [])
+        in_quiet_hours = (current_hour in quiet) or (bool(comment_hours) and current_hour not in comment_hours)
+
         if in_quiet_hours:
-            logger.info("Phase B: Quiet Hours (00:00-06:00 hora local) - solo operaciones críticas")
+            logger.info("Phase B: Quiet Hours (hora=%s, quiet=%s, comment_hours=%s) - solo operaciones críticas",
+                        current_hour, quiet, comment_hours)
             # Durante Quiet Hours:
             # - NO iniciar nuevas conversaciones en feed
             # - SOLO responder comentarios en posts propios
             # - SOLO responder watchlist de alta prioridad (si hay actividad)
         self.quiet_hours_mode = in_quiet_hours
-
         feed_results: List[Dict[str, Any]] = []
         own_results: List[Dict[str, Any]] = []
 
@@ -2075,6 +2081,8 @@ class PhaseB:
                     continue
                 try:
                     ts_dt = datetime.fromisoformat(ts) if isinstance(ts, str) else None
+                    if ts_dt is not None and ts_dt.tzinfo is None:
+                        ts_dt = ts_dt.replace(tzinfo=timezone.utc)  # FIX 2026-09-13 naive->aware
                 except (ValueError, TypeError):
                     ts_dt = None
                 if ts_dt is not None and ts_dt >= cutoff:
@@ -3218,6 +3226,29 @@ class PhaseB:
         return str(pid or "")
 
     @staticmethod
+    def _post_age_minutes(post: Optional[Dict]) -> Optional[float]:
+        """Edad del post en minutos. None si el timestamp falta o es invalido.
+
+        Acepta created_at o published_at. Soporta sufijo Z (UTC) y naive
+        (se asume UTC). Usado por la fast-lane early-watchlist (25/08/2026)
+        para priorizar posts frescos.
+        """
+        if not post or not isinstance(post, dict):
+            return None
+        ts = post.get("created_at") or post.get("published_at")
+        if not ts or not isinstance(ts, str):
+            return None
+        try:
+            normalized = ts.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(normalized)
+        except (ValueError, TypeError):
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        return (now - dt).total_seconds() / 60.0
+
+    @staticmethod
     def _compute_thread_depth(comment: Dict, all_comments: List[Dict]) -> int:
         """How many levels deep this comment is in the thread.
 
@@ -3389,8 +3420,14 @@ class PhaseB:
         revised_text = (revised or "").strip()
         if not revised_text or len(revised_text) < max(30, len(reply) // 2):
             return reply, f"draft kept (revision peor: {verdict_text[:80]})"
+        # FIX 2026-09-15: guard anti-leak de prompt. El rewrite a veces
+        # devuelve el razonamiento del modelo ("We need to rewrite...") en
+        # vez de la reply revisada. Conservar el borrador original.
+        from services.quality_governor import text_has_reasoning_leak
+        if text_has_reasoning_leak(revised_text):
+            logger.warning("Phase B: rewrite con prompt-leak; se conserva el borrador original")
+            return reply, f"draft kept (prompt-leak en revision: {revised_text[:60]})"
         return revised_text, f"draft revised ({verdict_text[:80]})"
-
     async def _generate_reply_bestof(self, user_prompt: str, system_prompt: str,
                                      title: str, body: str, tier: str = "flash") -> str:
         """Best-of-2: genera 2 borradores y conserva el de mayor _score_reply_draft.
@@ -4828,6 +4865,19 @@ class PhaseB:
         except Exception:
             pass
 
+    def _watchlist_author_at_cap(self, author: str) -> bool:
+        """Predicado puro: True si el autor watchlist ya está en el cap diario.
+
+        Sin side effects (no incrementa). Usado por el filtro del pool de
+        feed para excluir posts de watchlist capped ANTES del truncado a
+        12 (fix anti-estrella 24/08/2026).
+        """
+        if not author:
+            return False
+        key = author.strip().lower()
+        current = self._watchlist_author_count_today.get(key, 0)
+        return current >= self._watchlist_max_per_author_day
+
     def _check_increment_watchlist_cap(self, author: str, is_own_post: bool = False) -> bool:
         """Return True if author can be replied to (under daily cap).
         Inbound en posts propios de watchlist tiene prioridad - no bloquear por cap."""
@@ -5352,8 +5402,6 @@ class PhaseB:
             queries = [q.strip() for q in env_queries_raw.split(",") if q.strip()][:max_q]
 
         return queries
-
-
 
 
 

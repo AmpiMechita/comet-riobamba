@@ -16,7 +16,7 @@ os.environ.update({"DASHSCOPE_API_KEY": "sk-test", "MOLTBOOK_API_KEY": "sk-test"
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s|%(name)s|%(message)s")
 
-from core.metrics import DailyMetrics, save_metrics, METRICS_DIR, ingest_event
+from core.daily_metrics import DailyMetrics, save_metrics, METRICS_DIR, ingest_event
 
 
 # ── Fixtures ─────────────────────────────────────────────────────
@@ -27,7 +27,7 @@ def _clean_metrics():
         for f in METRICS_DIR.iterdir():
             f.unlink()
         METRICS_DIR.rmdir()
-    import core.metrics as _m
+    import core.daily_metrics as _m
     _m._current_metrics = None
     yield
     if METRICS_DIR.exists():

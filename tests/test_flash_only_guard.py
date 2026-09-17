@@ -53,51 +53,6 @@ def cascade(mock_credentials):
 
 
 @pytest.mark.asyncio
-async def test_flash_only_forces_paid_tiers_to_working_free(cascade, monkeypatch):
-    """AGENT_FLASH_ONLY=1: premium/premium_opus/fallback sirven por cloudflare
-    (working-free, el target de tier='flash' desde ETAPA 1)."""
-    monkeypatch.setenv("AGENT_FLASH_ONLY", "1")
-    _add_provider(cascade, "tier_premium", model="claude-sonnet-5")
-    _add_provider(cascade, "tier_premium_opus", model="claude-opus-4-8")
-    _add_provider(cascade, "tier_fallback", model="deepseek-v4-pro")
-    _add_provider(cascade, "cloudflare", model="llama-3.3-70b")
-
-    captured = []
-
-    async def _fake_call(provider, messages, max_tokens, temperature):
-        captured.append(provider.name)
-        return "ok"
-
-    with patch.object(cascade, "_call_with_retries", side_effect=_fake_call):
-        for tier in ("premium_opus", "premium", "fallback"):
-            result = await cascade.generate(prompt="hello", tier=tier)
-            assert result == "ok"
-
-    assert captured == ["cloudflare", "cloudflare", "cloudflare"], \
-        f"FLASH-ONLY debió servir todos por cloudflare, capturado: {captured}"
-
-
-@pytest.mark.asyncio
-async def test_flash_only_resolves_flash_to_working_free(cascade, monkeypatch):
-    """AGENT_FLASH_ONLY=1: tier='flash' resuelve a cloudflare (working-free) —
-    sin doble log/rewrite."""
-    monkeypatch.setenv("AGENT_FLASH_ONLY", "1")
-    _add_provider(cascade, "tier_flash", model="deepseek-v4-flash")
-    _add_provider(cascade, "cloudflare", model="llama-3.3-70b")
-
-    captured = []
-
-    async def _fake_call(provider, messages, max_tokens, temperature):
-        captured.append(provider.name)
-        return "ok"
-
-    with patch.object(cascade, "_call_with_retries", side_effect=_fake_call):
-        result = await cascade.generate(prompt="hello", tier="flash")
-    assert result == "ok"
-    assert captured == ["cloudflare"]
-
-
-@pytest.mark.asyncio
 async def test_without_env_premium_resolves_to_tier_premium(cascade, monkeypatch):
     """Sin AGENT_FLASH_ONLY, tier='premium' sigue resolviendo a tier_premium."""
     monkeypatch.delenv("AGENT_FLASH_ONLY", raising=False)

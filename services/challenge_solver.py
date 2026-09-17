@@ -1,4 +1,4 @@
-﻿import ast
+import ast
 import json
 import os
 import re
@@ -32,6 +32,7 @@ def _append_captcha_sample(sample: Dict[str, Any]) -> None:
             fh.flush()
     except Exception as _e:
         logger.debug("ChallengeSolver: no se pudo registrar sample de captcha (fail-open): %s", _e)
+
 
 class ChallengeSolver:
     @staticmethod
@@ -90,15 +91,42 @@ class ChallengeSolver:
         except Exception:
             return None
 
+    @staticmethod
+    def _looks_obfuscated(text: str) -> bool:
+        """Detecta texto ofuscado que rompe el regex nativo."""
+        import re as _re
+        if not text:
+            return False
+        ofuscs = len(_re.findall(r'[\^\[\]]', text))
+        caps = sum(1 for c in text if c.isupper())
+        letters = sum(1 for c in text if c.isalpha())
+        caps_ratio = caps / letters if letters else 0
+        return ofuscs >= 2 or (0.2 < caps_ratio < 0.8)
+
     async def _extract_and_eval_with_llm(self, challenge_text: str) -> Optional[str]:
         if not self.model_cascade:
             logger.error("ChallengeSolver: ModelCascade no disponible para _extract_and_eval_with_llm.")
             return None
         prompt = (
-            "Extract ONLY the mathematical expression from the text below. "
-            "Return ONLY the expression in simple Python notation "
-            "(e.g. '15 + 23', '7 * 4.5', '100 / 4 + 3'). "
-            "No explanation, no units, no equals sign, no result.\n\n"
+            "Solve a Moltbook CAPTCHA. The text is OBFUSCATED: noise characters "
+            "and mixed capitalization are interleaved inside normal English words.\n\n"
+            "Rules:\n"
+            "1. IGNORE noise characters that are not part of real English or math: "
+            "interleaved / . [ ] ^ ~ | and random CApS.\n"
+            "2. Numbers appear as ENGLISH WORDS, possibly split across noise. "
+            "Reconstruct them:\n"
+            "   - tW/ eNnTtYy sEeVvEeN  = twenty seven = 27\n"
+            "   - FoUr- TeEn           = fourteen     = 14\n"
+            "   - ThIr Ty TwO          = thirty two   = 32\n"
+            "   - fOoU rTtEeN          = fourteen     = 14\n"
+            "3. Extract the operation as a Python expression using only + - * / "
+            "and numbers.\n\n"
+            "Examples:\n"
+            "- Input: A lobster claw force is ThIr Ty TwO newtons and FoUr- TeEn newtons\n"
+            "  Output: 32 + 14\n"
+            "- Input: A lobster lifts with tW/ eNnTtYy sEeVvEeN newtons + fOoU rTtEeN newtons\n"
+            "  Output: 27 + 14\n\n"
+            "Return ONLY the expression. No explanation. No units. No equals sign.\n\n"
             f"Text: {challenge_text}"
         )
         try:
@@ -155,38 +183,50 @@ class ChallengeSolver:
         self._last_native_expr = None
         self._last_extracted_expr = None
         self._last_llm_raw = None
-        llm_attempted = False
 
-        logger.info("ChallengeSolver: Intentando resolver CAPTCHA nativamente con Python...")
-        answer = solve_captcha_math(challenge_text) or self._solve_native_math(challenge_text)
-        extracted_expr = self._last_native_expr if answer else None
+        answer = None
+        source = None
+        extracted_expr = None
+        native_tried = False
 
-        if not answer:
-            llm_attempted = True
-            logger.info("ChallengeSolver: Nativo fallo. Intentando extraer expresion con LLM y evaluar localmente...")
+        # Paso 1: LLM primero
+        try:
+            logger.info("ChallengeSolver: Intentando resolver CAPTCHA con LLM...")
             answer = await self._extract_and_eval_with_llm(challenge_text)
             if answer:
+                source = "llm"
                 extracted_expr = self._last_extracted_expr
+        except Exception as e:
+            logger.warning("ChallengeSolver: LLM falló (%s), probando nativo...", e)
 
-        if not answer:
-            logger.info("ChallengeSolver: LLM+eval fallo. Intentando con LLM como respaldo...")
-            answer = await self._solve_with_llm(challenge_text)
-            if answer:
-                extracted_expr = self._last_llm_raw
+        # Paso 2: fallback nativo (solo si LLM falló y el texto NO está ofuscado)
+        if not answer and not self._looks_obfuscated(challenge_text):
+            try:
+                logger.info("ChallengeSolver: Intentando resolver CAPTCHA nativamente con Python...")
+                answer = solve_captcha_math(challenge_text) or self._solve_native_math(challenge_text)
+                if answer:
+                    source = "native"
+                    extracted_expr = self._last_native_expr
+            except Exception as e:
+                logger.warning("ChallengeSolver: nativo falló (%s)", e)
+            native_tried = True
+        elif not answer:
+            logger.info("ChallengeSolver: texto ofuscado detectado, saltando parser nativo.")
 
+        # Paso 3: validar formato
         if not answer:
-            logger.warning("ChallengeSolver: No se pudo resolver el challenge (ni Python ni LLM).")
+            logger.error("ChallengeSolver: sin respuesta (LLM y nativo fallaron)")
             _record_sample(extracted_expr, None, None, None, False)
             return False
 
-        if not re.match(r"^-?\d+\.\d{2}$", str(answer).strip()):
-            logger.warning(f"ChallengeSolver: respuesta no confiable o con formato invalido: {answer!r}")
-            _record_sample(extracted_expr, str(answer), None, None, False)
+        answer = str(answer).strip()
+        if not re.match(r"^-?\d+\.\d{2}$", answer):
+            logger.error(f"ChallengeSolver: formato invalido: {answer!r}")
+            _record_sample(extracted_expr, answer, None, None, False)
             return False
 
-        answer = str(answer).strip()
-        logger.info(f"ChallengeSolver: Respuesta final '{answer}'. Enviando a Moltbook via submit_verification...")
-
+        # Paso 4: submit UNICO
+        logger.info(f"ChallengeSolver: Respuesta final '{answer}' (source={source}). Enviando...")
         try:
             result = self.moltbook.submit_verification(verification_code, answer)
 
@@ -195,7 +235,7 @@ class ChallengeSolver:
                 _record_sample(extracted_expr, answer, result.get("status"), None, True, result)
                 return True
             else:
-                logger.warning(f"ChallengeSolver: Moltbook rechazo la respuesta. Result: {result}")
+                logger.warning(f"ChallengeSolver: Moltbook rechazo la respuesta (status={result.get('status')}). NO reintentar (single-use).")
                 raw = result.get("raw") if isinstance(result, dict) else None
                 server_message = None
                 if isinstance(raw, dict):
@@ -208,49 +248,6 @@ class ChallengeSolver:
                     False,
                     result,
                 )
-
-                # ── Reintento UNICO asistido por LLM tras rechazo del servidor ──
-                # Caso real (20/08/2026 20:09): el solver nativo extrajo una
-                # expresion de 2 operandos y Moltbook la rechazo ("Incorrect
-                # answer"), pero el flujo original terminaba sin consultar al
-                # LLM porque nativo SI produjo respuesta. Un solo reintento:
-                # evita martillar submit_verification con respuestas equivocadas.
-                if not llm_attempted:
-                    logger.info("ChallengeSolver: rechazo con respuesta nativa; reintento unico via LLM...")
-                    llm_attempted = True
-                    llm_answer = await self._extract_and_eval_with_llm(challenge_text)
-                    llm_expr = self._last_extracted_expr
-                    if not llm_answer:
-                        llm_answer = await self._solve_with_llm(challenge_text)
-                        llm_expr = self._last_llm_raw
-                    retry_answer = str(llm_answer).strip() if llm_answer else ""
-                    if retry_answer and re.match(r"^-?\d+\.\d{2}$", retry_answer) and retry_answer != answer:
-                        try:
-                            result2 = self.moltbook.submit_verification(verification_code, retry_answer)
-                            if result2 and (result2.get("success") or result2.get("status") in (200, 201, 204)):
-                                logger.info(
-                                    "✅ ChallengeSolver: verificacion exitosa en reintento LLM (%s)!",
-                                    retry_answer,
-                                )
-                                _record_sample(llm_expr, retry_answer, result2.get("status"), None, True, result2)
-                                return True
-                            _record_sample(
-                                llm_expr,
-                                retry_answer,
-                                result2.get("status") if isinstance(result2, dict) else None,
-                                None,
-                                False,
-                                result2,
-                            )
-                            logger.warning("ChallengeSolver: reintento LLM tambien rechazado; abandonando.")
-                        except Exception as e2:
-                            logger.error("ChallengeSolver: error en reintento LLM: %s", e2)
-                            _record_sample(llm_expr, retry_answer, None, str(e2), False)
-                    else:
-                        logger.info(
-                            "ChallengeSolver: LLM sin alternativa valida (respuesta=%r); se mantiene el fallo inicial.",
-                            retry_answer or None,
-                        )
                 return False
         except Exception as e:
             logger.error(f"ChallengeSolver: Error al enviar respuesta a Moltbook: {e}")
@@ -299,7 +296,7 @@ class ChallengeSolver:
         """Extraccion de la expresion del CAPTCHA: gratis (classify) primero,
         tier_flash como ultimo recurso. Una expresion matematica no necesita un
         modelo de frontera; Anthropic queda fuera del camino de clasificacion."""
-        for _tier in ["classify", "flash"]:
+        for _tier in ["classify", "flash", "pro"]:
             try:
                 response = await self.model_cascade.generate(
                     prompt=prompt,
@@ -313,7 +310,7 @@ class ChallengeSolver:
                     return response
             except Exception as _e:
                 logger.warning(f"ChallengeSolver: tier={_tier} fallido: {_e}. Intentando siguiente...")
-        raise Exception("Todos los tiers CAPTCHA fallaron (classify, flash)")
+        raise Exception("Todos los tiers CAPTCHA fallaron (classify, flash, pro)")
 
     async def _solve_with_llm(self, text: str) -> Optional[str]:
         if not self.model_cascade:
@@ -346,16 +343,3 @@ class ChallengeSolver:
         except Exception as e:
             logger.error(f"ChallengeSolver: Error llamando al LLM: {e}")
             return None
-
-
-
-
-
-
-
-
-
-
-
-
-

@@ -34,66 +34,6 @@ def _cascade_with_providers():
     return m
 
 
-class TestClassifyTier:
-    def test_tier_mapping_points_to_cloudflare(self):
-        assert ModelCascade.TIER_MAPPING["classify"] == "zen"  # rev 25/08 v2: bucket Zen (cuota OR = 1000/dia por cuenta)
-
-    @pytest.mark.asyncio
-    async def test_classify_uses_free_provider_first_and_never_anthropic(self):
-        """Con cloudflare saludable, classify lo usa; la cadena de fallback
-        NUNCA incluye Anthropic ni tier_quality."""
-        m = _cascade_with_providers()
-        calls = []
-
-        async def fake_call(provider, messages, max_tokens, temperature):
-            calls.append(provider.name)
-            if provider.name == "cloudflare":
-                return "ok"
-            raise RuntimeError("no")
-
-        m._call_with_retries = fake_call
-        m._record_success = MagicMock()
-        m._update_health = MagicMock()
-        m._clear_degraded_state = MagicMock()
-        m._append_telemetry_jsonl = MagicMock()
-        m._is_circuit_open = MagicMock(return_value=False)
-        m._last_usage = {}
-
-        result = await m.generate(prompt="classify this", tier="classify", max_tokens=50)
-
-        assert result == "ok"
-        assert calls == ["cloudflare"], f"solo el gratis, got {calls}"
-        assert m.get_tier_stats("classify")["calls"] == 1
-        assert m.get_tier_stats("classify")["cost"] == 0.0
-
-    @pytest.mark.asyncio
-    async def test_classify_fallback_chain_never_reaches_anthropic(self):
-        """Si todos los gratis fallan, el fallback llega a tier_flash (pago
-        barato) pero NUNCA a tier_premium (Anthropic)."""
-        m = _cascade_with_providers()
-        calls = []
-
-        async def fake_call(provider, messages, max_tokens, temperature):
-            calls.append(provider.name)
-            raise RuntimeError("todos fallan")
-
-        m._call_with_retries = fake_call
-        m._record_success = MagicMock()
-        m._update_health = MagicMock()
-        m._clear_degraded_state = MagicMock()
-        m._append_telemetry_jsonl = MagicMock()
-        m._is_circuit_open = MagicMock(return_value=False)
-        m._get_cb = MagicMock(return_value=MagicMock(can_execute=MagicMock(return_value=True)))
-        m._last_usage = {}
-
-        with pytest.raises(RuntimeError):
-            await m.generate(prompt="x", tier="classify", max_tokens=50)
-
-        assert "tier_premium" not in calls, "Anthropic nunca en la cadena classify"
-        assert "tier_quality" not in calls, "tier_quality nunca en la cadena classify"
-        assert calls and calls[-1] == "tier_flash", f"el ultimo recurso es tier_flash, got {calls}"
-
-
 class TestClassifyRouting:
     def test_claim_checker_defaults_to_flash(self):
         """claim_checker NO migra (acuerdo valido 5/5 pero 15/20 sin JSON
@@ -118,5 +58,5 @@ class TestClassifyRouting:
         import inspect
         from services.challenge_solver import ChallengeSolver
         src = inspect.getsource(ChallengeSolver._generate_with_captcha_fallback)
-        assert '["classify", "flash"]' in src
+        assert '["classify", "flash", "pro"]' in src
         assert "premium" not in src

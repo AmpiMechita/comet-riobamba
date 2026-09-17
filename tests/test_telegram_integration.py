@@ -1,6 +1,8 @@
 """Tests for Telegram integration: balance checks and energy intel alerts."""
 
 import pytest
+
+pytestmark = pytest.mark.allow_telegram
 from unittest.mock import patch, MagicMock
 from datetime import date, datetime, timedelta
 from pathlib import Path

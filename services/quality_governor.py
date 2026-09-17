@@ -236,45 +236,93 @@ def main():
 
 
 def text_has_reasoning_leak(text: str):
-    scaffolds = ['primero,', 'segundo,', 'tercero,', 'en conclusion', 'finalmente,', 
-                 'por un lado', 'por otro lado', 'en resumen', 'para concluir']
+    """True si el texto contiene fuga de razonamiento / scaffolds internos.
+
+    FIX 2026-09-14: firma unificada a bool + patrones ampliados para
+    cubrir los casos reales detectados en Moltbook (24-25/08/2026):
+    - Labels estructurados (TITLE/Role/Structure/Core principles/Paragraph N)
+    - Thinking process leaks ("Here's a thinking process")
+    - Instrucciones narrativas (We need to respond/reply/produce/acknowledge)
+    - Persona directives (Must be in X mode, as an engineer addressing)
+    - Separador HR y flechas de scaffold
+    """
+    if not text:
+        return False
+
     text_lower = text.lower()
+
+    # 1. Scaffolds clasicos de prosa (listas de pasos, conclusiones)
+    scaffolds = ['primero,', 'segundo,', 'tercero,', 'en conclusion', 'finalmente,',
+                 'por un lado', 'por otro lado', 'en resumen', 'para concluir']
     for scaffold in scaffolds:
         if scaffold in text_lower:
-            return True, f'Contiene scaffold: {scaffold}'
+            return True
+
+    # 2. Labels estructurados de prompt (TITLE:, **Role**:, Structure:, etc.)
+    if re.search(r'(?im)^\s*(?:\*\*)?(?:TITLE|Role|Structure|Core principles)(?:\*\*)?\s*:', text):
+        return True
+    if re.search(r'(?im)^\s*Paragraph\s+\d+(?:\s*\([^)]*\))?\s*:', text):
+        return True
+
+    # 3. Thinking process leaks
+    if re.search(r"(?i)here'?s (?:a |the )?thinking process", text):
+        return True
+
+    # 4. Instrucciones narrativas (1a persona plural + verbo de instruccion)
+    if re.search(r'(?i)\bwe need to (?:respond to|reply|produce a|acknowledge|address the specific|rewrite the draft)\b', text):
+        return True
+    if re.search(r'(?i)\bnecesitamos responder\b', text):
+        return True
+    if re.search(r'(?i)\bdebemos reconocer puntos\b', text):
+        return True
+
+    # 5. Persona directives
+    if re.search(r'(?i)\bmust be in \w+ mode\b', text):
+        return True
+    if re.search(r'(?i)\bas an engineer,? addressing\b', text):
+        return True
+
+    # 6. Separador HR y flechas de scaffold
+    if re.search(r'(?m)^---\s*$', text):
+        return True
+    if re.search(r'->\s*\w+\s*->', text):
+        return True
+
     return False
 
-
 def title_has_scaffold(title: str):
+    if not title:
+        return False
+
     # Patrones de clickbait SEO
     seo_scaffolds = ['guia completa', 'todo sobre', 'todo lo que', 'como hacer', 'mejores', 'top ']
     # Patrones de scaffold interno / reasoning leak (24/08/2026)
     internal_scaffolds = [
-        "here's a thinking process:", "he aquí un proceso de pensamiento:", "he aqui un proceso de pensamiento:", "here's the thinking process:",
+        "here's a thinking process:", "he aqui un proceso de pensamiento:", "here's the thinking process:",
         "thinking process:", "critique:**", "critique:", "**critique:",
         "we need to critique", "let's critique", "draft...", "pre-critique",
         "post-mortem:", "analysis:", "reasoning:", "step ", "step:",
     ]
     title_lower = title.lower()
-    
-    # Check SEO scaffolds
+
     for scaffold in seo_scaffolds:
         if scaffold in title_lower:
             return True
-    
-    # Check internal scaffolds / reasoning leaks
+
     for scaffold in internal_scaffolds:
         if scaffold in title_lower:
             return True
-    
-    # Check si termina en ':' (instruccion, no titulo)
+
+    # FIX 2026-09-14: label "Role:" como titulo (fuga real en Moltbook).
+    if re.match(r'^\s*(?:\*\*)?(?:Role|Rol)(?:\*\*)?\s*:', title, re.IGNORECASE):
+        return True
+
     if title.rstrip().endswith(':'):
         return True
-    
-    # Check si empieza como item de lista
-    if re.match(r'^\s*[-•*]\s', title) or re.match(r'^\s*\d+\.\s', title):
+
+    if re.match(r'^\s*[-*]\s', title) or re.match(r'^\s*\d+\.\s', title):
         return True
-    
+
     return False
 
 def text_template_fatigue(text: str, bodies=None, min_posts=3):

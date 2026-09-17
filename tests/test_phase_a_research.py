@@ -6,6 +6,26 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 pytest_plugins = ("pytest_asyncio",)
 
+def _mock_cascade():
+    """AsyncMock configurado como ModelCascade real.
+
+    AsyncMock() por defecto crea child attrs async, lo que rompe el
+    cost-capture de Phase A ('coroutine' object has no attribute 'get').
+    Configuramos TIER_MAPPING y _last_usage como valores reales.
+    """
+    from unittest.mock import AsyncMock as _AM
+    mc = _AM()
+    mc.TIER_MAPPING = {
+        "premium": "tier_pro",
+        "premium_opus": "tier_pro",
+        "flash": "tier_flash",
+        "fallback": "tier_fallback",
+        "classify": "tier_flash",
+    }
+    mc._last_usage = {}
+    return mc
+
+
 from phases.phase_a_content import (
     build_prompts, choose_topic, EDITORIAL_CONFIG,
     RESEARCH_CLOSING_TEMPLATES, _topic_with_matrix_fallback,
@@ -89,12 +109,15 @@ _GOOD_SUBSTANTIVE_2 = (
 
 
 class TestResearchMode:
-    def test_research_prompt_contains_problem_section(self):
-        """Research mode prompt must mention PROBLEM section."""
+    def test_research_prompt_has_structured_paragraphs(self):
+        """Research mode prompt debe definir una estructura de 3 parrafos:
+        tension -> mecanismo+intervencion -> pregunta o asercion final."""
         sys_prompt, user_prompt = build_prompts("agent tool safety", mode="research")
-        assert "PROBLEM" in user_prompt
-        assert "PROPOSAL" in user_prompt
-        assert "RESEARCH QUESTION" in user_prompt
+        up = user_prompt.lower()
+        assert "tension" in up, "falta mencion de 'tension'"
+        assert "mechanism" in up, "falta mencion de 'mechanism'"
+        assert "intervention" in up, "falta mencion de 'intervention'"
+        assert "question" in up or "assertion" in up, "falta pregunta/asercion final"
 
     def test_expository_prompt_does_not_contain_research_sections(self):
         """Expository mode must NOT contain research-specific sections."""
@@ -310,14 +333,20 @@ class TestResearchMode:
 # ── Fix 1: Pacing check antes del loop de generación ────────────
 
 @pytest.mark.asyncio
-async def test_execute_pacing_blocks_before_model_call():
-    """Pacing check debe ejecutarse ANTES de llamar al modelo (no gasta LLM si no se puede publicar)."""
+async def test_execute_pacing_blocks_before_model_call(monkeypatch):
+    """Pacing check bloquea cuando PACING_MIN_HOURS > 0.
+
+    v5.3 dejo PACING_MIN_HOURS=0 (sin limite: el agente decide).
+    Este test verifica el MECANISMO, forzando el umbral a 2h.
+    """
     from datetime import datetime, timedelta
     from phases.deps import PhaseADeps
     from phases.phase_a_content import PhaseAContentGeneration
+    import core.state_manager as sm
+    monkeypatch.setattr(sm, "PACING_MIN_HOURS", 2)
 
     deps = PhaseADeps(
-        model_cascade=AsyncMock(),
+        model_cascade=_mock_cascade(),
         moltbook_client=MagicMock(),
         behavior_cfg={"max_posts_per_day": 5},
         posts_today=0,
@@ -571,7 +600,7 @@ async def test_retry_sends_correction_in_second_attempt(monkeypatch, tmp_path):
     )
 
     deps = PhaseADeps(
-        model_cascade=AsyncMock(),
+        model_cascade=_mock_cascade(),
         moltbook_client=MagicMock(),
         behavior_cfg={"max_posts_per_day": 5},
         posts_today=0,
@@ -693,7 +722,7 @@ class TestArxivCitation:
         from datetime import datetime
 
         deps = PhaseADeps(
-            model_cascade=AsyncMock(),
+            model_cascade=_mock_cascade(),
             moltbook_client=MagicMock(),
             behavior_cfg={"max_posts_per_day": 5},
             posts_today=0,
@@ -757,7 +786,7 @@ class TestArxivCitation:
         monkeypatch.setattr("phases.phase_a_content._REJECTED_POSTS_LOG", rejected_log)
 
         deps = PhaseADeps(
-            model_cascade=AsyncMock(),
+            model_cascade=_mock_cascade(),
             moltbook_client=MagicMock(),
             behavior_cfg={"max_posts_per_day": 5},
             posts_today=0,

@@ -17,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from core.metrics import load_metrics
+from core.daily_metrics import load_metrics
 
 
 def print_weekly_top_agents() -> None:

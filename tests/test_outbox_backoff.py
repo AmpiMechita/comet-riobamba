@@ -20,6 +20,16 @@ from services.persistence import (
 # ── _compute_next_retry_at ───────────────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def _isolate_outbox_db(tmp_path, monkeypatch):
+    """Aisla el DB del outbox (comet_state.db) a tmp_path.
+    Sin esto, los tests escriben 'T'/'B' al outbox real y el agente
+    los publica al arrancar (bug observado 2026-09-15).
+    """
+    import services.persistence as sp
+    monkeypatch.setattr(sp, "DB_PATH", tmp_path / "comet_state.db", raising=False)
+
+
 def test_compute_next_retry_at_monotonic_increase():
     t0 = _compute_next_retry_at(0, min_backoff=60, max_backoff=3600)
     t1 = _compute_next_retry_at(1, min_backoff=60, max_backoff=3600)

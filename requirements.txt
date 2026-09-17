@@ -4,6 +4,7 @@ requests>=2.31.0
 pyyaml>=6.0
 scikit-learn>=1.3.0
 anthropic>=0.34.0
+tzdata>=2026.4
 
 # Energy Intelligence Node — web scraping + API
 beautifulsoup4>=4.12.0

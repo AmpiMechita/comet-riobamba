@@ -29,6 +29,26 @@ from phases.phase_a_content import (
 )
 from services.incident_store import extract_incident_figures
 
+def _mock_cascade():
+    """AsyncMock configurado como ModelCascade real.
+
+    AsyncMock() por defecto crea child attrs async, lo que rompe el
+    cost-capture de Phase A ('coroutine' object has no attribute 'get').
+    Configuramos TIER_MAPPING y _last_usage como valores reales.
+    """
+    from unittest.mock import AsyncMock as _AM
+    mc = _AM()
+    mc.TIER_MAPPING = {
+        "premium": "tier_pro",
+        "premium_opus": "tier_pro",
+        "flash": "tier_flash",
+        "fallback": "tier_fallback",
+        "classify": "tier_flash",
+        "default": "tier_flash",
+    }
+    mc._last_usage = {}
+    return mc
+
 
 def _incident(inc_id="inc-test-1", used=False):
     return {
@@ -306,7 +326,7 @@ class TestIncidentFiguresGate:
     def _deps(self):
         from phases.deps import PhaseADeps
         return PhaseADeps(
-            model_cascade=AsyncMock(),
+            model_cascade=_mock_cascade(),
             moltbook_client=MagicMock(),
             behavior_cfg={"max_posts_per_day": 5},
             posts_today=0,
@@ -503,7 +523,7 @@ class TestSingleFigureGate:
 
         _seed([dict(_BREAKER_INCIDENT)])
         deps = PhaseADeps(
-            model_cascade=AsyncMock(),
+            model_cascade=_mock_cascade(),
             moltbook_client=MagicMock(),
             behavior_cfg={"max_posts_per_day": 5},
             posts_today=0,
@@ -557,7 +577,7 @@ class TestSingleFigureGate:
 
         _seed([dict(_BREAKER_INCIDENT)])
         deps = PhaseADeps(
-            model_cascade=AsyncMock(),
+            model_cascade=_mock_cascade(),
             moltbook_client=MagicMock(),
             behavior_cfg={"max_posts_per_day": 5},
             posts_today=0,
@@ -597,12 +617,20 @@ class TestSingleFigureGate:
 
 class TestThresholdHonesty:
     def test_core_principles_require_calibratable_thresholds(self):
-        from phases.phase_a_content import EDITORIAL_CONFIG as ec
-        joined = "\n".join(ec["core_principles"])
-        assert "calibratable starting point" in joined
-        assert "rather than 'gate at 0.4'" in joined
-        assert "incident store ARE measured and may be stated flatly" in joined
+        """Verifica el CONCEPTO: los principios deben exigir etiquetar
+        umbrales no medidos como punto de partida calibrable.
 
+        Fix 2026-09-14: la version previa exigia strings literales
+        ("calibratable starting point", "rather than 'gate at 0.4'") que
+        quedaron obsoletos al reescribir los principios. Ahora se verifica
+        la semantica de forma flexible.
+        """
+        from phases.phase_a_content import EDITORIAL_CONFIG as ec
+        joined = "\n".join(ec["core_principles"]).lower()
+        assert "starting point" in joined or "starting threshold" in joined, \
+            f"falta 'starting point/threshold' en core_principles"
+        assert "calibrate" in joined or "calibratable" in joined, \
+            "falta la idea de 'calibrate/calibratable'"
     def test_incident_figures_are_stated_flat_not_calibratable(self):
         _, user_prompt = build_prompts(
             _BREAKER_INCIDENT["title"],
@@ -793,7 +821,7 @@ async def test_execute_marks_incident_used_on_publish():
     _seed([_incident("inc-pub", used=False)])
 
     deps = PhaseADeps(
-        model_cascade=AsyncMock(),
+        model_cascade=_mock_cascade(),
         moltbook_client=MagicMock(),
         behavior_cfg={"max_posts_per_day": 5},
         posts_today=0,

@@ -19,13 +19,32 @@ from phases.deps import PhaseADeps, PhaseBDeps
 from phases.phase_a_content import PhaseAContentGeneration, EDITORIAL_CONFIG
 from phases.phase_b import PhaseB
 
+def _mock_cascade():
+    """AsyncMock configurado como ModelCascade real.
+
+    AsyncMock() por defecto crea child attrs async, lo que rompe el
+    cost-capture de Phase A ('coroutine' object has no attribute 'get').
+    """
+    from unittest.mock import AsyncMock as _AM
+    mc = _AM()
+    mc.TIER_MAPPING = {
+        "premium": "tier_pro",
+        "premium_opus": "tier_pro",
+        "flash": "tier_flash",
+        "fallback": "tier_fallback",
+        "classify": "tier_flash",
+        "default": "tier_flash",
+    }
+    mc._last_usage = {}
+    return mc
+
 
 # ── Fixtures / helpers ────────────────────────────────────────────────
 
 
 def _make_phase_a_deps(**kwargs) -> PhaseADeps:
     return PhaseADeps(
-        model_cascade=AsyncMock(),
+        model_cascade=_mock_cascade(),
         moltbook_client=MagicMock(),
         behavior_cfg={"max_posts_per_day": 5},
         posts_today=0,
@@ -262,7 +281,7 @@ def _make_pb(**kwargs) -> PhaseB:
         **kwargs,
     }
     deps = PhaseBDeps(
-        model_cascade=AsyncMock(),
+        model_cascade=_mock_cascade(),
         moltbook_client=MagicMock(),
         behavior_cfg=cfg,
         agent_name="comet_riobamba",

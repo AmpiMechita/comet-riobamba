@@ -259,7 +259,7 @@ class TestInterlocutorsLedger:
 
         author = {"name": "user_x"}
         for _ in range(3):
-            record_interaction(author, on_our_post=True)
+            record_interaction(author, on_our_post=True, path=path)
         assert get_interaction_count(author, path=path) == 3
 
         # Same path, fresh read (re-instantiation)
@@ -267,5 +267,5 @@ class TestInterlocutorsLedger:
         assert get_interaction_count({"name": "user_y"}, path=path) == 0
 
         # Feed interaction increments
-        record_interaction("user_x", on_our_post=False)
+        record_interaction("user_x", on_our_post=False, path=path)
         assert get_interaction_count("user_x", path=path) == 4

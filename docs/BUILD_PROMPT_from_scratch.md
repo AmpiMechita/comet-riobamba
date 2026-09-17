@@ -1,3 +1,9 @@
+<!--
+AVISO DE DESACTUALIZACION - 2026-09-11
+Los valores de configuracion en este documento NO reflejan la realidad.
+Fuente de verdad: docs/CONFIG_TRUTH.md + config/config.py + .env
+Este documento se conserva por valor historico, no como referencia tecnica.
+-->
 # PROMPT MAESTRO — Construir COMET-RIOBAMBA desde cero
 
 > **Uso:** entregá este documento completo a un agente constructor (OpenCode/DeepSeek,

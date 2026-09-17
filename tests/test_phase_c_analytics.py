@@ -163,16 +163,18 @@ class TestEnergyIntelCadence:
             analytics._maybe_run_energy_intel()
         mock_run.assert_not_called()
 
-    def test_energy_intel_skips_without_telegram(self, deps):
-        """Sin telegram habilitado, el hook no corre aunque el toggle este activo."""
+    def test_energy_intel_runs_ingest_without_telegram(self, deps):
+        """Sin telegram, el ingest corre (info al research_agenda);
+        solo las alertas Telegram quedan off (diseño v5.x)."""
         analytics = PhaseCAnalytics(deps)
         analytics.telegram = None
         with patch("phases.phase_c_analytics.behavior_cfg",
                    {"energy_intel_enabled": True}), \
+             patch("services.energy_intel_telegram.should_run_energy_intel", return_value=True), \
              patch("services.energy_intel_telegram.run_energy_intel_with_alerts") as mock_run:
             analytics._maybe_run_energy_intel()
-        mock_run.assert_not_called()
-
+        # ingest corre con telegram=None (no crashea)
+        mock_run.assert_called_once_with(None)
     @pytest.mark.asyncio
     async def test_energy_intel_runs_even_when_analytics_gated(self, deps):
         """P3: el hook de Energy Intel corre ANTES del gate de analytics de 24h

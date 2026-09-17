@@ -1,3 +1,9 @@
+<!--
+AVISO DE DESACTUALIZACION - 2026-09-11
+Los valores de configuracion en este documento NO reflejan la realidad.
+Fuente de verdad: docs/CONFIG_TRUTH.md + config/config.py + .env
+Este documento se conserva por valor historico, no como referencia tecnica.
+-->
 # COMET-RIOBAMBA v5.2 - Master Reference Document
 
 > **Canonical project reference for research engineers, agent engineers, SREs, and collaborators.**

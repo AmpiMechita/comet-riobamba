@@ -88,6 +88,8 @@ class COMETRiobambaAgent:
         self.config_version = content_cfg.get("config_version", "5.0")
         self.start_time = datetime.now()
         self.shutdown_requested = False
+        self._phase_b_task: Optional[asyncio.Task] = None
+        self._shutdown_watcher_task: Optional[asyncio.Task] = None
         self._last_watchdog_check = 0.0
         self.state = AgentState()
 
@@ -819,6 +821,7 @@ class COMETRiobambaAgent:
 
         try:
             a_results: Dict[str, Any] = {}
+            skip_remaining = False
 
             # ── Launch Phase B in background while Phase A generates ──
             phase_b_task = None
@@ -826,8 +829,12 @@ class COMETRiobambaAgent:
                 send_event("phase_b_scan_start", {"cycle": self.cycle_count})
                 logger.info("Phase B: launched in background while Phase A generates")
                 phase_b_task = asyncio.create_task(self._run_phase_b())
+                self._phase_b_task = phase_b_task
+            if self.shutdown_requested:
+                logger.info("Cycle: shutdown_requested tras launch Phase B. Saltando Phase A.")
+                skip_remaining = True
 
-            if not phase_a_blocked:
+            if not phase_a_blocked and not skip_remaining:
                 logger.info("Outbox: reintentando posts pendientes antes de Fase A...")
                 outbox_published = self._retry_outbox()
                 if outbox_published > 0:
@@ -865,6 +872,9 @@ class COMETRiobambaAgent:
                 logger.info("\nFASE A: Generación de Contenido Original")
                 a_results = await self._run_phase_a()
 
+            if self.shutdown_requested:
+                logger.info("Cycle: shutdown_requested tras Phase A. Saltando Phase B/C.")
+                skip_remaining = True
             results["phase_a"] = a_results
 
             diagnosis = getattr(self._phase_a_deps, "self_diagnosis", None)
@@ -887,9 +897,25 @@ class COMETRiobambaAgent:
                 else:
                     send_event("phase_a_publish_skip", {"reason": "no_content", "cycle": self.cycle_count})
 
-            if behavior_cfg.get("phase_b_enabled") and not behavior_cfg.get("whisper_mode"):
+            if skip_remaining and phase_b_task is not None:
+                logger.info("Cycle: shutdown_requested. Cancelando Phase B task.")
+                phase_b_task.cancel()
+                try:
+                    await phase_b_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception as _exc:
+                    logger.warning("Error cancelando phase_b_task: %s", _exc)
+                phase_b_task = None
+                results["phase_b"] = {"skipped": "shutdown"}
+
+            if behavior_cfg.get("phase_b_enabled") and not behavior_cfg.get("whisper_mode") and not skip_remaining:
                 if phase_b_task is not None:
-                    b_results = await phase_b_task
+                    try:
+                        b_results = await phase_b_task
+                    except asyncio.CancelledError:
+                        logger.info("Phase B task cancelada durante shutdown")
+                        b_results = {"skipped": "shutdown"}
                     results["phase_b"] = b_results
                 else:
                     # Fallback: Phase B wasn't launched (whisper mode)
@@ -913,7 +939,7 @@ class COMETRiobambaAgent:
                             logger.warning("⚠ Telegram alert error: %s", e)
 
             # ── Phase C: Watchlist Comments (nuevo) ──
-            if behavior_cfg.get("phase_c_enabled") and not behavior_cfg.get("whisper_mode"):
+            if behavior_cfg.get("phase_c_enabled") and not behavior_cfg.get("whisper_mode") and not skip_remaining:
                 logger.info("\nFASE C: Comentarios Watchlist")
                 try:
                     phase_c_metrics = await run_phase_c_if_enabled(
@@ -940,7 +966,7 @@ class COMETRiobambaAgent:
                     results["phase_c_watchlist"] = {"error": str(e)}
 
             # ── Phase C: Analytics & Optimización (existente) ──
-            if behavior_cfg.get("phase_c_enabled"):
+            if behavior_cfg.get("phase_c_enabled") and not skip_remaining:
                 logger.info("\nFASE C: Analytics & Optimización")
                 c_results = await self._run_phase_c()
                 results["phase_c"] = c_results
@@ -989,6 +1015,31 @@ class COMETRiobambaAgent:
 
         return results
 
+    async def _shutdown_watcher(self) -> None:
+        """Vigila shutdown_requested y cancela phase_b_task al vuelo.
+
+        Resuelve el caso donde Ctrl+C llega mid-Phase-B: el ciclo principal
+        está bloqueado en un await largo y solo un watcher externo puede
+        interrumpirlo antes de que procese cientos de candidatos.
+        """
+        try:
+            while not self.shutdown_requested:
+                await asyncio.sleep(0.5)
+            logger.info("Shutdown watcher: shutdown_requested detectado")
+            task = self._phase_b_task
+            if task is not None and not task.done():
+                logger.info("Shutdown watcher: cancelando phase_b_task")
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                except Exception as e:
+                    logger.warning("Shutdown watcher: error al cancelar phase_b_task: %s", e)
+            logger.info("Shutdown watcher: completado")
+        except asyncio.CancelledError:
+            pass
+
     async def run(self):
         logger.info("=" * 58)
         logger.info("COMET-RIOBAMBA v%s", self.version)
@@ -1022,6 +1073,10 @@ class COMETRiobambaAgent:
         if self.telegram_client and self.telegram_client.enabled:
             asyncio.create_task(self.telegram_client.listen_for_commands(self))
             logger.info("✅ Telegram listener background task started")
+
+        # ── Start shutdown watcher (cancela Phase B si llega SIGINT mid-cycle) ──
+        self._shutdown_watcher_task = asyncio.create_task(self._shutdown_watcher())
+        logger.info("✅ Shutdown watcher background task started")
 
         # ── Update Moltbook profile on startup ──
         try:
@@ -1236,6 +1291,14 @@ async def main(credentials: Optional[Credentials] = None):
     def handle_signal(signum, frame):
         logger.info("Señal %s recibida. Iniciando shutdown...", signum)
         agent.request_shutdown()
+        # ─── Shutdown notification ───────────────
+        if agent.telegram_client and agent.telegram_client.enabled:
+            try:
+                agent.telegram_client.send_message(
+                    "🛑 <b>Agente detenido</b>\nShutdown graceful completado."
+                )
+            except Exception as e:
+                logger.warning("No se pudo enviar notificación shutdown: %s", e)
 
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
@@ -1246,6 +1309,20 @@ async def main(credentials: Optional[Credentials] = None):
         logger.info("Interrupción manual detectada")
     finally:
         agent.request_shutdown()
+        # ── Cancel pending tasks (listener, phase_b_task, etc) ──
+        try:
+            current = asyncio.current_task()
+            pending = [t for t in asyncio.all_tasks() if t is not current]
+            if pending:
+                logger.info("Shutdown: cancelando %d task(s) pendiente(s)", len(pending))
+                for t in pending:
+                    t.cancel()
+                done, still_pending = await asyncio.wait(pending, timeout=5.0)
+                if still_pending:
+                    logger.warning("Shutdown: %d task(s) no respondieron a cancel en 5s", len(still_pending))
+        except Exception as e:
+            logger.warning("Error cancelando tasks pendientes: %s", e)
+
         # ── Cleanup resources ────────────────────────────────────
         try:
             if agent._phase_b and hasattr(agent._phase_b, "_memory"):
@@ -1261,10 +1338,6 @@ if __name__ == "__main__":
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     asyncio.run(main())
-
-
-
-
 
 
 

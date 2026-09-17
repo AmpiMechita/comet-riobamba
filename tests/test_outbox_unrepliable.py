@@ -16,6 +16,18 @@ from services.persistence import (
     enqueue_outbox,
     fetch_pending_outbox,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_outbox_db(tmp_path, monkeypatch):
+    """Redirige el DB del outbox a tmp_path (fix 2026-09-14).
+
+    Sin esto, los tests comparten la tabla REAL del outbox y
+    _outbox_status() devuelve la primera fila global.
+    """
+    import services.persistence as sp
+    db = tmp_path / "test_outbox.db"
+    monkeypatch.setattr(sp, "DB_PATH", db, raising=False)
 from services.reply_cap import (
     has_replied_to_comment,
     is_unrepliable_comment,

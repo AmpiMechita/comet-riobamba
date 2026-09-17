@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from core.metrics import load_metrics, METRICS_DIR
+from core.daily_metrics import load_metrics, METRICS_DIR
 
 
 def print_summary(days: int = 7) -> None:

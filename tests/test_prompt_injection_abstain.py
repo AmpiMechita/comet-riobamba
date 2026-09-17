@@ -7,6 +7,21 @@ import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+
+def _mock_cascade():
+    """AsyncMock configurado como ModelCascade real."""
+    from unittest.mock import AsyncMock as _AM
+    mc = _AM()
+    mc.TIER_MAPPING = {
+        "premium": "tier_pro",
+        "premium_opus": "tier_pro",
+        "flash": "tier_flash",
+        "fallback": "tier_fallback",
+        "classify": "tier_flash",
+        "default": "tier_flash",
+    }
+    mc._last_usage = {}
+    return mc
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -268,7 +283,7 @@ class TestAbstainPhaseA:
         from datetime import datetime
 
         deps = PhaseADeps(
-            model_cascade=AsyncMock(),
+            model_cascade=_mock_cascade(),
             moltbook_client=MagicMock(),
             behavior_cfg={"max_posts_per_day": 5},
             posts_today=0,

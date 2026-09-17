@@ -12,6 +12,7 @@ Modos de operacion:
 
 import asyncio
 import json
+import zoneinfo
 import os
 import time
 import logging
@@ -652,12 +653,10 @@ def _select_phase_a_mode() -> str:
 def choose_topic(mode: str = "research") -> tuple[str, str]:
     # ── Niche Technical Mode ──────────────────────────────────────────
     if mode == "niche_technical":
-        import os
         niche_topics_str = os.getenv("PHASE_A_NICHE_TOPICS", "")
         if niche_topics_str:
             niche_topics = [t.strip() for t in niche_topics_str.split(",") if t.strip()]
             if niche_topics:
-                import random
                 chosen = random.choice(niche_topics)
                 # Select a random niche and return its key as topic
                 # The actual content generation will use the niche prompt
@@ -1555,6 +1554,8 @@ class PhaseAContentGeneration:
         verification = post_obj.get("verification") if isinstance(post_obj, dict) else {}
         verification_code = verification.get("verification_code")
         challenge_text = verification.get("challenge_text")
+        logger.warning("CHALLENGE_DEBUG raw: %r", challenge_text)
+        logger.warning("CHALLENGE_DEBUG full_verification: %r", verification)
         generated_post.setdefault("metadata", {})
         if not verification_code or not challenge_text: return
         generated_post["metadata"]["verification_code"] = verification_code
@@ -1572,15 +1573,24 @@ class PhaseAContentGeneration:
 
     @phase_error_boundary(logger, "phase_a")
     async def execute(self) -> Dict[str, Any]:
-        # ── Quiet Hours: no original content generation between 00:00-06:00 local time ──
+        # ─── Quiet Hours: no original content generation outside configured hours ──────────
         try:
             tz = zoneinfo.ZoneInfo(behavior_cfg.get("timezone", "America/Guayaquil"))
-        except Exception:
-            tz = timezone.utc
+        except Exception as e:
+            logger.warning(
+                "Timezone %r no resoluble (%s). Fallback a UTC-5 fijo.",
+                behavior_cfg.get("timezone"), e,
+            )
+            tz = timezone(timedelta(hours=-5))
         current_hour = datetime.now(tz).hour
-        if 0 <= current_hour < 6:
-            logger.info("Phase A: Modo nocturno (00:00-06:00 hora local). Saltando generación de contenido original.")
+        quiet = behavior_cfg.get("quiet_hours", [])
+        post_hours = behavior_cfg.get("post_hours", [])
+        if current_hour in quiet:
+            logger.info("Phase A: quiet_hours (hora=%s), saltando", current_hour)
             return {"posts_published": 0, "drafts_generated": 0, "posts": [], "success": False, "skipped": "quiet_hours"}
+        if post_hours and current_hour not in post_hours:
+            logger.info("Phase A: fuera de post_hours (hora=%s, permitidas=%s), saltando", current_hour, post_hours)
+            return {"posts_published": 0, "drafts_generated": 0, "posts": [], "success": False, "skipped": "outside_post_hours"}
 
         posts: List[Dict[str, Any]] = []
         max_per_day = behavior_cfg.get("max_posts_per_day", POLICY.max_posts_per_day)
@@ -2242,10 +2252,6 @@ class PhaseAContentGeneration:
             return {"posts_published": 0, "drafts_generated": len(posts), "posts": posts,
                     "success": False, "skipped": skip_reason}
         return {"posts_published": published_count, "drafts_generated": len(posts), "posts": posts, "success": published_count > 0}
-
-
-
-
 
 
 

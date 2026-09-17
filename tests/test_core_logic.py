@@ -464,9 +464,9 @@ def test_phase_b_init_fallbacks():
         agent_name="TEST",
     )
     pb = PhaseB(deps=deps)
-    assert pb.max_comments_per_day == 15  # behavior_cfg.get fallback (v5.0 default)
-    assert pb.max_comments_per_post == 2  # behavior_cfg.get fallback
-    assert pb.max_replies_per_cycle == 2  # behavior_cfg.get fallback
+    assert pb.max_comments_per_day is None  # v5.x: sin limite por defecto
+    assert pb.max_comments_per_post is None  # v5.x: sin limite
+    assert pb.max_replies_per_cycle is None  # v5.x: sin limite
     assert pb.get_comments_today() == 0  # lambda: 0 fallback
 
 

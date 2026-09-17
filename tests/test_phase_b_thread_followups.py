@@ -50,6 +50,7 @@ def _iso(tmp_path, monkeypatch):
     monkeypatch.setattr(ds.DedupStore, "_default_db_path", tmp_path / "comet_dedup.db")
     monkeypatch.setattr(rcap, "_REPLIES_PER_POST_PATH", tmp_path / "replies_per_post.json")
     monkeypatch.setattr(rcap, "_FOLLOWUPS_PER_POST_PATH", tmp_path / "followups_per_post.json")
+    monkeypatch.setattr(rcap, "_REPLIED_COMMENT_IDS_PATH", tmp_path / "replied_comment_ids_durable.json")
     import services.conversation_state as cs
     monkeypatch.setattr(cs, "CONVERSATIONS_PATH", tmp_path / "conversations.json")
     yield

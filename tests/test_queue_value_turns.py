@@ -4,6 +4,7 @@ y del limite de turnos dinamico en conversaciones enhebradas."""
 
 import sys
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -15,6 +16,17 @@ pytest_plugins = ("pytest_asyncio",)
 from phases.phase_b import PhaseB
 from phases.deps import PhaseBDeps
 
+
+
+def _iso_ago(**kw):
+    """Timestamp ISO con Z, relativo a ahora (evita tests que envejecen)."""
+    return (datetime.now(timezone.utc) - timedelta(**kw)).isoformat().replace("+00:00", "Z")
+
+
+# Timestamps relativos (antes eran fijos y envejecian con el tiempo)
+FRESH_TS = _iso_ago(hours=2)     # dentro de la ventana de 7 dias
+STALE_TS = _iso_ago(days=30)     # fuera de la ventana
+RECENT_TS = _iso_ago(days=3)     # reciente pero no fresco
 
 _REPLY_TEXT = (
     "The fix is a canonical key contract: the consumer reads the same field the "
@@ -253,7 +265,7 @@ class TestQueueValueThreshold:
         import os
         os.environ.pop("AGENT_MAX_PER_WATCHLIST_AUTHOR_DAY", None)
         pb = _make_pb()
-        assert pb._watchlist_max_per_author_day == 3, "default 3"
+        assert pb._watchlist_max_per_author_day == 5, "default 5"
         os.environ["AGENT_MAX_PER_WATCHLIST_AUTHOR_DAY"] = "8"
         pb2 = _make_pb()
         assert pb2._watchlist_max_per_author_day == 8
@@ -388,7 +400,7 @@ class TestSemanticSnippetRehydration:
         ]
         pb.api.get_post.return_value = {
             "id": "p5", "content": "Full body", "is_spam": True,
-            "created_at": "2026-08-15T12:00:00.000Z",
+            "created_at": RECENT_TS,
         }
 
         results = await pb._fetch_semantic_search_posts()
@@ -401,7 +413,7 @@ class TestSemanticSnippetRehydration:
         del feed no aplicaba ahi: por eso entro un post de 96 dias)."""
         pb = self._pb()
         pb.api.semantic_search.return_value = [
-            {"id": "p6", "content": "A normal body.", "created_at": "2026-05-13T12:00:00.000Z"},
+            {"id": "p6", "content": "A normal body.", "created_at": STALE_TS},
         ]
 
         results = await pb._fetch_semantic_search_posts()
@@ -413,7 +425,7 @@ class TestSemanticSnippetRehydration:
         """Un post reciente sin spam sigue entrando por semantic search."""
         pb = self._pb()
         pb.api.semantic_search.return_value = [
-            {"id": "p7", "content": "A normal body.", "created_at": "2026-08-25T07:00:00.000Z"},
+            {"id": "p7", "content": "A normal body.", "created_at": FRESH_TS},
         ]
 
         results = await pb._fetch_semantic_search_posts()
@@ -428,9 +440,9 @@ class TestSemanticSnippetRehydration:
         resp.success = True
         resp.data = {"posts": [
             {"id": "f1", "content": "spam post", "is_spam": True,
-             "created_at": "2026-08-25T07:00:00.000Z", "submolt": "m/general"},
+             "created_at": FRESH_TS, "submolt": "m/general"},
             {"id": "f2", "content": "normal post",
-             "created_at": "2026-08-25T07:00:00.000Z", "submolt": "m/general"},
+             "created_at": FRESH_TS, "submolt": "m/general"},
         ]}
         pb.api.get_feed.return_value = resp
         pb.api.get_feed.side_effect = [resp, resp]

@@ -19,6 +19,18 @@ from services.persistence import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_outbox_db(tmp_path, monkeypatch):
+    """Redirige el DB del outbox a tmp_path.
+
+    Sin esto, los tests leen/escriben la tabla REAL del outbox, y
+    _outbox_status() devuelve la primera fila global (posiblemente una
+    entrada 'published' de una corrida anterior).
+    """
+    db = tmp_path / "test_outbox.db"
+    monkeypatch.setattr(sp, "DB_PATH", db, raising=False)
+
+
 def _make_agent(moltbook):
     from core.agent import COMETRiobambaAgent
     import config.config as _cfg

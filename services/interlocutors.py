@@ -98,7 +98,8 @@ def _utc_now() -> str:
 # ── Public API ─────────────────────────────────────────────────
 
 def record_interaction(author: Union[str, Dict[str, Any], None], *,
-                        on_our_post: bool) -> bool:
+                        on_our_post: bool,
+                        path: Optional[Path] = None) -> bool:
     """Incrementa el contador del interlocutor y actualiza last_seen.
 
     Returns True si la interacción se registró, False si el autor
@@ -107,7 +108,7 @@ def record_interaction(author: Union[str, Dict[str, Any], None], *,
     if not name:
         return False
     try:
-        ledger = _load()
+        ledger = _load(path)
         entry = ledger.get(name, {
             "count": 0, "last_seen": "",
             "on_our_posts": 0, "in_feed": 0,
@@ -119,7 +120,7 @@ def record_interaction(author: Union[str, Dict[str, Any], None], *,
         else:
             entry["in_feed"] = entry["in_feed"] + 1
         ledger[name] = entry
-        _save(ledger)
+        _save(ledger, path)
         return True
     except Exception as e:
         logger.debug("interlocutors: record_interaction failed for %s: %s", name, e)

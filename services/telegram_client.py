@@ -17,15 +17,21 @@ import json
 import logging
 import os
 import time
+import threading
 import requests
 from pathlib import Path
-from typing import Optional
+from typing import ClassVar, List, Optional
 from config import behavior_cfg, BASE_DIR
 from config.agent_policy import POLICY
 
 logger = logging.getLogger("services.telegram_client")
 
 class TelegramClient:
+    # ── Rate limit global del proceso (compartido por todas las instancias) ──
+    _global_send_window: ClassVar[List[float]] = []
+    _global_send_lock: ClassVar[threading.Lock] = threading.Lock()
+    _global_max_per_min: ClassVar[int] = 15  # Telegram permite ~20/min al mismo chat
+
     def __init__(self, bot_token: str, chat_id: str, enabled: bool = True):
         self.bot_token = bot_token
         self.chat_id = chat_id
@@ -111,6 +117,15 @@ class TelegramClient:
 
     def _send(self, method: str, payload: dict) -> bool:
         if not self.enabled: return False
+
+        # Rate limit global (previene bursts que Telegram rechaza como "chat not found")
+        _now = time.time()
+        with TelegramClient._global_send_lock:
+            TelegramClient._global_send_window = [t for t in TelegramClient._global_send_window if _now - t < 60]
+            if len(TelegramClient._global_send_window) >= TelegramClient._global_max_per_min:
+                logger.warning("Telegram: rate limit global alcanzado (%d/min), mensaje diferido", TelegramClient._global_max_per_min)
+                return False
+            TelegramClient._global_send_window.append(_now)
         preview = str(payload.get("text", ""))[:300]
         try:
             url = f"{self.base_url}/{method}"

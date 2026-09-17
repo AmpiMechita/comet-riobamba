@@ -63,6 +63,16 @@ def _validate_bounded_int(
     return val
 
 
+def _parse_hours(env_key: str, default: list) -> list:
+    raw = os.getenv(env_key, "")
+    if not raw.strip():
+        return default
+    try:
+        return [int(x.strip()) for x in raw.split(",") if x.strip()]
+    except (ValueError, AttributeError):
+        return default
+
+
 # === Configuración de Comportamiento ===
 behavior_cfg = {
     "max_posts_per_day": _validate_bounded_int("AGENT_MAX_POSTS_PER_DAY", _POLICY.max_posts_per_day, max_val=999),
@@ -138,6 +148,10 @@ behavior_cfg = {
     },
     # Timezone for quiet hours (default: America/Guayaquil = Ecuador UTC-5)
     "timezone": os.getenv("AGENT_TIMEZONE", "America/Guayaquil"),
+    # Horarios valle DeepSeek (hora America/Guayaquil, UTC-5)
+    "post_hours": _parse_hours("AGENT_POST_HOURS", [11, 12, 13, 14, 15, 16, 17, 18, 19]),
+    "comment_hours": _parse_hours("AGENT_COMMENT_HOURS", [11, 12, 13, 14, 15, 16, 17, 18, 19]),
+    "quiet_hours": _parse_hours("AGENT_QUIET_HOURS", [20, 21, 22, 23, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
 }
 
 # === Auto-applied config overlay (propuestas de mejora autoaplicadas) ===
@@ -247,9 +261,3 @@ def validate_config(credentials: "Credentials" = None) -> None:
 def bootstrap_directories() -> None:
     Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
     Path(LOGS_DIR).mkdir(parents=True, exist_ok=True)
-
-
-
-
-
-
