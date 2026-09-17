@@ -1302,3 +1302,31 @@ preservando agent.log activo y cualquier archivo del día actual.
 **Repo:** 597 MB -> 340 MB (acumulado del día: 697 -> 340 MB, -357 MB).
 
 Sin commit (logs/ y traces/ están en .gitignore).
+
+### F. Fase 4 — scripts huerfanos y .gitignore residual — CERRADA
+
+**Hallazgo critico adicional:**
+- config/niche_prompts.py -> importado por phases/phase_a_content.py:28.
+  Estaba ignorado por .gitignore (entrada DUPLICADA en L174 y L205).
+- patches/patch_phase_b_pre_generation_gate.py -> importado por
+  phases/phase_b/orchestrator.py:137. Ignorado por .gitignore L239 ('patches/').
+
+Ambos afectaban clone fresco (ImportError en Phase A y B).
+
+**Fix aplicado (commit 17f9c88):**
+- .gitignore: removidas 3 lineas (niche_prompts x2 + patches/).
+- Trackeados: config/niche_prompts.py + patches/patch_phase_b_pre_generation_gate.py.
+
+**Limpieza (sin commit, ignorados no versionados):**
+- 51 scripts .py de iteracion borrados del disco (142.2 KB).
+- Backup: ~\backups\comet-riobamba\fase4_cleanup_20260917_165215.zip
+
+**Scripts preservados (decision):**
+- scripts/ (52): utilidades CLI legitimas (audit_, recon_, smoke_test_, etc.).
+- tools/ (3): comet_mcp_server.py, agent_inspect.py, comet_mcp_server_lowlevel.py.
+- scripts/ops/ (7): promovidos en commit b226f2f.
+
+**Deteccion falsa positiva:** el detector de "huerfanos" por imports dio 49
+falsos positivos porque scripts CLI se invocan por linea de comandos, no por
+import. Corregido el criterio: solo se consideran criticos los .py ignorados
+que SI son importados por codigo tracked.
