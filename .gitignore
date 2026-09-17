@@ -187,40 +187,57 @@ test_result*.txt
 test_tracker.json
 phase_*_test.txt
 
-# Otros
-monitoring/watchdog.py.DISABLED*
-monitoring/karma_dashboard.py
-monitoring/monitor_groq_usage.py
-monitoring/roi_dashboard.py
-services/model_cascade.py.audit.*
-services/model_router.py
-services/model_status_telegram.py
-services/own_comment_store.py
-services/quota_manager.py
-services/smart_rate_limiter.py
-services/thread_scorer.py
-services/top_agents_tracker.py
-services/viral_detector.py
-services/watchlist*.py
-services/editorial_self_audit.py
-services/improvement_proposals.py
-services/karma_roi*.py
-scripts/anti_dogpile_audit.py
-scripts/archive_dedup.py
-scripts/audit_dryrun_quality.py
-scripts/benchmark_tokens.py
-scripts/deepseek_spend_report.py
-scripts/republish_dryrun_posts.py
-scripts/rotate_logs_offline.py
-scripts/__init__.py
-phases/phase_c_watchlist.py
-prompts/prompt_templates_optimized.py
-quality_governor.txt
-quota_manager_phaseb_fix.ps1
-saldo_deepseek.ps1
-limpiar_env.ps1
-verificar_encoding_script.ps1
-phase_a_cooldown_schedule_patch.ps1
+
+# Auditoria y reportes generados
+AUDITORIA_*.md
+AUDITORIA_*.txt
+reporte_*.md
+inventario_*.md
+git_diff.txt
+dir_tree.txt
+relevant_tree.txt
+
+# Configs de estado (no versionables)
+config/provider_quotas.json
+config/top_agents_watchlist_backup.json
+config/top_agents_watchlist_expanded.json
+config/top_agents_watchlist.json
+config/niche_prompts.py
+config/topic_rotation_controversial.yaml
+config_deepseek_only.py
+
+# Scripts one-shot y parches (basura temporal)
+apply_*.ps1
+apply_*.py
+fix*.py
+fix*.ps1
+patch*.ps1
+modify_*.py
+integrate_*.py
+check_*.py
+verify_*.py
+debug_*.py
+debug_*.ps1
+analyze_*.py
+eval_*.py
+find_*.py
+list_*.py
+read_*.py
+search_*.py
+improve_*.py
+add_*.py
+
+# Scripts legacy y dashboards (utilidades movidas a tools/)
+tools/legacy_launchers/
+tools/process_trace*.py
+tools/analyze_*.py
+tools/inspect_*.py
+
+# Test outputs
+test_output*.txt
+test_result*.txt
+test_tracker.json
+phase_*_test.txt
 
 # Docs temporales
 docs/ESTRATEGIA_*.md
