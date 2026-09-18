@@ -1535,3 +1535,52 @@ reinicio de las 10:37, se detectaron dos problemas independientes en Phase A:
 - `run.err` vacío durante la caída del circuit breaker de Moltbook: la
   desconexión no se registró en el log de errores. Investigar si el CB
   se recupera correctamente tras timeout.
+### H.3 — Fase 2.4 (phases/) + validación empírica Phase A — CERRADA
+
+**Contexto:** auditoría estructural del paquete `phases/` (16 archivos
+activos, ~570 KB de código) + validación de los fixes de Phase A/B en
+producción tras reinicio.
+
+**2.4.1 — Cobertura por imports (completado):**
+- 13 archivos activos auditados (excluyendo __init__.py y engagement/).
+- 8 con import directo desde tests: responder, orchestrator, scoring,
+  constants, value_log_utils, deps, phase_a_content, phase_c_analytics.
+- 4 sin import directo pero con cobertura indirecta (usados por
+  orchestrator.py o phase_a_content.py): classifier, tracker,
+  candidate_scorer, engagement.
+- **1 sin cobertura alguna: `phase_c_watchlist.py`** (417 líneas) →
+  resuelto en 2.4.3.
+
+**2.4.2 — Limpieza de backups (completado):**
+- 18 archivos de backup en `phases/` (~3.4 MB total): 11 de
+  orchestrator.py, 5 de phase_a_content.py, 2 de scoring.py.
+- Todos untracked en git. ZIP preservado en
+  `~\backups\comet-riobamba\phase_backups_20260918_154915.zip` (0.83 MB).
+- Eliminados localmente. `git status` sin cambios.
+
+**2.4.3 — Test de `phase_c_watchlist.py` (completado):**
+- `tests/test_phase_c_watchlist.py`: 20 tests cubriendo 3 métodos
+  testeables (`_load_watchlist`, `_score_posts`, `_quality_gate`).
+- No cubre `_generate_comment` ni `run()` — requieren mock de LLM/API.
+- Suite completa: 1489 passed, 1 skipped (baseline 1469 + 20).
+
+**Hallazgo menor — mojibake en phase_c_watchlist.py:**
+- 4 líneas con `¾¾¾` (UTF-8 mal decodificado) en docstrings/comentarios:
+  líneas ~355, ~370, ~374, ~390. No bloquea. Deuda separada.
+
+**Validación empírica de fixes previos (2026-09-18):**
+- Ciclo 56 (15:25): Phase A publicó post ID b15b6502 (Counter-claim a
+  neo_konsi_s2bw sobre admission control). `posts_today` pasó de 0 a 1.
+- Ciclo 57 (15:58): Phase A publicó post ID 70e504af. `posts_today=2`
+  (cap alcanzado). A partir del ciclo 58, Phase A se salta hasta medianoche.
+- Ambos posts usan vocabulario del niche sin rechazos: el clasificador
+  recalibrado (commit e34ebbe) funciona en producción.
+- Cap acumulativo correcto: `límite diario=2, ya hoy=1, disponibles=1`
+  en ciclo 57 → publicó 1 → `posts_today=2` → siguiente ciclo saltará.
+
+**Deuda pendiente (nueva):**
+- Mojibake en `phase_c_watchlist.py` (4 líneas).
+- `_generate_comment` y `run()` de phase_c_watchlist sin tests (mock LLM).
+- 11 backups históricos adicionales en `phases/phase_b/` fueron eliminados
+  en esta sesión, pero el patrón de backup manual persiste — considerar
+  `.gitignore` para `*.bak*` y `*.backup*` en `phases/`.
