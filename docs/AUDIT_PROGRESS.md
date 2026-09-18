@@ -1363,3 +1363,65 @@ que SI son importados por codigo tracked.
   (agent.py: 7 tests, challenge_solver: 1, claims_tracker: 1, daily_metrics: 3,
   memory_store: 1, observability: 1, self_monitor: 1, state_manager: 4,
   strategy_state: 1, tracer: 1, value_log: 8, value_review: 7, write_policy: 33)
+
+### H. Fase 2.3 — Recalibración del quality gate de Phase B — CERRADA
+
+**Contexto (no planificado):** durante la verificación rutinaria del agente
+PID 14136 (log `nightly_run_20260917_202743.log`), se detectó una tasa de
+rechazo anómala en watchlist: ~107 rechazos del gate de sustancia
+(`tier=quality sin señal de sustancia`) contra ~3 replies publicadas en 24
+ciclos. Spend $0.153 con output casi nulo.
+
+**Diagnóstico (log 2026-09-17/18, sin cambios de código):**
+- Drafts técnicos válidos con `evidence=False metric=False mechanism=False
+  derivation=False`:
+  - `"Re-scored, not requeued. The carry-over weight is a decay function..."`
+  - `"Decay is the right instinct, but halving per cycle makes..."`
+  - `"The distinction you want is exactly what the Linux CFS runqueue..."`
+  - `"The preempted-vs-never-seen distinction is exactly what YARN's..."`
+- No era anti-fabricación — era cobertura del whitelist de `mechanism_terms`
+  (cubría sistemas distribuidos + ML, no scheduling / colas / performance /
+  política).
+- Contradicción prompt↔gate: el prompt pedía *"Avoid exact numeric thresholds"*
+  mientras el gate exigía `has_metric` como escape. Los drafts obedecían al
+  prompt y caían en la zona muerta.
+- `has_framework` se computa (orchestrator.py:1004) pero nunca se usa en el OR
+  del gate. Verificado via `git log -S`: sin historial previo (archivo
+  entra a git en `705643c`), sin tests que dependan. Decisión: dejar intacto.
+
+**Fix aplicado (commit df0dd10):**
+- `mechanism_terms`: +31 términos (scheduling / colas / performance /
+  política). `queue, runqueue, preempted, scheduling, starvation, fairness,
+  contention, admission, backpressure, priority, weight, budget, carry-over,
+  half-life, decay, amortized, overhead, hot path, cold path, critical path,
+  worst case, best case, compounding, saturation, workload, policy, layer,
+  ratio, trade-off, tradeoff`.
+- `has_evidence`: +9 frases de análisis causal natural (`the distinction`,
+  `the trade-off`, `the risk`, `at the layer`, `under load`,
+  `in the worst case`, `the failure mode`, `the bottleneck`).
+- `has_framework` NO se agrega al OR (verificado: no rescata drafts
+  observados; introduce riesgo de relajación con vocabulario genérico).
+
+**Verificación:**
+- `tests/test_quality_gate_recalibration_20260918.py`: 10 passed, 1 skipped
+  (preview truncada, no verificable — se documenta como skip explícito en vez
+  de asumir resultado).
+- Suite completa: `1459 passed, 1 skipped` (baseline 1449 + 10 nuevos).
+- Gates anti-fabricación (`_FABRICATION_PATTERN`) y anti-histórico
+  (`text_has_unverifiable_historical_claim`) intactos.
+- `ast.parse` OK. Sin cambios en `scoring.py`.
+
+**Métricas a medir en próximo ciclo (post-fix):**
+- Gate A rechazos: baseline 107 / esperado < 50.
+- Replies publicadas: baseline 3 / esperado > 3.
+- Spend: baseline $0.153 / esperado igual o leve subida.
+- Errores reales: baseline 1 (Telegram timeout) / esperado igual o menos.
+
+**Deuda detectada, no resuelta:**
+- Duplicación de `reasons` en `_score_reply_draft` (block mode + penalties
+  v5.2 aplican la misma señal dos veces). Cosmético — telemetría engañosa,
+  no bug funcional. Sesión aparte.
+- Docstring stale en `_passes_quality_gate`: dice *"all penalties zeroed for
+  testing"* (v5.1) pero penalties v5.2 están activos. Sesión aparte.
+- `orchestrator.py` acumula 11 backups históricos en `phases/phase_b/`
+  (~4 MB, versionados). Candidato a Fase 5c (limpieza de backups).
