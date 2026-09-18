@@ -1454,3 +1454,84 @@ en GitHub. Limpieza local es decisión separada.
 `ACTUALIZACION_KEYS_FREE_TIERS.md`, `AUDITORIA_MODELOS_FREE.md`,
 `inventario_procesos_agente.md`): escritos con encoding roto (UTF-8 guardado
 como CP850). No bloquea, no se arregla con git mv. Deuda separada.
+**Actualización (2026-09-18 15:25):** el problema colateral de tracking en
+`data/` quedó resuelto (commit `52aa1ce`): `.gitignore` cambió `data/` →
+`data/*`, permitiendo excepciones. Trackeados retroactivamente
+`data/editorial_policy.json` y `data/.gitkeep` (excepción que nunca
+funcionaba desde su introducción). La consolidación de los 4 archivos de
+arquitectura sigue pendiente.
+
+### H.2 — Recalibración del clasificador Phase A + caps — CERRADA
+
+**Contexto (no planificado):** durante la verificación del agente tras el
+reinicio de las 10:37, se detectaron dos problemas independientes en Phase A:
+
+1. `rejected_posts.jsonl` acumula 1296 rechazos; 271 por
+   `below_min_quality_score`. El clasificador (`dual_scoring`) rechazaba
+   ~76% de posts técnicos válidos.
+2. Sin cap: el agente publicaba sin límite. `max_posts_per_day=None` y
+   `max_posts_per_week=null`. Histórico: 3-7 posts/día (18 posts en 4 días
+   vía `post_embeddings`).
+
+**Diagnóstico del clasificador (log 2026-09-17/18):**
+- 271 rechazos: 233 como `clarification` (0.3), 38 como
+  `metric_proposal` (0.5). Ambos < 0.72 umbral.
+- 76% de los rechazados usaban prescription pattern ("the fix is X",
+  "the mechanism is Y") con named mechanism (gate, guardrail, event log,
+  rolling window, checkpoint).
+- 67.5% con prescription + named mechanism.
+- Ejemplo rechazado: *"The mechanism is a semantic trip wire: gate on
+  output schema drift, not transport..."*
+
+**Fix commit `e34ebbe`:**
+- `services/dual_scoring.py`:
+  - Paso 2 (empirical): +8 patrones de incidentes reales del agente
+    (`in our production`, `we had a production`, `silently became`, etc.)
+  - Nuevo paso 3.5 (prescription + named mechanism): FRAMEWORK_PROPOSAL
+    si prescription_signal >= 1 AND named_mechanism >= 1 AND len >= 300.
+  - Paso 4 (critique + alternative): +11 patrones de lenguaje natural
+    (`misunderstands`, `completely misses`, `the mechanism is`, `gate on`).
+- `phases/phase_a_content.py`:
+  - Import `_count_signals` desde dual_scoring.
+  - `_is_substantive_post`: segunda ruta para posts densos sin pregunta
+    final. Requiere >= 400 chars, >= 3 oraciones, tech_density >= 2.
+
+**Verificación commit `e34ebbe`:**
+- `tests/test_phase_a_quality_recalibration_20260918.py`: 10/10 passed.
+- Suite completa: 1469 passed, 1 skipped (baseline 1459 + 10 nuevos).
+- In-vitro sobre `rejected_posts.jsonl`: 204/271 = 75.3% reclasificados a
+  framework/empirical/critique.
+
+**Fix caps commits `40e94dc` + `52aa1ce`:**
+- `.env` (local, no tracked): `AGENT_MAX_POSTS_PER_DAY=2`.
+- `data/editorial_policy.json`: `max_posts_per_week: 10` (antes null).
+- `.gitignore`: `data/` → `data/*` para permitir excepción. Trackeados:
+  `data/editorial_policy.json` y `data/.gitkeep`.
+
+**Hallazgos colaterales:**
+- `AGENT_PHASE_A_PUBLISH_ENABLED`: flag huérfano. Se define en
+  `config.py:93` y nunca se consulta en código de producción. Solo tests
+  lo usan. Publicar NO depende de este flag.
+- `editorial_mutator.py` + `save_editorial_policy()`: código muerto.
+  Proponen cambios pero nunca escriben. `data/editorial_policy_history/`
+  no existe.
+- Excepciones `!data/.gitkeep` y `!logs/.gitkeep` en `.gitignore`: nunca
+  funcionaron por la regla de "no negar dentro de directorio ignorado con
+  trailing slash". El fix `data/*` las desbloquea retroactivamente.
+- Outbox de posts reintenta `_retry_outbox()` al arranque sin consultar
+  `PHASE_A_PUBLISH_ENABLED`. Solo respeta `max_posts_per_day`.
+
+**Estado tras fix:**
+- Agente corriendo con caps activos (PID 15636 desde 15:25).
+- Phase A respeta max 2 posts/día y max 10/semana.
+- Verificación pendiente: primer ciclo tras reset manual de `posts_today`
+  (15:25) para observar Phase A publicar con el clasificador nuevo.
+
+**Deuda pendiente:**
+- Eliminar/reutilizar `AGENT_PHASE_A_PUBLISH_ENABLED` huérfano.
+- Decidir si conectar `editorial_mutator.py` (auto-tune) o eliminarlo.
+- Auditar la regla `.gitignore` para otros archivos con el mismo patrón
+  (logs/, exports/, etc.) — potenciales excepciones rotas.
+- `run.err` vacío durante la caída del circuit breaker de Moltbook: la
+  desconexión no se registró en el log de errores. Investigar si el CB
+  se recupera correctamente tras timeout.
