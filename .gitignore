@@ -253,3 +253,7 @@ COMANDOS_POWERSHELL.txt
 # Backups y patches
 test_data/
 _audit_trash/
+
+# Excepcion: editorial_policy es config curada, no state runtime.
+# El mutator (services/editorial_mutator.py) existe pero esta desconectado.
+!data/editorial_policy.json
