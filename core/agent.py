@@ -660,7 +660,44 @@ class COMETRiobambaAgent:
             logger.warning("⚠ No se pudo escribir health.json parcial (%s): %s", reason, e)
 
 
+    def _should_skip_phase_on_peak(self, phase_name: str) -> bool:
+        """Fix 2026-09-17 (opcion B): skip Phase A/C en quiet+peak.
+
+        En franja quiet (sin ventana activa de publicacion/comentarios), las
+        llamadas LLM de Phase A (drafts) y Phase C (analytics) no tienen valor
+        inmediato. Si ademas DeepSeek esta en peak (precio completo), es waste
+        economico. Phase B own-post replies NO se saltan: mantienen
+        conversaciones vivas con engagement real.
+        """
+        try:
+            from services.model_cascade import _is_deepseek_peak_hour
+        except Exception as e:
+            logger.debug("peak guard: import fallo: %s", e)
+            return False
+        if not _is_deepseek_peak_hour():
+            return False
+        try:
+            from zoneinfo import ZoneInfo
+            from datetime import timedelta
+            try:
+                tz = ZoneInfo(behavior_cfg.get("timezone", "America/Guayaquil"))
+            except Exception:
+                tz = timezone(timedelta(hours=-5))
+            current_hour = datetime.now(tz).hour
+            quiet = behavior_cfg.get("quiet_hours", []) or []
+            comment_hours = behavior_cfg.get("comment_hours", []) or []
+            in_quiet = (current_hour in quiet) or (bool(comment_hours) and current_hour not in comment_hours)
+        except Exception as e:
+            logger.debug("peak guard: quiet calc fallo: %s", e)
+            return False
+        if not in_quiet:
+            return False
+        logger.info("Phase %s: quiet+peak. Skipping (no economic value).", phase_name)
+        return True
+
     async def _run_phase_a(self) -> Dict[str, Any]:
+        if self._should_skip_phase_on_peak("A"):
+            return {"skipped": "peak_hour_quiet"}
         self._phase_a_deps.posts_today = self.posts_today
         if self._phase_a is None:
             self._phase_a = PhaseAContentGeneration(deps=self._phase_a_deps)
@@ -710,6 +747,7 @@ class COMETRiobambaAgent:
         return b_results
 
     async def _run_phase_c(self) -> Dict[str, Any]:
+        if self._should_skip_phase_on_peak("C"):             return {"skipped": "peak_hour_quiet"}
         if not behavior_cfg.get("phase_c_enabled"):
             return {"skipped": "phase_c_disabled"}
         if self.cycle_count % int(os.getenv("PHASE_C_INTERVAL", "3")) != 0:
