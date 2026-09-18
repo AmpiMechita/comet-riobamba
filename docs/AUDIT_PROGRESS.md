@@ -1425,3 +1425,32 @@ ciclos. Spend $0.153 con output casi nulo.
   testing"* (v5.1) pero penalties v5.2 están activos. Sesión aparte.
 - `orchestrator.py` acumula 11 backups históricos en `phases/phase_b/`
   (~4 MB, versionados). Candidato a Fase 5c (limpieza de backups).
+
+### H.1 — Reorganización de docs de arquitectura — PARCIAL
+
+**Estado:** movimiento aplicado. Consolidación pendiente.
+
+**Movimientos aplicados (2026-09-18):**
+- `ARCHITECTURE.md` (raíz) → `docs/ARCHITECTURE.md`
+- `ARCHITECTURE_GUIDELINES.md` (raíz) → `docs/ARCHITECTURE_GUIDELINES.md`
+- `DIAGNOSTICO_AUDITORIA_2026-08-22.md` (raíz) → `docs/archive/DIAGNOSTICO_AUDITORIA_2026-08-22.md`
+- Refs en `AGENTS.md` actualizadas (2 líneas).
+
+**Raíz quedó con 3 .md:** `README.md`, `AGENTS.md`, `CHANGELOG.md`.
+
+**Consolidación pendiente (citada de data/docs_inventory_20260911.json:264):**
+> "ARCHITECTURE.md + ARCHITECTURE_GUIDELINES.md + docs/INFORME_ARQUITECTURA_v4.4.0.md
+> + docs/COMET-RIOBAMBA_REFERENCE.md → 1 arquitectura canónica"
+
+4 archivos fragmentados, ~700 líneas combinadas. La consolidación NO se
+hizo durante la ventana estratégica del agente — queda para sesión dedicada.
+
+**Fuera de alcance (untracked, no en git):** 12 .md residuales en raíz
+(`CONTEXTO_*`, `reporte_analisis_psicologico_*`, `AUDITORIA_*`,
+`ACTUALIZACION_*`, `DOCUMENTACION_COMPLETA_*`, `inventario_*`). No aparecen
+en GitHub. Limpieza local es decisión separada.
+
+**Mojibake detectado en varios .md** (`DOCUMENTACION_COMPLETA_COMET_RIOBAMBA.md`,
+`ACTUALIZACION_KEYS_FREE_TIERS.md`, `AUDITORIA_MODELOS_FREE.md`,
+`inventario_procesos_agente.md`): escritos con encoding roto (UTF-8 guardado
+como CP850). No bloquea, no se arregla con git mv. Deuda separada.

@@ -15,7 +15,7 @@ Este documento se conserva por valor historico, no como referencia tecnica.
 ## Estado Vivo Actual (v5.2+) — LEER PRIMERO
 
 > Esta sección es la fuente de verdad operativa. Si algún doc antiguo (v5.0/v5.1
-> "Sniper Técnico", README, ARCHITECTURE.md) la contradice, esto gana.
+> "Sniper Técnico", README, docs/ARCHITECTURE.md) la contradice, esto gana.
 > Última actualización: 2026-08-12, cubre los commits be02c3c→bbeca4f.
 
 ### Identidad
@@ -238,4 +238,4 @@ las rutinas de mantenimiento semanal.
 
 - `CLAUDE.md` covers team conventions, stack, and LLM model recommendations.
 - `README.md` covers env vars and quick start.
-- `ARCHITECTURE.md` documents the v5.0 design.
+- `docs/ARCHITECTURE.md` documents the v5.0 design.
