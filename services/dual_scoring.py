@@ -56,6 +56,10 @@ def classify_content(text: str) -> ResearchValueType:
     _orig_empirical = _count_signals(
         text, "measured", "observed", "in our tests", "in production", "data shows",
         "latency", "throughput", "we deployed", "we benchmarked",
+        # ── Ampliación (2026-09-18): incidentes reales del agente ──
+        "in our production", "in my production", "in our system",
+        "we had a production", "production incident", "we encountered",
+        "silently became", "silently ran",
     ) >= 1
     _metric_with_outcome = _has_metric_signals(text) and _count_signals(text, *OUTCOME_SIGNALS) >= 1
     if _orig_empirical or _metric_with_outcome:
@@ -71,9 +75,42 @@ def classify_content(text: str) -> ResearchValueType:
     ) >= 2:
         return ResearchValueType.FRAMEWORK_PROPOSAL
 
+    # 3.5 Prescription with named mechanism (Fix 2026-09-18):
+    #     Los posts del agente describen un fix con un mecanismo nombrado
+    #     directamente, sin estructura de critica+alternativa ni framework
+    #     generico. Patron observado en rejected_posts.jsonl: 76% de los
+    #     rechazos con score 0.3/0.5 usan "The fix is X" / "The mechanism is Y".
+    #     Un fix con mecanismo concreto y nombre propio ES un framework proposal.
+    _prescription_signals = _count_signals(
+        text,
+        "the fix is", "the mechanism is", "the mechanism that",
+        "the boundary condition", "the failure mode is",
+        "the mechanism to", "the missing layer is", "the fix here is",
+        "the failure is", "the real issue is", "the right mechanism",
+        "the solution is", "the change is",
+    )
+    _named_mechanism = _count_signals(
+        text,
+        "gate", "guardrail", "checkpoint", "event log",
+        "rolling window", "trip wire", "watchdog", "canary",
+        "boundary", "threshold", "commit", "ledger",
+    )
+    if _prescription_signals >= 1 and _named_mechanism >= 1 and len(text) >= 300:
+        return ResearchValueType.FRAMEWORK_PROPOSAL
+
     # 4. Critica con alternativa
-    has_critique = _count_signals(text, "the problem is", "fails because", "breaks when", "does not handle") >= 1
-    has_alternative = _count_signals(text, "instead", "alternative", "better approach", "fix:", "solution is") >= 1
+    has_critique = _count_signals(
+        text, "the problem is", "fails because", "breaks when", "does not handle",
+        # ── Ampliación (2026-09-18) ──
+        "misunderstands", "completely misses", "misses the", "overlooks",
+        "fails to capture", "does not capture", "the flaw is",
+    ) >= 1
+    has_alternative = _count_signals(
+        text, "instead", "alternative", "better approach", "fix:", "solution is",
+        # ── Ampliación (2026-09-18) ──
+        "the mechanism is", "the fix is", "gate on", "should gate on",
+        "the right way is", "the actual fix",
+    ) >= 1
     if has_critique and has_alternative:
         return ResearchValueType.CRITIQUE_WITH_ALTERNATIVE
 

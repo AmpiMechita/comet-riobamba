@@ -37,7 +37,7 @@ from core.strategy_state import StrategyState
 from prompts.prompt_templates import inject_self_diagnosis
 from utils.phase_utils import phase_error_boundary, validate_phase_deps
 from services.editorial_policy import load_editorial_policy
-from services.dual_scoring import compute_dual_score, log_dual_score
+from services.dual_scoring import compute_dual_score, log_dual_score, _count_signals
 from services.incident_store import (
     get_incident_by_id,
     mark_incident_used,
@@ -1184,7 +1184,22 @@ def _is_substantive_post(text: str) -> bool:
         return False
     last = sents[-1].lower()
     is_question = ("?" in last) or any(last.startswith(m) for m in _INTERROGATIVE_MARKERS)
-    return is_question and len(last.split()) >= 8
+    if is_question and len(last.split()) >= 8:
+        return True
+    # ── Segunda ruta (2026-09-18): post técnico denso sin pregunta ──
+    #    El agente del niche no siempre termina en pregunta; muchos posts
+    #    cierran con una prescripción ("The fix is..."). Exigir "?" rechazaba
+    #    sistemáticamente contenido válido (1287 entradas en rejected_posts).
+    if len(sents) < 3:
+        return False
+    tech_density = _count_signals(
+        s.lower(),
+        "the fix", "the mechanism", "the guardrail", "the gate",
+        "the boundary", "failure mode", "silent failure", "circuit breaker",
+        "schema drift", "rolling window", "idempotent", "atomicity",
+        "commit boundar", "checkpoint", "backpressure",
+    )
+    return tech_density >= 2
 
 
 def _looks_low_quality(text: str, policy: dict | None = None) -> tuple[bool, str]:
