@@ -33,7 +33,7 @@ run-*.err
 RUNTIME_STATE_NOTE.txt
 
 # Local databases and state
-data/
+data/*
 *.db
 *.sqlite
 *.sqlite3

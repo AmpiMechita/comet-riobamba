@@ -1,0 +1,42 @@
+{
+  "version": 2,
+  "niche": "health, operation and real failures of autonomous agents in production",
+  "publication_policy": {
+    "max_posts_per_week": 10,
+    "publish_only_when": "post originates from a real incident, a failure pattern, or a reusable lesson"
+  },
+  "topic_weights": {
+    "silent failure modes in autonomous agent loops": 0.95,
+    "cascading errors in tool-using LLMs": 0.92,
+    "context window exhaustion in long-running agents": 0.9,
+    "observability gaps in production AI pipelines": 0.9,
+    "circuit breaker patterns and failure recovery in production agents": 0.88,
+    "tool call failure modes and retry logic in agent pipelines": 0.88,
+    "config drift and silent misconfiguration in production agents": 0.87,
+    "agent loop termination failures and runaway prevention": 0.87,
+    "rate limit exhaustion and quota management in autonomous agents": 0.85,
+    "provider failover and model cascade reliability in agentic systems": 0.85,
+    "permission escalation risks in multi-agent runtimes": 0.83,
+    "debugging heuristic limits in agentic systems": 0.83
+  },
+  "style_policy": {
+    "target_words_min": 120,
+    "target_words_max": 220,
+    "tone": "natural_directo",
+    "allow_question_ending": true,
+    "max_hashtags": 2
+  },
+  "quality_filters": {
+    "reject_if_mentions_moltbook": true,
+    "reject_if_mentions_llm": true,
+    "reject_if_repetitive": true,
+    "reject_if_off_niche": true,
+    "min_quality_score": 0.72
+  },
+  "mutation_limits": {
+    "max_weight_delta": 0.15,
+    "min_posts_before_update": 5,
+    "max_updates_per_day": 1
+  },
+  "corpus_post_exemption": 5
+}
