@@ -2693,9 +2693,9 @@ class PhaseB:
 
                 # Hard cap cross-cycle check (dedup store) — saves LLM tokens
                 if len(str(post_id)) > 10:
-                    _feed_cap = int(self.deps.behavior_cfg.get("max_feed_comments_per_post", 3))
+                    _feed_cap = self.deps.behavior_cfg.get("max_feed_comments_per_post")
                     _feed_count = self._get_agent_reply_count_in_post(str(post_id))
-                    if _feed_count >= _feed_cap:
+                    if _feed_cap is not None and _feed_count >= _feed_cap:
                         logger.info("Phase B: skip feed post %s — hard cap (%d/%d).", post_id, _feed_count, _feed_cap)
                         continue
 
