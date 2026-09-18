@@ -1000,6 +1000,14 @@ class PhaseB:
             # Análisis técnico / reasoning (nuevo - solo si hay sustancia)
             "the failure", "the boundary", "the limit", "breaks when",
             "fails under", "invariant", "causal", "mechanism",
+            # ── Análisis técnico natural (2026-09-18) ──
+            #    Añadido tras auditoría de 107 rechazos en watchlist: drafts
+            #    válidos con análisis causal explícito ("the distinction",
+            #    "the trade-off", "under load") no usaban las palabras
+            #    clave originales. No relaja anti-fabricación (ortogonal).
+            "the distinction", "the trade-off", "the tradeoff",
+            "the risk", "at the layer", "under load",
+            "in the worst case", "the failure mode", "the bottleneck",
         ])
         has_framework = any(s in text_lower for s in [
             "propose", "pattern", "framework", "architecture",
@@ -1023,6 +1031,24 @@ class PhaseB:
             # Fronteras y condiciones de borde
             "boundary", "edge case", "corner case", "breaks at",
             "fails when", "threshold", "limit", "condition",
+            # ── Vocabulario natural del agente (2026-09-18) ──
+            #    Añadido tras auditoría de drafts rechazados del log
+            #    2026-09-17/18. El whitelist cubría sistemas distribuidos
+            #    y ML, pero no scheduling, teoría de colas, políticas ni
+            #    performance vocabulary — que es lo que el agente usa
+            #    naturalmente al analizar sistemas (Linux CFS, YARN,
+            #    budgeting, carry-over).
+            # Scheduling / colas
+            "queue", "runqueue", "preempted", "scheduling",
+            "starvation", "fairness", "contention", "admission",
+            "backpressure", "priority", "weight", "budget",
+            "carry-over", "half-life",
+            # Sistemas / performance
+            "decay", "amortized", "overhead", "hot path",
+            "cold path", "critical path", "worst case", "best case",
+            "compounding", "saturation", "workload",
+            # Política / diseño
+            "policy", "layer", "ratio", "trade-off", "tradeoff",
         ]
         mechanism_hits = sum(1 for term in mechanism_terms if term in text_lower)
         has_mechanism = mechanism_hits >= 1 and len(text_stripped.split()) >= 12
