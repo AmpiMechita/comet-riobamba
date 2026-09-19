@@ -1742,3 +1742,46 @@ recomendado: 7 días de eventos `phase_a_classifier_verdict`.
 - No hay dashboard/reporte que agregue estos eventos. Se puede construir
   un `scripts/phase_a_verdict_report.py` en sesión futura.
 
+
+
+### H.7 — Flag huérfano `AGENT_PHASE_A_PUBLISH_ENABLED` eliminado — CERRADA
+
+**Estado:** eliminado de `.env`, `config/config.py`, `README.md`. Commit pendiente (esta sesión).
+
+**Contexto:**
+H.4 (2026-09-11) marcó el flag como huérfano pero lo dejó como deuda. Reauditado en 2026-09-19 con verificación explícita de consumidores.
+
+**Verificación de orfandad (evidencia):**
+- `config/config.py:93` lo leía del `.env` y lo mapeaba a
+  `behavior_cfg["phase_a_publish_enabled"]`.
+- Grep recursivo en `*.py` (excluyendo `.git`, `venv`, `tests`): **cero consumidores** en `phases/`, `core/`, `services/`.
+- Única lectura real en producción: `phases/phase_a_content.py:_safe_publish_post` (L1570-1582), que **solo** consulta
+  `data/phase_a_dry_run.flag` — nunca el env var.
+- 9 usos en `tests/*` (fixtures, ninguno en código de producción).
+
+**Riesgo operativo detectado:**
+`README.md:63` documentaba `AGENT_PHASE_A_PUBLISH_ENABLED=0   # 0 = borradores; 1 = publica`. Un operador podía poner el flag a 0 creyendo que desactivaba publicación y el agente **publicaría igual**. El kill-switch real es el archivo `data/phase_a_dry_run.flag`.
+
+**Cambio (3 archivos, 3 líneas eliminadas):**
+- `.env:72` — `AGENT_PHASE_A_PUBLISH_ENABLED=0`.
+- `config/config.py:93` — `"phase_a_publish_enabled": bool(int(os.getenv("AGENT_PHASE_A_PUBLISH_ENABLED", 0)))`.
+- `README.md:63` — línea de documentación obsoleta.
+
+**Decisión: eliminar, no reimplementar.** El dry-run flag por archivo es superior: se activa/desactiva en caliente (crear/borrar archivo), no requiere reinicio de NSSM, no depende del reload de `behavior_cfg`. Dos kill-switches para lo mismo es peor que uno.
+
+**SHA256 antes/después:**
+- `.env`            `b988ced821933821...` → `fd2101ae69b9e9c5...`
+- `config/config.py` `8cb555a4c9f60b5e...` → `53dc76dda74fcfb3...`
+- `README.md`        `7c1a76ec969e82ff...` → `6403ae5e31f6bc49...`
+
+**Verificación:**
+- Backup pre-cambio: `~\backups\comet-riobamba\phase25-20260919-184141\`.
+- `ast.parse` OK. CRLF preservado en los 3 archivos.
+- `git diff --stat`: 2 files, 2 deletions (`.env` no tracked).
+- `pytest`: 1489 passed, 1 skipped (baseline idéntico a H.6).
+- Grep post-fix: cero ocurrencias en `.env`, `config/config.py`, `README.md`.
+
+**Deuda que deja esta entrada:**
+- H.4 L1531 (`Deuda pendiente`) menciona el flag como pendiente. Se deja **sin editar** por convención append-only del documento; esta entrada H.7 la resuelve retroactivamente.
+- Fase 2.5 continúa: quedan `AGENT_PRO_TIER_ONLY`, `AGENT_QUALITY_BESTOF`, `MODEL_TIER_PRO_*` (4 keys) y `AGENT_PHASE_A_MODE` sin verificar consumidores.
+

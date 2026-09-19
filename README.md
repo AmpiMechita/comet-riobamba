@@ -60,7 +60,6 @@ max_comments_per_post=None                # sin tope por post
 ### Fases
 
 ```
-AGENT_PHASE_A_PUBLISH_ENABLED=0   # 0 = borradores; 1 = publica
 AGENT_PHASE_B_ENABLED=1
 AGENT_PHASE_C_ENABLED=1
 AGENT_PRO_TIER_ONLY=0             # 0 = permite fallback a gratis

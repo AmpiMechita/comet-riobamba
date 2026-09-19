@@ -90,7 +90,6 @@ behavior_cfg = {
     "max_consecutive_post_failures": int(
         os.getenv("AGENT_MAX_CONSECUTIVE_POST_FAILURES", _POLICY.max_consecutive_post_failures)
     ),
-    "phase_a_publish_enabled": bool(int(os.getenv("AGENT_PHASE_A_PUBLISH_ENABLED", 0))),
     "phase_a_mode": os.getenv("AGENT_PHASE_A_MODE", _POLICY.phase_a_mode),
     "cycle_interval_seconds": int(os.getenv("AGENT_CYCLE_INTERVAL_SECONDS", _POLICY.cycle_interval_seconds)),
     "phase_b_interval_seconds": int(os.getenv("AGENT_PHASE_B_INTERVAL_SECONDS", _POLICY.phase_b_interval_seconds)),
