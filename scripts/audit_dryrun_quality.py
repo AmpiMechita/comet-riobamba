@@ -80,7 +80,7 @@ def load_published_posts() -> List[Dict[str, Any]]:
 
 
 def filter_dryrun_posts(posts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Filtrar posts de julio-agosto 2026 (períº¾odo dry-run)."""
+    """Filtrar posts de julio-agosto 2026 (período dry-run)."""
     dryrun_posts = []
     
     for post in posts:
@@ -125,8 +125,8 @@ def load_september_topics() -> List[str]:
 
 
 def extract_topic_key(topic: str) -> str:
-    """Extraer clave de tema para agrupaciÃ³n (normalizar)."""
-    # Eliminar prefijos genÃ©ricos
+    """Extraer clave de tema para agrupación (normalizar)."""
+    # Eliminar prefijos genéricos
     topic = re.sub(r"^production agent engineering implications of the paper\s*", "", topic, flags=re.IGNORECASE)
     topic = re.sub(r"^observability and tracing in\s*", "", topic, flags=re.IGNORECASE)
     topic = re.sub(r"\(arXiv:\d+\.\d+v\d+\)", "", topic).strip()
@@ -135,7 +135,7 @@ def extract_topic_key(topic: str) -> str:
 
 
 def has_generic_topic(topic: str) -> bool:
-    """Verificar si el tema es un template genÃ©rico."""
+    """Verificar si el tema es un template genérico."""
     for pattern in GENERIC_TOPIC_PATTERNS:
         if re.search(pattern, topic, re.IGNORECASE):
             return True
@@ -162,7 +162,7 @@ def has_outdated_references(body: str) -> bool:
 
 def text_has_fabricated_measurement(text: str) -> bool:
     """Gate de calidad: detectar mediciones fabricadas."""
-    # Patrones de mediciones especÃ¬ficas (ej. "40% improvement", "3.2x faster")
+    # Patrones de mediciones específicas (ej. "40% improvement", "3.2x faster")
     measurement_patterns = [
         r"\b(\d+\.?\d*)\s*(%|percent|times|x)\s*(improvement|increase|decrease|reduction|faster|slower)\b",
         r"\b(\d+\.?\d*)\s*(ms|seconds|minutes|hours)\b",
@@ -178,10 +178,10 @@ def text_has_fabricated_measurement(text: str) -> bool:
 
 
 def text_has_unverifiable_historical_claim(text: str) -> bool:
-    """Gate de calidad: detectar afirmaciones histÃ³ricas no verificables."""
-    # Patrones de afirmaciones histÃ³ricas especÃ¬ficas
+    """Gate de calidad: detectar afirmaciones históricas no verificables."""
+    # Patrones de afirmaciones históricas específicas
     historical_patterns = [
-        r"\bin\s+(19\d{2}|20\d{2})\b",  # AÃ±os especÃ¬ficos
+        r"\bin\s+(19\d{2}|20\d{2})\b",  # Años específicos
         r"\b(invented|discovered|created|published)\s+by\b",
         r"\b(according to|as reported by|based on)\s+\w+\b",
     ]
@@ -205,14 +205,14 @@ def audit_post(post: Dict[str, Any], topic_counts: Dict[str, int], september_top
     status = "approved"
     notes = []
     
-    # 1. Longitud mÃ¬nima
+    # 1. Longitud mínima
     body_length = len(body)
     if body_length < MIN_BODY_LENGTH:
         rejection_reasons.append(f"body_too_short ({body_length} chars < {MIN_BODY_LENGTH})")
         quality_score -= 2
         status = "rejected"
     
-    # 2. Tema genÃ©rico
+    # 2. Tema genérico
     if has_generic_topic(topic):
         rejection_reasons.append("generic_topic_template")
         quality_score -= 1
@@ -247,11 +247,11 @@ def audit_post(post: Dict[str, Any], topic_counts: Dict[str, int], september_top
         quality_score -= 2
         status = "rejected"
     
-    # 7. Gate: afirmaciones histÃ³ricas no verificables
+    # 7. Gate: afirmaciones históricas no verificables
     if text_has_unverifiable_historical_claim(body):
         rejection_reasons.append("unverifiable_historical_claim")
         quality_score -= 1
-        notes.append("Verificar fuentes histÃ³ricas")
+        notes.append("Verificar fuentes históricas")
     
     # 8. Similaridad con posts de septiembre
     topic_lower = topic.lower()
@@ -287,8 +287,8 @@ def audit_post(post: Dict[str, Any], topic_counts: Dict[str, int], september_top
 
 
 def run_audit():
-    """Ejecutar auditorÃ¬a completa."""
-    logger.info("ð§ª¦ Iniciando auditorÃ¬a de calidad para posts dry-run")
+    """Ejecutar auditoría completa."""
+    logger.info("ð§ª¦ Iniciando auditoría de calidad para posts dry-run")
     
     # Cargar posts
     posts = load_published_posts()
@@ -304,7 +304,7 @@ def run_audit():
     
     logger.info(f"ð§«¦ Procesando {len(dryrun_posts)} posts dry-run")
     
-    # Cargar temas de septiembre (para deduplicaciÃ³n)
+    # Cargar temas de septiembre (para deduplicación)
     september_topics = load_september_topics()
     logger.info(f"Temas de septiembre cargados: {len(september_topics)}")
     
@@ -314,7 +314,7 @@ def run_audit():
         topic_key = extract_topic_key(post.get("topic", ""))
         topic_counts[topic_key] = topic_counts.get(topic_key, 0) + 1
     
-    logger.info(f"Temas Ãnicos encontrados: {len(topic_counts)}")
+    logger.info(f"Temas Únicos encontrados: {len(topic_counts)}")
     
     # Auditar cada post
     results: List[AuditResult] = []
@@ -361,10 +361,10 @@ def run_audit():
     rejected_count = len([r for r in results if r.status == "rejected"])
     manual_review_count = len([r for r in results if r.status == "manual_review"])
     
-    logger.info("â§ª Resumen de auditorÃ¬a:")
+    logger.info("â§ª Resumen de auditoría:")
     logger.info(f"  âÂ§ Aprobados: {approved_count} ({approved_count/len(results)*100:.1f}%)")
     logger.info(f"  âÂ§ Rechazados: {rejected_count} ({rejected_count/len(results)*100:.1f}%)")
-    logger.info(f"  âÂ§ RevisiÃ³n manual: {manual_review_count} ({manual_review_count/len(results)*100:.1f}%)")
+    logger.info(f"  âÂ§ Revisión manual: {manual_review_count} ({manual_review_count/len(results)*100:.1f}%)")
     logger.info(f"â§ª Reporte completo: {AUDIT_REPORT_PATH}")
     logger.info(f"â§ª Posts aprobados: {APPROVED_POSTS_PATH}")
     logger.info(f"â§ª Posts rechazados: {REJECTED_POSTS_PATH}")

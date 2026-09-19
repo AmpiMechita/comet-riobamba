@@ -307,9 +307,9 @@ Post:
 
 Genera un comentario de 2-3 oraciones que:
   1. Se refiera a una premisa específica del post (no reformules el título)
-  2. Añ�¾¾ade mecanismo, prueba, límite o contraejemplo concreto
+  2. Añade mecanismo, prueba, límite o contraejemplo concreto
   3. Proponga una prueba falsable o decisión técnica accionable
-  4. Evite preguntas retó¾¾¾ricas al final
+  4. Evite preguntas retóricas al final
   5. Sea denso en contenido técnico, no relleno
 
 Comentario:
@@ -337,7 +337,7 @@ Comentario:
           - Referirse a una premisa específica
           - Proponer prueba falsable o decisión técnica
           - Máximo 2-3 oraciones
-          - No preguntas retó¾¾¾ricas al final
+          - No preguntas retóricas al final
         """
         # Longitud mínima y máxima
         if len(comment) < 80 or len(comment) > 600:
@@ -362,15 +362,15 @@ Comentario:
             logger.debug(f"Quality gate C: no añade mecanismo o prueba")
             return False
         
-        # No debe terminar con pregunta retó¾¾¾rica
+        # No debe terminar con pregunta retórica
         if comment.rstrip().endswith("?"):
-            logger.debug(f"Quality gate C: termina con pregunta retó¾¾¾rica")
+            logger.debug(f"Quality gate C: termina con pregunta retórica")
             return False
         
         return True
 
 
-# Funciñ¾¾¾n helper para integrar en run_cycle()
+# Función helper para integrar en run_cycle()
 async def run_phase_c_if_enabled(
     moltbook_client: MoltbookAPIClient,
     model_cascade: ModelCascade,
@@ -386,7 +386,7 @@ async def run_phase_c_if_enabled(
         config: Diccionario con behavior_cfg o variables de entorno
     
     Retorna:
-        Metrics dict si Phase C se ejecutó¾¾¾, None si estaba deshabilitada
+        Metrics dict si Phase C se ejecutó, None si estaba deshabilitada
     """
     phase_c_enabled = config.get("phase_c_enabled", False)
     if not phase_c_enabled:
