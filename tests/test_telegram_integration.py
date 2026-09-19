@@ -83,7 +83,7 @@ def test_deepseek_balance_parse():
     }
 
     with patch("services.deepseek_balance.requests.get", return_value=mock_response), \
-         patch.dict("os.environ", {"MODEL_TIER_OPUS_API_KEY": "sk-test-key"}):
+         patch.dict("os.environ", {"DEEPSEEK_API_KEY": "sk-test-key"}):
         balance = check_deepseek_balance()
         assert balance == 4.52
 
@@ -92,7 +92,7 @@ def test_deepseek_balance_no_api_key():
     """Returns None if no API key configured."""
     from services.deepseek_balance import check_deepseek_balance
 
-    with patch.dict("os.environ", {"MODEL_TIER_OPUS_API_KEY": ""}):
+    with patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}):
         balance = check_deepseek_balance()
         assert balance is None
 
@@ -106,7 +106,7 @@ def test_deepseek_balance_http_error():
     mock_response.text = "Unauthorized"
 
     with patch("services.deepseek_balance.requests.get", return_value=mock_response), \
-         patch.dict("os.environ", {"MODEL_TIER_OPUS_API_KEY": "sk-test-key"}):
+         patch.dict("os.environ", {"DEEPSEEK_API_KEY": "sk-test-key"}):
         balance = check_deepseek_balance()
         assert balance is None
 
@@ -117,7 +117,7 @@ def test_deepseek_balance_network_error():
     import requests as req
 
     with patch("services.deepseek_balance.requests.get", side_effect=req.ConnectionError("timeout")), \
-         patch.dict("os.environ", {"MODEL_TIER_OPUS_API_KEY": "sk-test-key"}):
+         patch.dict("os.environ", {"DEEPSEEK_API_KEY": "sk-test-key"}):
         balance = check_deepseek_balance()
         assert balance is None
 

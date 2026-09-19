@@ -20,9 +20,9 @@ def check_deepseek_balance() -> Optional[float]:
 
     Returns the total balance in USD as a float, or None on failure.
     """
-    api_key = os.getenv("MODEL_TIER_OPUS_API_KEY", "")
+    api_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
     if not api_key:
-        logger.warning("DeepSeek balance: no API key configured (MODEL_TIER_OPUS_API_KEY)")
+        logger.warning("DeepSeek balance: no API key configured (DEEPSEEK_API_KEY)")
         return None
 
     try:
