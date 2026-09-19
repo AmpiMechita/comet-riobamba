@@ -1584,3 +1584,52 @@ producción tras reinicio.
 - 11 backups históricos adicionales en `phases/phase_b/` fueron eliminados
   en esta sesión, pero el patrón de backup manual persiste — considerar
   `.gitignore` para `*.bak*` y `*.backup*` en `phases/`.
+
+
+### H.4 — Resiliencia completa: NSSM + pausa + bug stop.flag — PARCIAL
+
+**Estado:** NSSM operativo. Bug del stop.flag detectado, no resuelto.
+
+**NSSM instalado (commits ba1fd86, d0af1d0, 423cfa5):**
+- Servicio `CometRiobamba` corriendo como SYSTEM, StartType Automatic.
+- Auto-arranque al boot, sin login.
+- Auto-restart si muere (AppRestartDelay=5000).
+- Logs: logs/service_stdout.log + service_stderr.log (rotacion 5 MB).
+- tools/nssm.exe instalado (ignorado por .gitignore).
+- Script tools/install-nssm-service.ps1 trackeado.
+
+**Bug detectado durante la instalacion:**
+- Primer intento de arrancar el servicio fallo con:
+  UnicodeEncodeError: 'charmap' codec can't encode character '\u2705' (check emoji)
+  en run_agent.py:8 -> cp1252 no soporta el emoji.
+- NSSM pauso el servicio tras 3 reintentos fallidos.
+- **Fix:** AppEnvironmentExtra="PYTHONIOENCODING=utf-8" inyectado via NSSM.
+  Sin tocar codigo fuente. Verificado: servicio Running, sin errores nuevos.
+
+**Anomalia detectada — bug del stop.flag (SIN RESOLVER):**
+- Contexto: detener manualmente el PID 4800 (agente corriendo desde
+  Start-Process, no como servicio).
+- Secuencia:
+  1. Script crea data/stop.flag
+  2. Espera 120s al shutdown graceful
+  3. Timeout -> throw (no detiene la shell interactiva)
+  4. Script REMUEVE data/stop.flag (intento de cleanup)
+  5. El agente 4800 sigue vivo (nunca proceso el flag)
+- Segundo intento: stop.flag recreado, agente respondio en 5s.
+- Hipotesis (no confirmada):
+  - H1 (probable): el Remove-Item del script borro el flag antes del chequeo.
+  - H2 (posible): bug en el loop que no detecta el flag durante el sleep
+    largo post-ciclo (1800s). El stop.flag se verifica cada 1s dentro del
+    for loop de sleep, asi que no deberia fallar.
+- Requiere investigacion en sesion dedicada. No reproducible en frio.
+
+**Verificacion empirica (2026-09-19):**
+- Patron pausa funciono: 2026-09-19 10:09 -> AC desconectado -> pausa
+  -> agente sobrevivio ~47 min en bateria antes del apagado del SO.
+- El sistema no sobrevive al agotamiento total de bateria (esperado).
+- Con NSSM, al proximo boot el agente arranca solo.
+
+**Pendientes:**
+- Investigar bug del stop.flag (proximo item de resiliencia).
+- Documentar runbook de pausa (como verificar estado, como reanudar).
+- Verificar que el agente con NSSM arranca tras un reboot real.
