@@ -1245,13 +1245,34 @@ def _looks_low_quality(text: str, policy: dict | None = None) -> tuple[bool, str
         # Contra research_value, 0.72 deja pasar framework/empirical/critique/
         # historical y rechaza metric/clarification/agreement/repetition.
         score = compute_dual_score(stripped)
+        _verdict = "approve"
+        _reason = "above_min_quality"
+        _override = False
         if score["research_value_score"] < float(min_score):
             # Override estructural (Fix 6): un post de longitud completa que cierra
             # con una pregunta abierta genuina es publicable aunque el content_type
             # sea de bajo valor. dual_scoring clasifica TIPO (disenado para rankear
             # comentarios ajenos en Fase B), no captura todo el vocabulario del niche.
             if _is_substantive_post(stripped):
-                return False, ""
+                _verdict = "approve"
+                _reason = "substantive_override"
+                _override = True
+            else:
+                _verdict = "reject"
+                _reason = "below_min_quality"
+        logger.info(
+            "EVENT phase_a_classifier_verdict | %s",
+            json.dumps({
+                "verdict": _verdict,
+                "reason": _reason,
+                "content_type": score["content_type"],
+                "research_value_score": score["research_value_score"],
+                "min_quality_score": float(min_score),
+                "override_substantive": _override,
+                "len_chars": len(stripped),
+            }, ensure_ascii=False),
+        )
+        if _verdict == "reject":
             return True, f"below_min_quality_score:{score['research_value_score']}:{score['content_type']}"
 
     return False, ""
