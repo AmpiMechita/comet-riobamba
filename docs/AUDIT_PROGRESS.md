@@ -1695,3 +1695,50 @@ análisis aparte. NO son `C3xx` ni `BE/FFFD`.
 - Reparar líneas con emojis (familia distinta).
 - Investigar origen: probable `Set-Content -Encoding` sin UTF-8.
 
+
+### H.6 — Instrumentación del clasificador Phase A — CERRADA
+
+**Estado:** evento `phase_a_classifier_verdict` emitido por cada evaluación. Commit `e4d4a1c`.
+
+**Contexto:**
+El handoff anterior (H.4 + §13.3) pedía validar la tasa de aprobación
+del clasificador recalibrado contra el 75.3% in-vitro. Al intentarlo en
+producción se descubrió que Phase A **no registraba** el verdicto per-draft:
+solo se veía el resultado final (`phase_a_publish_success` o `_skip`).
+Los `adjudicator_verdicts.jsonl` existentes son de Phase B (replies).
+
+**Cambio:**
+En `_looks_low_quality()` (L1247 de `phases/phase_a_content.py`), tras
+llamar a `compute_dual_score()` se emite un evento estructurado con 7
+campos: `verdict`, `reason`, `content_type`, `research_value_score`,
+`min_quality_score`, `override_substantive`, `len_chars`.
+
+Cubre las 3 rutas de decisión:
+- `approve / above_min_quality` — score >= umbral (0.72).
+- `approve / substantive_override` — bypass estructural (Fix 6) cuando
+  el texto es substantivo y cierra con pregunta abierta genuina.
+- `reject / below_min_quality` — score < umbral sin override.
+
+**Semántica preservada:**
+El flujo de decisión no cambia. Misma tupla (bool, razón) devuelta. Solo
+se añade la emisión del evento `logger.info` antes del `return`.
+
+**Verificación:**
+- Backup pre-cambio: `~\backups\comet-riobamba\phase_a_content.py.pre-instr-*`.
+- Hash pre: `1FA9E0ACADCA7507`. Hash post: `501587EB44E40011`.
+- `ast.parse` OK. CRLF preservado (2293, +21 líneas netas).
+- `pytest`: 1489 passed, 1 skipped.
+- Tests relevantes (`phase_a`, `dual_score`): 106 passed.
+
+**Métrica in-vitro vs in-vivo — aclaración:**
+El 75.3% del handoff anterior mide **drafts del clasificador de contenido**
+(fase in-vitro, via `audit_dryrun_quality.py`). La métrica in-vivo
+equivalente ahora **existe** pero requiere acumular datos. Primer análisis
+recomendado: 7 días de eventos `phase_a_classifier_verdict`.
+
+**Deuda:**
+- No hay test unitario para el evento `phase_a_classifier_verdict`.
+  Requiere mock de logger + captura de llamada. Prioridad media.
+- No hay dashboard/reporte que agregue estos eventos. Se puede construir
+  un `scripts/phase_a_verdict_report.py` en sesión futura.
+
