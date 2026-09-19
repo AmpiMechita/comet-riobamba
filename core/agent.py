@@ -33,6 +33,9 @@ from services.platform_awareness import PlatformAwareness
 from services.reply_cap import mark_unrepliable_comment, mark_replied_to_comment
 from services.dedup_store import DedupStore
 from services.telegram_client import create_telegram_client
+from services.battery_monitor import start_battery_monitor
+from services.balance_guard import check_and_trigger
+from services import pause_controller as pause_ctl
 from services.deepseek_balance import (
     check_deepseek_balance, was_balance_sent_today,
     mark_balance_sent, format_balance_message,
@@ -1160,10 +1163,31 @@ class COMETRiobambaAgent:
 
         base_interval = behavior_cfg.get("cycle_interval_seconds", POLICY.cycle_interval_seconds)
 
+        # ── Start battery monitor thread (pause pattern) ──
+        start_battery_monitor()
+        logger.info("Battery monitor background thread started")
+
         while not self.shutdown_requested:
             # Detect an out-of-band graceful stop request (data/stop.flag).
             if self._check_stop_flag() or self._check_maintenance_flag():
                 break
+
+            # ── Pause pattern (battery + balance) ──
+            # Si hay razones activas, esperar 5 min sin ejecutar ciclos.
+            # El thread de bateria y el balance_guard limpian las razones
+            # cuando las condiciones se recuperan.
+            if pause_ctl.is_paused():
+                reasons = pause_ctl.get_reasons()
+                logger.warning("Agente en pausa. Razones activas: %s", list(reasons.keys()))
+                for _ in range(300):
+                    if self.shutdown_requested or self._check_stop_flag() or self._check_maintenance_flag():
+                        break
+                    if not pause_ctl.is_paused():
+                        logger.info("Pausa terminada. Reanudando operacion normal.")
+                        break
+                    await asyncio.sleep(1)
+                continue
+
             cycle_interval = get_current_interval(base_interval)
             skip, reason = should_skip_cycle()
             if skip:
@@ -1176,6 +1200,13 @@ class COMETRiobambaAgent:
                 continue
 
             results = await self._run_cycle()
+
+            # ── Balance guard post-ciclo ──
+            try:
+                check_and_trigger()
+            except Exception as _e:
+                logger.warning("balance_guard: error post-ciclo: %s", _e)
+
             error = results.get("error")
             phase_a = results.get("phase_a") or {}
             phase_b = results.get("phase_b") or {}
