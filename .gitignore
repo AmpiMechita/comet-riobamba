@@ -257,3 +257,6 @@ _audit_trash/
 # Excepcion: editorial_policy es config curada, no state runtime.
 # El mutator (services/editorial_mutator.py) existe pero esta desconectado.
 !data/editorial_policy.json
+
+# NSSM binary (externo, descargable de nssm.cc)
+tools/nssm.exe
