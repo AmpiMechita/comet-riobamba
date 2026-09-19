@@ -1633,3 +1633,65 @@ producción tras reinicio.
 - Investigar bug del stop.flag (proximo item de resiliencia).
 - Documentar runbook de pausa (como verificar estado, como reanudar).
 - Verificar que el agente con NSSM arranca tras un reboot real.
+
+### H.5 — Reparación de mojibake en 2 archivos tracked — CERRADA
+
+**Estado:** 2 archivos reparados, 1489 tests passed. Commit `4cfe401`.
+
+**Alcance:**
+- `phases/phase_c_watchlist.py` — 7 líneas, familia `BE/FFFD`.
+- `scripts/audit_dryrun_quality.py` — 17 líneas, familia `C3xx`.
+
+**Diagnóstico:**
+El handoff describía glifos visibles (3/4 x3, A-tilde x) pero el baseline
+real se obtuvo con volcado de code points en hex — inmune al render de
+PowerShell, que aplicaba un segundo layer de mojibake al mostrar UTF-8
+con code page equivocada.
+
+**Familia A — `phase_c_watchlist.py`:**
+`BE` (3/4) + `FFFD` insertados entre caracteres acentuados legítimos.
+5 patrones, 7 reemplazos:
+- `A\xf1\ufffd\xbe\xbeade` -> Añade
+- `ret\xf3\xbe\xbe\xbericas` -> retóricas (2x)
+- `ret\xf3\xbe\xbe\xberica` -> retórica (2x)
+- `Funci\xf1\xbe\xbe\xben` -> Función (cambio semántico ñ->ó)
+- `ejecut\xf3\xbe\xbe\xbe` -> ejecutó
+
+**Familia B — `audit_dryrun_quality.py`:**
+`C3 xx` (UTF-8 leído como cp1252). 7 patrones, 20 reemplazos:
+- `C3 B3` -> ó (7x)
+- `C3 A9` -> é (3x)
+- `C3 AC` -> í (7x)
+- `C3 B1` -> ñ (1x)
+- `C3 9A` -> Ú (1x, mayúscula confirmada por bytes)
+- `per ED BA BE odo` -> período (1x, patrón mixto)
+- `C3 A1` -> á (0x, sin ocurrencias reales)
+
+**Corrección al handoff anterior:**
+- `C3 AC -> í` (el handoff decía -> ì, incorrecto).
+- `C3 9A -> Ú` mayúscula (el handoff proponía -> ú minúscula).
+- Familia A: 7 líneas reales (el handoff decía 4).
+
+**No tocado — deuda nueva:**
+Líneas con emojis multi-byte (`F0 A7 AA A6`, `F0 A7 AB A6`, `E2 A7 AA`,
+`E2 C2 A7`) — ~10 líneas. Cadena de mojibake distinta, requieren
+análisis aparte. NO son `C3xx` ni `BE/FFFD`.
+
+**Metodología:**
+- Baseline SHA256: `7C7BE5EA...` (F1), `33BDF57E...` (F2).
+- Backup en `~\backups\comet-riobamba\mojibake-20260919-*`.
+- Dry-run + `ast.parse` antes de escribir.
+- Apply con verificación de pre-hash (assert) + `ast.parse`.
+- Verificación post: `Get-FileHash` + volcado `ascii()` de líneas
+  modificadas (ground truth, sin ambigüedad de render).
+- Hash post: `4D9F78C3...` (F1), `9A6A833C...` (F2).
+
+**Verificación:**
+- `ast.parse` OK en ambos.
+- Residual `BE/FFFD/C3` = 0.
+- `pytest`: 1489 passed, 1 skipped.
+
+**Pendientes:**
+- Reparar líneas con emojis (familia distinta).
+- Investigar origen: probable `Set-Content -Encoding` sin UTF-8.
+
