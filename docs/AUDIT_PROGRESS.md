@@ -1785,3 +1785,74 @@ H.4 (2026-09-11) marcó el flag como huérfano pero lo dejó como deuda. Reaudit
 - H.4 L1531 (`Deuda pendiente`) menciona el flag como pendiente. Se deja **sin editar** por convención append-only del documento; esta entrada H.7 la resuelve retroactivamente.
 - Fase 2.5 continúa: quedan `AGENT_PRO_TIER_ONLY`, `AGENT_QUALITY_BESTOF`, `MODEL_TIER_PRO_*` (4 keys) y `AGENT_PHASE_A_MODE` sin verificar consumidores.
 
+
+
+### H.8 — 5 flags huérfanos de tier/Phase A eliminados — CERRADA
+
+**Estado:** eliminados de `.env` y `docs/COMET-RIOBAMBA_REFERENCE.md`. Commit pendiente (esta sesión).
+
+**Contexto:**
+Continuación de Fase 2.5 (auditoría `config/`) tras H.7. Barrido de 48 keys en `.env` con grep recursivo sobre `*.py` de producción (excluyendo tests, venv, `scripts/comet_repurposer/`).
+
+**Veredicto por flag (7 candidatos iniciales):**
+- `AGENT_PRO_TIER_ONLY`        → VIVO (`services/model_cascade.py:304`).
+- `AGENT_QUALITY_BESTOF`      → VIVO (`utils/quality_flags.py:13`, consumido en Phase A L1892 y Phase B L2762).
+- `AGENT_PHASE_A_MODE`        → VIVO (`config.py:93` → `behavior_cfg["phase_a_mode"]` → `phase_a_content.py:615`).
+- `MODEL_TIER_PRO_TIMEOUT_SECONDS` → VIVO (`model_cascade.py:191`).
+- `MODEL_TIER_PRO_ENABLED`    → **HUÉRFANO**.
+- `MODEL_TIER_PRO_URL`        → **HUÉRFANO** (duplicado literal de `DEEPSEEK_PRO_URL`, L39 del `.env`).
+- `MODEL_TIER_PRO_MODEL`      → **HUÉRFANO** (duplicado literal de `DEEPSEEK_PRO_MODEL`, L40 del `.env`).
+
+**Verificación adicional (2da ronda, familia Phase A):**
+- `PHASE_A_GENERATION_TIER`   → VIVO (`phase_a_content.py:1903`).
+- `PHASE_A_MODEL_TIER`        → **HUÉRFANO**.
+- `PHASE_A_MODEL`             → **HUÉRFANO**.
+
+**Confirmación de orfandad (los 5):**
+- Cero matches en `*.py` de producción (grep recursivo).
+- Cero matches en `tests/` (sin fixtures que limpiar).
+- Cero matches en `docs/CONFIG_TRUTH.md` (fuente de verdad).
+- Cero matches en `.py` de `config/` — no llegaban a mapearse a `behavior_cfg`.
+
+**Riesgo operativo:** idéntico patrón a H.7. La construcción real de `tier_pro` en `services/model_cascade.py:181-196` usa:
+```
+DEEPSEEK_PRO_API_KEY  ← key
+DEEPSEEK_PRO_URL      ← URL      (no MODEL_TIER_PRO_URL)
+DEEPSEEK_PRO_MODEL    ← modelo   (no MODEL_TIER_PRO_MODEL)
+MODEL_TIER_PRO_TIMEOUT_SECONDS ← timeout  (único vivo)
+```
+Un operador podía cambiar `MODEL_TIER_PRO_MODEL` creyendo cambiar el modelo activo y el agente seguía usando `DEEPSEEK_PRO_MODEL`.
+
+**Documentación colateral corregida:**
+`docs/COMET-RIOBAMBA_REFERENCE.md:37-38` documentaba `PHASE_A_MODEL_TIER` y `PHASE_A_MODEL` como si fueran efectivos. 2 filas de tabla eliminadas.
+
+**Cambio (2 archivos, 7 líneas eliminadas):**
+- `.env:17` — `PHASE_A_MODEL_TIER=tier_pro`.
+- `.env:18` — `PHASE_A_MODEL=deepseek-v4-pro`.
+- `.env:27` — `MODEL_TIER_PRO_ENABLED=true`.
+- `.env:28` — `MODEL_TIER_PRO_URL=https://api.deepseek.com/v1/chat/completions`.
+- `.env:29` — `MODEL_TIER_PRO_MODEL=deepseek-v4-pro`.
+- `COMET-RIOBAMBA_REFERENCE.md:37` — fila de tabla de `PHASE_A_MODEL_TIER`.
+- `COMET-RIOBAMBA_REFERENCE.md:38` — fila de tabla de `PHASE_A_MODEL`.
+
+**SHA256 antes/después:**
+- `.env`                          `fd2101ae69b9e9c5...` → `424f64f5183a9a36...`
+- `docs/COMET-RIOBAMBA_REFERENCE.md` `cbdd4f53070b98ac...` → `bf4f24453b7b033e...`
+
+**Verificación:**
+- Backup pre-cambio: `~\backups\comet-riobamba\phase25b-20260919-190857\`.
+- Script con asserts de unicidad por línea (cada target aparece exactamente 1 vez).
+- `git diff --stat`: 1 file, 2 deletions (`.env` no tracked).
+- CRLF preservado. Rezagos post-fix: cero ocurrencias en `.env` y `COMET-RIOBAMBA_REFERENCE.md`.
+- `pytest`: pendiente (ejecutado tras este append).
+
+**Deuda que deja esta entrada:**
+- **Inconsistencias adicionales en `COMET-RIOBAMBA_REFERENCE.md` L30-43** (fuera de scope de H.8):
+  - L39: `DEEPSEEK_SPEND_LIMIT_USD=2.00` → real `0.5`.
+  - L43: `AGENT_CYCLE_INTERVAL_SECONDS=300` → real `1800`.
+  - L32, L40, L42: `AGENT_PHASE_A_ENABLED`, `ANTHROPIC_SPEND_LIMIT_USD`, `PHASE_B_FEED_REPLIES` — verificar si existen en `.env` actual.
+  - **Mojibake pre-existente** en líneas de contexto (`mÃĐtricas`, `LÃ­mite`, `generaciÃģn`). Verificar byte-level si es real o artefacto de display antes de tocar.
+  Candidato a H.9 (auditoría de documentación técnica).
+- Asimetría: `MODEL_TIER_FLASH_TIMEOUT_SECONDS` se lee en `model_cascade.py:209` (default 90) pero no está declarado en `.env`.
+- `MODEL_TIER_PRO_TIMEOUT_SECONDS` sigue vivo y declarado en `.env:30` → no tocar. Documentar en CONFIG_TRUTH.md si se formaliza la familia `MODEL_TIER_*`.
+

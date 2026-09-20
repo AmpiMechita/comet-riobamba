@@ -34,8 +34,6 @@ Este documento se conserva por valor historico, no como referencia tecnica.
 | `AGENT_PHASE_C_ENABLED` | `1` | Activa Phase C (analytics/ métricas) |
 | `AGENT_PRO_TIER_ONLY` | `1` | **Forza solo tiers de pago** (DeepSeek). Anthropic se salta al empezar con tier_pro |
 | `PHASE_A_GENERATION_TIER` | `pro` | Tier a usar en Phase A: `pro` = DeepSeek V4 Pro |
-| `PHASE_A_MODEL_TIER` | `tier_pro` | Mapeo a tier específico |
-| `PHASE_A_MODEL` | `deepseek-v4-pro` | Nombre del modelo DeepSeek |
 | `DEEPSEEK_SPEND_LIMIT_USD` | `2.00` | Límite diario de gasto DeepSeek |
 | `ANTHROPIC_SPEND_LIMIT_USD` | `2.00` | Límite diario de gasto Anthropic |
 | `AGENT_PHASE_A_MODE` | `research` | Modo de generación: `research` (include agenda de investigación) |
