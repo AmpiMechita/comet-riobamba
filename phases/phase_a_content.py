@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from config import behavior_cfg, BASE_DIR
+from config.schedule import get_quiet_hours, get_post_hours, get_max_posts_per_day
 from config.agent_policy import POLICY
 from config.topic_matrix import load_topic_matrix, save_topic_matrix
 from config.niche_prompts import NICHE_PROMPTS
@@ -1618,9 +1619,10 @@ class PhaseAContentGeneration:
                 behavior_cfg.get("timezone"), e,
             )
             tz = timezone(timedelta(hours=-5))
-        current_hour = datetime.now(tz).hour
-        quiet = behavior_cfg.get("quiet_hours", [])
-        post_hours = behavior_cfg.get("post_hours", [])
+        now_dt = datetime.now(tz)
+        current_hour = now_dt.hour
+        quiet = get_quiet_hours(now=now_dt)
+        post_hours = get_post_hours(now=now_dt)
         if current_hour in quiet:
             logger.info("Phase A: quiet_hours (hora=%s), saltando", current_hour)
             return {"posts_published": 0, "drafts_generated": 0, "posts": [], "success": False, "skipped": "quiet_hours"}
@@ -1629,7 +1631,7 @@ class PhaseAContentGeneration:
             return {"posts_published": 0, "drafts_generated": 0, "posts": [], "success": False, "skipped": "outside_post_hours"}
 
         posts: List[Dict[str, Any]] = []
-        max_per_day = behavior_cfg.get("max_posts_per_day", POLICY.max_posts_per_day)
+        max_per_day = get_max_posts_per_day(now=now_dt, default=POLICY.max_posts_per_day)
 
         def _current_posts_today() -> int:
             if self.deps.get_posts_today is not None:

@@ -117,11 +117,15 @@ def _override_behavior_cfg(max_posts: int):
     """Helper para parchar behavior_cfg dentro de un test."""
     import config.config as _cfg
     _cfg.behavior_cfg["max_posts_per_day"] = max_posts
+    # Day-aware: mismo valor en weekend para que el test sea determinista
+    # independiente del dia real (sab/dom usarian la variante *_weekend).
+    _cfg.behavior_cfg["max_posts_per_day_weekend"] = max_posts
     _cfg.behavior_cfg["phase_a_publish_enabled"] = True
     _cfg.behavior_cfg["phase_b_enabled"] = False
     _cfg.behavior_cfg["phase_c_enabled"] = False
     _cfg.behavior_cfg["whisper_mode"] = False
     _cfg.behavior_cfg["max_comments_per_day"] = 0
+    _cfg.behavior_cfg["max_comments_per_day_weekend"] = 0
     _cfg.behavior_cfg["max_comment_replies_per_cycle"] = 0
     _cfg.behavior_cfg["max_comments_per_post"] = 0
     _cfg.behavior_cfg["cycle_interval_seconds"] = 1

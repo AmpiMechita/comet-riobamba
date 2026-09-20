@@ -2,7 +2,7 @@
   "version": 2,
   "niche": "health, operation and real failures of autonomous agents in production",
   "publication_policy": {
-    "max_posts_per_week": 10,
+    "max_posts_per_week": 14,
     "publish_only_when": "post originates from a real incident, a failure pattern, or a reusable lesson"
   },
   "topic_weights": {

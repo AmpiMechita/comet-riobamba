@@ -16,6 +16,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from config import behavior_cfg, content_cfg
+from config.schedule import (
+    get_quiet_hours, get_comment_hours,
+    get_max_posts_per_day, get_max_comments_per_day,
+)
 from config.agent_policy import POLICY
 from config.config import validate_config
 from config.credentials import Credentials
@@ -311,7 +315,7 @@ class COMETRiobambaAgent:
 
         logger.info("Outbox: reintentando %s posts pendientes antes de Fase A...", len(post_items))
 
-        max_posts = behavior_cfg.get("max_posts_per_day", POLICY.max_posts_per_day)
+        max_posts = get_max_posts_per_day(default=POLICY.max_posts_per_day)
         min_backoff = POLICY.outbox_min_backoff_seconds
         max_backoff = POLICY.outbox_max_backoff_seconds
 
@@ -496,7 +500,7 @@ class COMETRiobambaAgent:
             return 0
 
         logger.info("Comment outbox: reintentando %s comentarios pendientes...", len(comment_items))
-        max_daily = behavior_cfg.get("max_comments_per_day", POLICY.max_comments_per_day)
+        max_daily = get_max_comments_per_day(default=POLICY.max_comments_per_day)
         min_backoff = POLICY.outbox_min_backoff_seconds
         max_backoff = POLICY.outbox_max_backoff_seconds
 
@@ -686,9 +690,10 @@ class COMETRiobambaAgent:
                 tz = ZoneInfo(behavior_cfg.get("timezone", "America/Guayaquil"))
             except Exception:
                 tz = timezone(timedelta(hours=-5))
-            current_hour = datetime.now(tz).hour
-            quiet = behavior_cfg.get("quiet_hours", []) or []
-            comment_hours = behavior_cfg.get("comment_hours", []) or []
+            now_dt = datetime.now(tz)
+            current_hour = now_dt.hour
+            quiet = get_quiet_hours(now=now_dt) or []
+            comment_hours = get_comment_hours(now=now_dt) or []
             in_quiet = (current_hour in quiet) or (bool(comment_hours) and current_hour not in comment_hours)
         except Exception as e:
             logger.debug("peak guard: quiet calc fallo: %s", e)
@@ -866,7 +871,7 @@ class COMETRiobambaAgent:
         self._maybe_send_nightly_inbound_report()
         self._maybe_run_nightly_reflection()
 
-        max_posts = behavior_cfg.get("max_posts_per_day", POLICY.max_posts_per_day)
+        max_posts = get_max_posts_per_day(default=POLICY.max_posts_per_day)
         phase_a_blocked = max_posts is not None and self.posts_today >= max_posts
         if phase_a_blocked:
             logger.info(
@@ -1131,9 +1136,9 @@ class COMETRiobambaAgent:
         logger.info(
             "Behavior config (effective): max_posts_per_day=%s, cycle_interval_seconds=%s, "
             "max_comments_per_day=%s, max_comment_replies_per_cycle=%s, max_comments_per_post=%s",
-            behavior_cfg.get("max_posts_per_day", POLICY.max_posts_per_day),
+            get_max_posts_per_day(default=POLICY.max_posts_per_day),
             behavior_cfg.get("cycle_interval_seconds", POLICY.cycle_interval_seconds),
-            behavior_cfg.get("max_comments_per_day", POLICY.max_comments_per_day),
+            get_max_comments_per_day(default=POLICY.max_comments_per_day),
             behavior_cfg.get("max_comment_replies_per_cycle", POLICY.max_comment_replies_per_cycle),
             behavior_cfg.get("max_comments_per_post", POLICY.max_comments_per_post),
         )

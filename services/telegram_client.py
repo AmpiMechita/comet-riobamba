@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import ClassVar, List, Optional
 from config import behavior_cfg, BASE_DIR
 from config.agent_policy import POLICY
+from config.schedule import get_max_posts_per_day
 
 logger = logging.getLogger("services.telegram_client")
 
@@ -339,7 +340,7 @@ class TelegramClient:
     async def _handle_status(self, agent):
         cycle = getattr(agent, "cycle_count", 0)
         posts = getattr(agent, "posts_today", 0)
-        max_posts = behavior_cfg.get("max_posts_per_day", POLICY.max_posts_per_day)
+        max_posts = get_max_posts_per_day(default=POLICY.max_posts_per_day)
         outbox_count = 0
         try:
             from services.persistence import get_conn
