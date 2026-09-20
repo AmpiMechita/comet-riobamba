@@ -1941,3 +1941,40 @@ Solo `deepseek_flash_timeout` es **100% huérfano** (0 refs en prod + 0 en tests
 - `deepseek_timeout` (`credentials.py:31`) sigue presente: 0 consumidores en prod, 2 fixtures de test lo asignan sin verificarlo. Eliminarlo requiere decidir qué hacer con `tests/test_model_cascade.py:591` y `tests/test_zen_deepseek_wiring.py:41`. Candidato a H.11.
 - `ollama_cloud_timeout` (`credentials.py:51`): 0 consumidores, pero sin env var asociada (`OLLAMA_CLOUD_TIMEOUT_SECONDS` no existe). Caso distinto; candidato a H.11/H.12.
 - `MODEL_TIER_FLASH_TIMEOUT_SECONDS`: documentar en `CONFIG_TRUTH.md` como default implícito intencional (ver arriba).
+
+### H.10b — Verificación COMET-RIOBAMBA_REFERENCE.md L32-43 (no-op) — CERRADA
+
+**Estado:** verificado, sin cambios. No-op documentado.
+
+**Contexto:**
+El handoff 2026-09-19 (tarde) listaba dos items a resolver en `docs/COMET-RIOBAMBA_REFERENCE.md`:
+1. Inconsistencias de valores L32-43 (`DEEPSEEK_SPEND_LIMIT_USD=2.00`, `AGENT_CYCLE_INTERVAL_SECONDS=300`, etc.).
+2. Mojibake pre-existente en líneas de contexto.
+
+**Hallazgo 1 — inconsistencias son intencionales:**
+El archivo abre con aviso explícito (L1-6):
+> AVISO DE DESACTUALIZACION - 2026-09-11
+> Los valores de configuracion en este documento NO reflejan la realidad.
+> Fuente de verdad: docs/CONFIG_TRUTH.md + config/config.py + .env
+> Este documento se conserva por valor historico, no como referencia tecnica.
+
+Corregir los valores violaría esa decisión. El archivo **debe** mantener su snapshot histórico. Acción: ninguna.
+
+**Hallazgo 2 — mojibake NO existe:**
+Verificación byte-level (`Path.read_bytes()` + `Format-Hex`):
+- Mojibake real (8 patrones: `â€”`, `Ã©`, `Ã³`, `Ã±`, `Ã¡`, `Ã`, comillas): **0 hits**.
+- `decode('utf-8')` strict: **OK**.
+- L34 byte-level: `6D C3 A9 74 72 69 63 61 73` = `m é t r i c a s` (UTF-8 válido).
+- `mÃ©tricas` visto en consola = artefacto de display PowerShell (CP850/CP1252), no corrupción.
+
+Caracteres UTF-8 válidos presentes: em-dash ×3, á ×8, é ×9, í ×14, ó ×27.
+
+**Acción:** ninguna. Ambos items del handoff eran falsos positivos.
+
+**Nota:** este párrafo contiene literalmente las secuencias mojibake como 
+ejemplos pedagógicos (entre backticks). Búsquedas futuras de 
+mojibake en este archivo deben excluir la sección H.10b para evitar falsos 
+positivos.
+
+**Deuda que deja esta entrada:**
+Ninguna. Este no-op cierra el cabo suelto de H.8.
