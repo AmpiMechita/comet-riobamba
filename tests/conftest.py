@@ -133,3 +133,51 @@ def _isolate_karma_roi_db(tmp_path, monkeypatch):
             monkeypatch.setattr(krt, "KARMA_TRACKER_FILE", tmp_path / "karma_roi_tracker.jsonl", raising=False)
     except Exception:
         pass
+
+@pytest.fixture(autouse=True)
+def _isolate_phase_a_jsonl_logs(tmp_path, monkeypatch):
+    """Redirige los JSONL de Phase A a tmp_path.
+
+    FIX 2026-09-20: test suite filtraba 637 bytes a
+    data/generation_attempts.jsonl por ciclo de test
+    (patron: datetime mockeado a 2026-07-22 + _log_generation_attempt
+    ejecutado sin monkeypatch del path). Mismo patron que los fixes
+    previos de comet_state.db (2026-09-15), telegram_outbox (2026-09-16)
+    y karma_roi.db (2026-09-16).
+
+    Sin esta fixture, cada corrida de pytest contamina las metricas
+    de produccion con entries falsas (ts=2026-07-22T12:00:00,
+    run_id=unknown)."""
+    try:
+        import phases.phase_a_content as pac
+        monkeypatch.setattr(
+            pac, "_GENERATION_ATTEMPTS_LOG",
+            tmp_path / "generation_attempts.jsonl", raising=False,
+        )
+        monkeypatch.setattr(
+            pac, "_REJECTED_POSTS_LOG",
+            tmp_path / "rejected_posts.jsonl", raising=False,
+        )
+        monkeypatch.setattr(
+            pac, "_FATIGUE_STORE",
+            tmp_path / "published_posts.json", raising=False,
+        )
+        monkeypatch.setattr(
+            pac, "_TOPIC_COOLDOWN_PATH",
+            tmp_path / "phase_a_topic_cooldown.json", raising=False,
+        )
+        monkeypatch.setattr(
+            pac, "_TOPIC_HISTORY_FILE",
+            tmp_path / "topic_history.json", raising=False,
+        )
+    except Exception:
+        pass
+
+    try:
+        import services.dual_scoring as ds
+        monkeypatch.setattr(
+            ds, "DUAL_SCORE_LOG",
+            tmp_path / "dual_scores.jsonl", raising=False,
+        )
+    except Exception:
+        pass
