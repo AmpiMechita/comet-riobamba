@@ -130,6 +130,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from config.agent_policy import POLICY
 from config import BASE_DIR
 from config import behavior_cfg
+from config.schedule import get_quiet_hours, get_comment_hours
 from core.observability import send_event
 from core.tracer import Span
 from core.value_log import log_value_event
@@ -1793,9 +1794,10 @@ class PhaseB:
                 behavior_cfg.get("timezone"), e,
             )
             tz = timezone(timedelta(hours=-5))
-        current_hour = datetime.now(tz).hour
-        quiet = behavior_cfg.get("quiet_hours", [])
-        comment_hours = behavior_cfg.get("comment_hours", [])
+        now_dt = datetime.now(tz)
+        current_hour = now_dt.hour
+        quiet = get_quiet_hours(now=now_dt)
+        comment_hours = get_comment_hours(now=now_dt)
         in_quiet_hours = (current_hour in quiet) or (bool(comment_hours) and current_hour not in comment_hours)
 
         if in_quiet_hours:
