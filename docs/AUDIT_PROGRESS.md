@@ -1856,3 +1856,43 @@ Un operador podía cambiar `MODEL_TIER_PRO_MODEL` creyendo cambiar el modelo act
 - Asimetría: `MODEL_TIER_FLASH_TIMEOUT_SECONDS` se lee en `model_cascade.py:209` (default 90) pero no está declarado en `.env`.
 - `MODEL_TIER_PRO_TIMEOUT_SECONDS` sigue vivo y declarado en `.env:30` → no tocar. Documentar en CONFIG_TRUTH.md si se formaliza la familia `MODEL_TIER_*`.
 
+
+
+### H.9 — Fix test roto por fecha hardcodeada (editorial_self_audit) — CERRADA
+
+**Estado:** fix aplicado. Commit pendiente (esta sesión).
+
+**Contexto:**
+Detectado durante verificación de H.8. La suite completa dio `1 failed, 1488 passed, 1 skipped` con:
+`tests/test_editorial_self_audit.py::TestAnalyzeVotes::test_calibration_holds_when_higher_score_wins`
+→ `KeyError: '<=0.3'`.
+
+**Diagnóstico (no relacionado con H.7/H.8):**
+Los dos tests `TestAnalyzeVotes` usaban fechas hardcodeadas `"date": "2026-08-20"` y llamaban `_analyze_votes(votes)` con default `days=30`. El cutoff es dinámico: `today - days`. La comparación interna es estricta (`date > cutoff`).
+
+- 18/09/2026: cutoff = 19/08, `20/08 > 19/08` → True → tests pasan.
+- 19/09/2026: cutoff = 20/08, `20/08 > 20/08` → False → **todos los votos excluidos**, buckets vacíos, `KeyError`.
+
+Bug latente: el test se rompe automáticamente al cruzar los 30 días de antigüedad de su fecha hardcodeada. Coincidió con esta sesión por azar, no por causa.
+
+**Verificación empírica:** con `days=30` → keys `['calibrated', 'overall_upvote_rate_pct']` (sin buckets). Con `days=31` → keys completas + valores correctos (10, 75, True).
+
+**Cambio (`tests/test_editorial_self_audit.py`, +7 líneas, 8 modificadas):**
+- Import a nivel módulo: `from datetime import datetime, timedelta, timezone`.
+- Helper `_recent_date(days_ago: int = 10) -> str` que devuelve una fecha ISO reciente.
+- 8 reemplazos: `"date": "2026-08-20"` → `"date": _recent_date()`.
+- `"date": "2026-01-01"` (test_old_records_ignored) intacta: el test verifica el comportamiento con registros viejos por diseño.
+
+**SHA256 antes/después:**
+`tests/test_editorial_self_audit.py` `b9e69e875aa00237...` → `64107a9ce3694840...`
+
+**Verificación:**
+- Backup pre-cambio: `~\backups\comet-riobamba\phase25c-20260919-195745\`.
+- `ast.parse` OK. CRLF preservado.
+- `pytest tests/test_editorial_self_audit.py -v`: 10/10 PASSED.
+- `pytest tests/ -q`: 1489 passed, 1 skipped (baseline restaurado).
+
+**Deuda que deja esta entrada:**
+- Otros tests del repo podrían tener el mismo patrón (fechas hardcodeadas + ventanas deslizantes). Candidato a grep: `Select-String -Pattern '\d{4}-\d{2}-\d{2}' tests\*.py`.
+- El helper `_post(hours_ago=48)` en el mismo archivo ya usaba fechas dinámicas — el fix alinea los tests de votos con esa convención.
+

@@ -6,6 +6,7 @@ reales de la auditoria manual (coletilla 'a defensible starting point,
 calibrate against your own baseline' repetida entre posts).
 """
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,11 @@ def _post(body: str, hours_ago: float = 48) -> dict:
     from datetime import datetime, timedelta, timezone
     ts = (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).isoformat()
     return {"body": body, "published_at": ts}
+
+
+def _recent_date(days_ago: int = 10) -> str:
+    """Fecha ISO dentro de la ventana default 30d de _analyze_votes."""
+    return (datetime.now(timezone.utc) - timedelta(days=days_ago)).date().isoformat()
 
 
 CLEAN_POST = (
@@ -129,10 +135,10 @@ class TestAnalyzeCorpus:
 class TestAnalyzeVotes:
 
     def test_calibration_holds_when_higher_score_wins(self):
-        votes = ([{"date": "2026-08-20", "value_score": 0.2, "upvotes": 0}] * 90
-                 + [{"date": "2026-08-20", "value_score": 0.2, "upvotes": 1}] * 10
-                 + [{"date": "2026-08-20", "value_score": 0.9, "upvotes": 1}] * 30
-                 + [{"date": "2026-08-20", "value_score": 0.9, "upvotes": 0}] * 10)
+        votes = ([{"date": _recent_date(), "value_score": 0.2, "upvotes": 0}] * 90
+                 + [{"date": _recent_date(), "value_score": 0.2, "upvotes": 1}] * 10
+                 + [{"date": _recent_date(), "value_score": 0.9, "upvotes": 1}] * 30
+                 + [{"date": _recent_date(), "value_score": 0.9, "upvotes": 0}] * 10)
         r = _analyze_votes(votes)
         assert r["<=0.3"]["upvote_rate_pct"] == 10
         assert r[">0.5"]["upvote_rate_pct"] == 75
@@ -140,10 +146,10 @@ class TestAnalyzeVotes:
 
     def test_uncalibrated_mirror_real_world(self):
         # Hallazgo real 24/08: score alto NO predice upvotes (3% < 5%).
-        votes = ([{"date": "2026-08-20", "value_score": 0.2, "upvotes": 1}] * 5
-                 + [{"date": "2026-08-20", "value_score": 0.2, "upvotes": 0}] * 95
-                 + [{"date": "2026-08-20", "value_score": 0.9, "upvotes": 1}] * 3
-                 + [{"date": "2026-08-20", "value_score": 0.9, "upvotes": 0}] * 97)
+        votes = ([{"date": _recent_date(), "value_score": 0.2, "upvotes": 1}] * 5
+                 + [{"date": _recent_date(), "value_score": 0.2, "upvotes": 0}] * 95
+                 + [{"date": _recent_date(), "value_score": 0.9, "upvotes": 1}] * 3
+                 + [{"date": _recent_date(), "value_score": 0.9, "upvotes": 0}] * 97)
         r = _analyze_votes(votes)
         assert r["calibrated"] is False
 
