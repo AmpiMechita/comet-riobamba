@@ -27,6 +27,7 @@ OVERLAY_PATH = BASE_DIR / "data" / "auto_applied_config.json"
 APPLY_LOG_PATH = BASE_DIR / "data" / "proposal_apply_log.jsonl"
 
 from config.auto_appliable import ALLOWLIST
+from utils.file_helpers import write_json_atomic
 
 # Cooldown por parametro: no reaplicar cambios al mismo parametro antes de
 # N segundos (evita loops de oscilacion entre valores).
@@ -47,10 +48,15 @@ def load_overlay() -> Dict[str, Any]:
 
 
 def _save_overlay(overlay: Dict[str, Any]) -> None:
+    """Persiste el overlay de forma atomica.
+
+    Regla 2026-09-20: escrituras a data/*.json que se leen al arranque
+    DEBEN ser atomicas. Un kill a mitad de write (NSSM restart, etc.)
+    dejaba el archivo corrupto y load_overlay() lo reseteaba a {} sin
+    avisar.
+    """
     OVERLAY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    OVERLAY_PATH.write_text(
-        json.dumps(overlay, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
+    write_json_atomic(OVERLAY_PATH, overlay, indent=2, ensure_ascii=False)
 
 
 def _append_apply_log(entry: Dict[str, Any]) -> None:

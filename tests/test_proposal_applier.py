@@ -114,3 +114,50 @@ def test_apply_log_is_auditable(tmp_path):
     assert entries[0]["param"] == "max_consecutive_post_failures"
     assert entries[0]["status"] == "applied"
     assert entries[0]["reason"] == "razon"
+
+
+# --- Tests nuevos 2026-09-20: sincronizacion allowlist <-> prompt ---------
+
+def test_allowlist_includes_restored_params():
+    """Los 4 params restaurados 2026-09-20 deben estar en el allowlist."""
+    from config.auto_appliable import ALLOWLIST
+    restored = (
+        "max_comments_per_day",
+        "max_feed_replies_per_day",
+        "max_comment_replies_per_cycle",
+        "max_posts_per_day",
+    )
+    for p in restored:
+        assert p in ALLOWLIST, f"{p} debe estar en allowlist"
+        lo, hi, default = ALLOWLIST[p]
+        assert lo < hi, f"bounds invalidos para {p}: {lo} >= {hi}"
+        assert lo <= default <= hi, (
+            f"default {default} fuera de [{lo}, {hi}] para {p}"
+        )
+
+
+def test_allowlist_and_prompt_are_in_sync():
+    """El prompt del LLM solo puede ofrecer params del allowlist.
+
+    Regresion historica: el prompt ofrecia 'phase_b_max_replies' (ghost,
+    nunca leido) y el allowlist habia perdido 4 params reales. Este test
+    evita que se vuelvan a desincronizar.
+    """
+    import re
+    from pathlib import Path
+    from config.auto_appliable import ALLOWLIST
+
+    src = Path("phases/phase_c_analytics.py").read_text(encoding="utf-8")
+    # Buscar el bloque del prompt "param_name (min-max)"
+    menu = re.findall(r"(\w+)\s*\((\d+)-(\d+)\)", src)
+    prompt_params = {m[0] for m in menu}
+
+    # Excluir matches que no sean params (versiones, rangos sin nombre)
+    known_non_params = {"phase_b_max_replies"}  # eliminado del prompt
+    offered = prompt_params - known_non_params
+
+    missing = offered - set(ALLOWLIST.keys())
+    assert not missing, (
+        f"Prompt del LLM ofrece params que NO estan en allowlist: {missing}. "
+        f"Sincronizar phase_c_analytics.py con config/auto_appliable.py."
+    )
