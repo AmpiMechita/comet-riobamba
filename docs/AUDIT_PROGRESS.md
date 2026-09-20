@@ -1896,3 +1896,48 @@ Bug latente: el test se rompe automáticamente al cruzar los 30 días de antigü
 - Otros tests del repo podrían tener el mismo patrón (fechas hardcodeadas + ventanas deslizantes). Candidato a grep: `Select-String -Pattern '\d{4}-\d{2}-\d{2}' tests\*.py`.
 - El helper `_post(hours_ago=48)` en el mismo archivo ya usaba fechas dinámicas — el fix alinea los tests de votos con esa convención.
 
+### H.10 — Eliminar campo huérfano deepseek_flash_timeout (credentials.py) — CERRADA
+
+**Estado:** fix aplicado. Commit atómico (esta sesión).
+
+**Contexto:**
+Detectado durante verificación de Fase 2.5 (auditoría `config/`), como continuación natural de H.7/H.8.
+El handoff 2026-09-19 (tarde) listaba dos items pendientes en la familia TIMEOUT:
+1. Asimetría `MODEL_TIER_FLASH_TIMEOUT_SECONDS` (leída con default 90 pero no declarada en `.env`).
+2. `AGENT_QUALITY_BESTOF` (verificado VIVO, sin cambios).
+
+**Diagnóstico:**
+El grep de consumidores reveló un hallazgo más fuerte que la asimetría: **dos campos del dataclass `Credentials` no tienen ningún consumidor en producción ni en tests**.
+
+| Campo | Declaración | Consumidores prod | Consumidores tests |
+|---|---|---|---|
+| `deepseek_flash_timeout` | `credentials.py:43` | **0** | **0** |
+| `deepseek_timeout` | `credentials.py:31` | **0** | 2 (fixtures de test) |
+| `cerebras_timeout` | `credentials.py:48` | 1 (`model_cascade.py:240`) | — |
+| `ollama_cloud_timeout` | `credentials.py:51` | 0 | 0 |
+
+Solo `deepseek_flash_timeout` es **100% huérfano** (0 refs en prod + 0 en tests). Mismo patrón exacto de H.7/H.8: env var declarada, mapeada a un campo, pero el consumidor final nunca existe.
+
+**Sobre la asimetría `MODEL_TIER_FLASH_TIMEOUT_SECONDS`:** no se toca en esta entrada. El histórico `data/env_backup_20260822.txt` confirma que la variable fue eliminada deliberadamente el 22/08/2026 (junto con `MODEL_TIER_FLASH_{URL,MODEL,API_KEY}`), en el mismo batch que cambió `ZEN_ENABLED=true → false`. El default 90 en `model_cascade.py:209` es intencional. Documentar formalmente queda como deuda aparte si se decide formalizar la familia `MODEL_TIER_*` en `docs/CONFIG_TRUTH.md`.
+
+**Cambio (`config/credentials.py` −2 líneas; `.env` −1 línea local):**
+- `config/credentials.py:43` → eliminado campo `deepseek_flash_timeout: int = 90`.
+- `config/credentials.py:78` → eliminado kwarg `deepseek_flash_timeout=int(os.getenv("DEEPSEEK_FLASH_TIMEOUT_SECONDS", "90")),`.
+- `.env:30` → eliminada línea `DEEPSEEK_FLASH_TIMEOUT_SECONDS=90` (archivo gitignored; cambio local, no versionado).
+
+**SHA256 antes/después:**
+- `config/credentials.py`: `306f1d7b97f4169b...` → `08ff259ac3918d57...`
+- `.env`: `424f64f5183a9a36...` → `074206e32a8c6ab2...`
+
+**Verificación:**
+- Backup pre-cambio: `~\backups\comet-riobamba\H10-20260919-202211\`.
+- Assert de unicidad pre-edición: 2 ocurrencias en `credentials.py`, 1 en `.env`.
+- `ast.parse` PRE y POST: OK. CRLF preservado (85→83 en `credentials.py`, 79→78 en `.env`).
+- Post-assert: **0 ocurrencias** de `deepseek_flash_timeout` / `DEEPSEEK_FLASH_TIMEOUT_SECONDS` en el repo (excluyendo backups/`.pyc`/`.bak`).
+- `git diff` limpio: exactamente 2 líneas eliminadas en `credentials.py`, 0 añadidas, 0 modificadas.
+- `pytest tests/ -q`: 1489 passed, 1 skipped (baseline idéntico).
+
+**Deuda que deja esta entrada:**
+- `deepseek_timeout` (`credentials.py:31`) sigue presente: 0 consumidores en prod, 2 fixtures de test lo asignan sin verificarlo. Eliminarlo requiere decidir qué hacer con `tests/test_model_cascade.py:591` y `tests/test_zen_deepseek_wiring.py:41`. Candidato a H.11.
+- `ollama_cloud_timeout` (`credentials.py:51`): 0 consumidores, pero sin env var asociada (`OLLAMA_CLOUD_TIMEOUT_SECONDS` no existe). Caso distinto; candidato a H.11/H.12.
+- `MODEL_TIER_FLASH_TIMEOUT_SECONDS`: documentar en `CONFIG_TRUTH.md` como default implícito intencional (ver arriba).

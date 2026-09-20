@@ -40,7 +40,6 @@ class Credentials:
     deepseek_flash_api_key: str = ""
     deepseek_flash_url: str = ""
     deepseek_flash_model: str = ""
-    deepseek_flash_timeout: int = 90
 
     cerebras_api_key: str = ""
     cerebras_url: str = ""
@@ -75,7 +74,6 @@ class Credentials:
             deepseek_flash_api_key=os.getenv("DEEPSEEK_FLASH_API_KEY", "").strip(),
             deepseek_flash_url=os.getenv("DEEPSEEK_FLASH_URL", "https://api.deepseek.com/v1/chat/completions").strip(),
             deepseek_flash_model=os.getenv("DEEPSEEK_FLASH_MODEL", "deepseek-v4-flash").strip(),
-            deepseek_flash_timeout=int(os.getenv("DEEPSEEK_FLASH_TIMEOUT_SECONDS", "90")),
             cerebras_api_key=os.getenv("CEREBRAS_API_KEY", ""),
             cerebras_url=os.getenv("CEREBRAS_API_URL", "https://api.cerebras.ai/v1/chat/completions"),
             cerebras_model=os.getenv("CEREBRAS_MODEL", "llama-3-8b"),
