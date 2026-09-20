@@ -840,3 +840,86 @@ class TestArxivCitation:
         assert "validation_failed" not in log_text
         assert "success_arxiv_injected" in log_text
         assert not rejected_log.exists(), "no se registra rechazo para cita faltante en topic arXiv"
+
+
+# ─── Run ID tracking (2026-09-20) ────────────────────────────────────────
+# Trazabilidad de intentos por ciclo: sin esto, intentos abortados por
+# shutdown contaminaban las metricas del siguiente arranque.
+
+def test_set_and_get_run_id():
+    """set_run_id() y get_run_id() son simetricos."""
+    import phases.phase_a_content as pac
+    original = pac.get_run_id()
+    try:
+        pac.set_run_id("cycle-999-test")
+        assert pac.get_run_id() == "cycle-999-test"
+        pac.set_run_id("cycle-1000-test")
+        assert pac.get_run_id() == "cycle-1000-test"
+    finally:
+        pac.set_run_id(original)
+
+
+def test_set_run_id_with_empty_string_falls_back_to_unknown():
+    """set_run_id('') o None no deben dejar un valor vacio."""
+    import phases.phase_a_content as pac
+    original = pac.get_run_id()
+    try:
+        pac.set_run_id("")
+        assert pac.get_run_id() == "unknown"
+        pac.set_run_id(None)
+        assert pac.get_run_id() == "unknown"
+    finally:
+        pac.set_run_id(original)
+
+
+def test_run_id_included_in_generation_attempt(tmp_path, monkeypatch):
+    """_log_generation_attempt() debe incluir run_id en el record."""
+    import json
+    import phases.phase_a_content as pac
+
+    log_path = tmp_path / "generation_attempts.jsonl"
+    monkeypatch.setattr(pac, "_GENERATION_ATTEMPTS_LOG", log_path)
+
+    original = pac.get_run_id()
+    try:
+        pac.set_run_id("cycle-42-1234567890")
+        pac._log_generation_attempt(
+            topic="test topic",
+            topic_source="roadmap",
+            attempt=1,
+            max_attempts=3,
+            outcome="success",
+        )
+
+        lines = log_path.read_text(encoding="utf-8").strip().split("\n")
+        assert len(lines) == 1
+        record = json.loads(lines[0])
+        assert record["run_id"] == "cycle-42-1234567890"
+        assert record["topic"] == "test topic"
+        assert record["topic_source"] == "roadmap"
+        assert record["attempt"] == 1
+        assert record["outcome"] == "success"
+    finally:
+        pac.set_run_id(original)
+
+
+def test_run_id_defaults_to_unknown(tmp_path, monkeypatch):
+    """Sin set_run_id previo, el record debe decir 'unknown'."""
+    import json
+    import phases.phase_a_content as pac
+
+    log_path = tmp_path / "generation_attempts.jsonl"
+    monkeypatch.setattr(pac, "_GENERATION_ATTEMPTS_LOG", log_path)
+
+    # Forzar estado "unknown" (import-time default o reset explicito)
+    original = pac.get_run_id()
+    pac.set_run_id("")
+    try:
+        pac._log_generation_attempt(
+            topic="t", topic_source="roadmap", attempt=1, max_attempts=3, outcome="x",
+        )
+        lines = log_path.read_text(encoding="utf-8").strip().split("\n")
+        record = json.loads(lines[0])
+        assert record["run_id"] == "unknown"
+    finally:
+        pac.set_run_id(original)

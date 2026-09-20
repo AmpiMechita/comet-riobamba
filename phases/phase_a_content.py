@@ -1317,6 +1317,25 @@ def _check_template_fatigue(text: str) -> List[str]:
     return text_template_fatigue(text, bodies, min_posts=min_posts)
 
 
+# ── Run ID (2026-09-20): identifica cada ejecucion de un ciclo. Se setea
+#    desde core.agent._run_cycle al inicio de cada ciclo y se incluye en
+#    cada record de generation_attempts. Sin esto, los intentos abortados
+#    por shutdown (task cancelada -> output vacio -> too_short) contaminan
+#    las metricas del siguiente arranque.
+_RUN_ID: str = "unknown"
+
+
+def set_run_id(rid: str) -> None:
+    """Setea el run_id actual (llamado por core.agent al inicio de cada ciclo)."""
+    global _RUN_ID
+    _RUN_ID = str(rid) if rid else "unknown"
+
+
+def get_run_id() -> str:
+    """Devuelve el run_id actual (util para tests y diagnostico)."""
+    return _RUN_ID
+
+
 def _log_generation_attempt(topic: str, topic_source: str, attempt: int, max_attempts: int, outcome: str) -> None:
     """Registra cada intento de generacion (exito o motivo de rechazo). Antes
     esta informacion solo vivia en el log de texto y se perdia al terminar
@@ -1325,6 +1344,7 @@ def _log_generation_attempt(topic: str, topic_source: str, attempt: int, max_att
         _GENERATION_ATTEMPTS_LOG.parent.mkdir(parents=True, exist_ok=True)
         record = {
             "timestamp": datetime.now(UTC).isoformat(),
+            "run_id": _RUN_ID,
             "topic": topic,
             "topic_source": topic_source,
             "attempt": attempt,
