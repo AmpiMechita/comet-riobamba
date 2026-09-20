@@ -26,6 +26,6 @@ ALLOWLIST = {
     # 'param_not_in_allowlist'.
     "max_comments_per_day": (0, 50, 30),
     "max_feed_replies_per_day": (0, 20, 12),
-    "max_comment_replies_per_cycle": (0, 10, 8),
+    "max_comment_replies_per_cycle": (2, 10, 8),   # min=2: no desactivar Phase B
     "max_posts_per_day": (1, 10, 2),
 }
