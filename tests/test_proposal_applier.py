@@ -18,6 +18,7 @@ def _isolate_paths(monkeypatch, tmp_path):
     monkeypatch.setattr(pa, "OVERLAY_PATH", tmp_path / "auto_applied_config.json")
     monkeypatch.setattr(pa, "APPLY_LOG_PATH", tmp_path / "proposal_apply_log.jsonl")
     monkeypatch.setattr(pa, "COOLDOWN_SECONDS", 0)
+    monkeypatch.setattr(pa, "_RUN_ID", "unknown")
     yield
 
 
@@ -161,3 +162,33 @@ def test_allowlist_and_prompt_are_in_sync():
         f"Prompt del LLM ofrece params que NO estan en allowlist: {missing}. "
         f"Sincronizar phase_c_analytics.py con config/auto_appliable.py."
     )
+
+# --- Tests nuevos 2026-09-20: trazabilidad (regla #31) --------------------
+
+def test_apply_log_entries_have_ts_timestamp_and_run_id():
+    """Toda entry de proposal_apply_log tiene ts, timestamp y run_id."""
+    import services.proposal_applier as pa
+    pa.set_run_id("cycle-42-1789939208")
+    pa.apply_structured_proposal(
+        {"param": "nonexistent_param", "suggested": 5, "reason": "test"},
+        {},
+    )
+    entries = pa._read_apply_log()
+    assert len(entries) == 1
+    e = entries[0]
+    assert e["status"] == "rejected"
+    assert isinstance(e["ts"], (int, float))
+    assert e["timestamp"].endswith("+00:00")
+    assert e["run_id"] == "cycle-42-1789939208"
+
+
+def test_apply_log_run_id_defaults_to_unknown():
+    """Sin set_run_id(), la entry debe decir 'unknown' (no KeyError)."""
+    import services.proposal_applier as pa
+    pa.apply_structured_proposal(
+        {"param": "nonexistent_param", "suggested": 5, "reason": "test"},
+        {},
+    )
+    entries = pa._read_apply_log()
+    assert entries[0]["run_id"] == "unknown"
+

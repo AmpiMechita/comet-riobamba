@@ -57,6 +57,7 @@ from services.global_circuit import (
 )
 from phases.deps import PhaseADeps, PhaseBDeps, PhaseCDeps
 from phases.phase_a_content import PhaseAContentGeneration, set_run_id
+from services import proposal_applier
 from phases.phase_b import PhaseB
 from phases.phase_c_analytics import PhaseCAnalytics
 from phases.phase_c_watchlist import run_phase_c_if_enabled, PhaseCWatchlist
@@ -857,7 +858,9 @@ class COMETRiobambaAgent:
         # Run ID (2026-09-20): trazar intentos de generacion por ciclo.
         # Sin esto, intentos abortados por shutdown contaminan las metricas
         # del siguiente arranque (ver _log_generation_attempt).
-        set_run_id(f"cycle-{self.cycle_count}-{int(cycle_start)}")
+        rid = f"cycle-{self.cycle_count}-{int(cycle_start)}"
+        set_run_id(rid)
+        proposal_applier.set_run_id(rid)
         send_event("cycle_start", {"cycle": self.cycle_count})
 
         # Check if paused via Telegram /pause command

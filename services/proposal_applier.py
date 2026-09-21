@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -28,6 +29,22 @@ APPLY_LOG_PATH = BASE_DIR / "data" / "proposal_apply_log.jsonl"
 
 from config.auto_appliable import ALLOWLIST
 from utils.file_helpers import write_json_atomic
+
+# Regla #31: toda metrica persistida entre arranques DEBE incluir run_id.
+# Mismo patron que phases/phase_a_content.py — core.agent llama set_run_id()
+# al inicio de cada ciclo. Fallback "unknown" para callers fuera del ciclo.
+_RUN_ID: str = "unknown"
+
+
+def set_run_id(rid: str) -> None:
+    """Setea el run_id actual del ciclo. Llamado por core.agent."""
+    global _RUN_ID
+    _RUN_ID = str(rid) if rid else "unknown"
+
+
+def get_run_id() -> str:
+    """Devuelve el run_id actual (util para tests y diagnostico)."""
+    return _RUN_ID
 
 # Cooldown por parametro: no reaplicar cambios al mismo parametro antes de
 # N segundos (evita loops de oscilacion entre valores).
@@ -60,9 +77,25 @@ def _save_overlay(overlay: Dict[str, Any]) -> None:
 
 
 def _append_apply_log(entry: Dict[str, Any]) -> None:
+    """Escribe una entry al log, garantizando ts/timestamp/run_id.
+
+    ts (epoch float) y timestamp (ISO UTC) se agregan SIEMPRE, aunque el
+    caller los omita. run_id se toma del estado de modulo si no vino
+    explicito (regla #31).
+    """
+    now = time.time()
+    enriched = {
+        **entry,
+        "ts": entry.get("ts", now),
+        "timestamp": entry.get(
+            "timestamp",
+            datetime.fromtimestamp(now, tz=timezone.utc).isoformat(),
+        ),
+        "run_id": entry.get("run_id", _RUN_ID),
+    }
     APPLY_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(str(APPLY_LOG_PATH), "a", encoding="utf-8") as f:
-        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        f.write(json.dumps(enriched, ensure_ascii=False) + "\n")
 
 
 def _read_apply_log() -> list:
@@ -81,7 +114,10 @@ def _read_apply_log() -> list:
 def _last_change_time(param: str) -> Optional[float]:
     for e in reversed(_read_apply_log()):
         if e.get("param") == param and e.get("status") == "applied":
-            return e.get("ts")
+            ts = e.get("ts")
+            if ts is None:
+                continue  # entrada legacy sin ts
+            return float(ts)
     return None
 
 
