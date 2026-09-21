@@ -3586,7 +3586,7 @@ class PhaseB:
             _claims_tracker = None  # type: Optional[ClaimsTracker]
             _claims_cluster = "infrastructure"
             try:
-                _claims_tracker = ClaimsTracker(Path.cwd())
+                _claims_tracker = ClaimsTracker(Path("data"))
                 _claims_cluster = _detect_cluster(f"{title} {body}")
                 # ── Energy-tech keyword override for ClaimsTracker ──
                 _tech_keywords_map = {
@@ -4237,7 +4237,7 @@ class PhaseB:
             _agent_claims = []
             try:
                 from core.claims_tracker import ClaimsTracker
-                _ct = ClaimsTracker()
+                _ct = ClaimsTracker(Path("data"))
                 _agent_claims = [c.text for c in _ct._claims[:10]] if _ct._claims else []
             except Exception:
                 pass
@@ -5044,7 +5044,7 @@ class PhaseB:
             _claims_tracker = None
             _claims_cluster = "infrastructure"
             try:
-                _claims_tracker = ClaimsTracker(Path.cwd())
+                _claims_tracker = ClaimsTracker(Path("data"))
                 _claims_cluster = _detect_cluster(f"{comment_text} {thread_history}")
                 # ── Energy-tech keyword override for ClaimsTracker ──
                 _tech_keywords_map = {

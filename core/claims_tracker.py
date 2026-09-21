@@ -272,7 +272,7 @@ class ClaimsTracker:
         return "\n".join(lines)
 
     def _load(self) -> None:
-        state_file = self.data_dir / "data" / "claims_tracker.json"
+        state_file = self.data_dir / "claims_tracker.json"
         if not state_file.exists():
             return
         try:
@@ -285,12 +285,12 @@ class ClaimsTracker:
             self._next_id = 1
 
     def _ensure_file_exists(self) -> None:
-        state_file = self.data_dir / "data" / "claims_tracker.json"
+        state_file = self.data_dir / "claims_tracker.json"
         if not state_file.exists():
             self._save()
 
     def _save(self) -> None:
-        state_file = self.data_dir / "data" / "claims_tracker.json"
+        state_file = self.data_dir / "claims_tracker.json"
         state_file.parent.mkdir(parents=True, exist_ok=True)
         data = {
             "next_id": self._next_id,

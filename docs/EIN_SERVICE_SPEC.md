@@ -10,7 +10,7 @@
 
 ## 1. Overview
 
-The EIN is a claim verification service for energy-related assertions. It accepts a natural-language claim, verifies it against the claims_tracker.json database (228,083 entries) and energy_intel.db (776 KB), and returns a structured verdict with confidence score, sources, and timestamps.
+The EIN is a claim verification service for energy-related assertions. It accepts a natural-language claim, verifies it against the claims_tracker.json database (~29,400 entries, live and growing) and energy_intel.db (776 KB), and returns a structured verdict with confidence score, sources, and timestamps.
 
 Key differentiator: Contextual verification, not raw data. The service answers "Is this claim real, fabricated, or outdated?" rather than "What is the current price of oil?"
 
@@ -80,7 +80,7 @@ Returns service status.
 
     {
       "status": "ok",
-      "claims_loaded": 228083,
+      "claims_loaded": 29389,
       "energy_intel_loaded": true,
       "uptime_seconds": 86400
     }
