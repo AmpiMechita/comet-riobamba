@@ -264,3 +264,6 @@ tools/nssm.exe
 # Excepciones: historia de objetivos del proyecto (2026-09-20)
 !docs/archive/CONTEXTO_COMPLETO_PROYECTO_COMET.md
 !docs/archive/DOCUMENTACION_COMPLETA_COMET_RIOBAMBA.md
+
+# Excepción: herramienta permanente (no es parche one-shot)
+!scripts/fix_mojibake.py
