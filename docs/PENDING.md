@@ -4,6 +4,8 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
+> **Última actualización:** 2026-09-21 17:57 (lunes, UTC-5).
+> Sesión en curso. Commits: `cf6721e`, `1606c00`.
 
 ---
 
@@ -13,9 +15,9 @@
 |---|---|---|---|---|
 | P-001 | OPEN | 2026-09-19 | Bug `stop.flag` ignorado la primera vez | Handoff 18/19 §7 |
 | P-002 | OPEN | 2026-09-19 | Verificar NSSM arranca tras reboot real de Windows | Handoff 18/19 §13.3 |
-| P-003 | OPEN | 2026-09-20 | Verificar `run_id` en producción (Phase A, lunes con cap reset) | Sesión 20/9 §15.3 |
-| P-004 | OPEN | 2026-09-20 | Verificar `run_id` + `timestamp` ISO en `proposal_apply_log` | Sesión 20/9 |
-| P-005 | OPEN | 2026-09-20 | Verificar cap weekday efectivo `max_posts_per_day=1` el lunes | Sesión 20/9 §15.4 |
+| P-003 | DONE | 2026-09-20 | Verificar `run_id` en producción (Phase A, lunes con cap reset) | Sesión 20/9 §15.3 |
+| P-004 | DONE | 2026-09-20 | Verificar `run_id` + `timestamp` ISO en `proposal_apply_log` | Sesión 20/9 |
+| P-005 | DONE | 2026-09-20 | Verificar cap weekday efectivo `max_posts_per_day=1` el lunes | Sesión 20/9 §15.4 |
 | P-006 | OPEN | 2026-09-20 | Post-mortem incidentes `model_error` (sep 1, 2, 10) | Purga `generation_attempts` 20/9 |
 | P-007 | OPEN | 2026-09-17 | Revisar `min=0` en `max_comments_per_day`, `max_feed_replies_per_day`, `max_comments_per_post` | Sesión 20/9 §11.4 |
 
@@ -63,7 +65,7 @@
 
 | ID | Estado | Creado | Descripción | Origen |
 |---|---|---|---|---|
-| P-033 | OPEN | 2026-09-21 | Reconciliar 3 capas de config (policy/runtime/allowlist) | P-007b |
+| P-033 | DECIDE | 2026-09-21 | Reconciliar 3 capas de config (policy/runtime/allowlist). Evidencia 21/9: env=15 vs allowlist=(2,10,8) vs log previous=2 | P-007b |
 | P-040 | OPEN | 2026-09-21 | Rediseño motor auto-mejora: deltas + floors + sombra | Sesión 21/9 |
 | P-041 | OPEN | 2026-09-21 | Verificar posible Hangul-mojibake en `phase_a_content.py` | Sesión 21/9 |
 
@@ -73,7 +75,10 @@
 
 | ID | Descripción | Commit / artefacto |
 |---|---|---|
-| P-018 | Fix mojibake en `audit_dryrun_quality.py` | (pendiente commit) |
+| P-003 | Verificar run_id en produccion Phase A | Verificado 21/9 16:12, cycle-182-1790007121 |
+| P-004 | Verificar ts+timestamp+run_id en proposal_apply_log | Verificado 21/9 15:08, cycle-180-1790003032 |
+| P-005 | Verificar cap weekday max_posts_per_day=1 | Verificado ciclos 188-194 |
+| P-018 | Fix mojibake en `audit_dryrun_quality.py` | cf6721e + 1606c00 |
 
 ## Cerrados esta sesión (2026-09-20)
 
