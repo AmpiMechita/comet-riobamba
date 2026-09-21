@@ -42,17 +42,17 @@
 | P-022 | OPEN | 2026-09-17 | Verificar nombre del agente Moltbook (`comet_riobamba` vs `cometa_riobamba`) | Handoff 17/18 §7 |
 | P-023 | OPEN | 2026-09-19 | Añadir sección day-aware + run_id + allowlist a `CONFIG_TRUTH.md` | Handoff 19 noche §13.11 |
 | P-024 | OPEN | 2026-09-20 | Implementar M4 (fuente externa para Phase A) | Sesión 20/9 |
-| P-025 | OPEN | 2026-09-19 | Limpieza de backups (`.env.backup*`, `config/*.backup-*`) | Handoff 19 noche §13.12 |
+| P-025 | DONE | 2026-09-19 | Limpieza de backups (`.env.backup*`, `config/*.backup-*`) | Handoff 19 noche §13.12 |
 
 ## Baja prioridad
 
 | ID | Estado | Creado | Descripción | Origen |
 |---|---|---|---|---|
-| P-026 | OPEN | 2026-09-19 | `data/config_audit_20260911.json` — artefacto viejo | Handoff 19 noche §13.13 |
-| P-027 | OPEN | 2026-09-18 | `snapshots.jsonl` — 4.96 MB, nadie escribe desde 6/9 | Handoff 18/19 §13.14 |
+| P-026 | DONE | 2026-09-19 | `data/config_audit_20260911.json` — artefacto viejo | Handoff 19 noche §13.13 |
+| P-027 | DONE | 2026-09-18 | `snapshots.jsonl` — 4.96 MB, nadie escribe desde 6/9 | Handoff 18/19 §13.14 |
 | P-028 | OPEN | 2026-09-18 | `guard C` en una línea — cosmético | Handoff 17/18 §6 |
 | P-029 | OPEN | 2026-09-18 | `run_value_review` L116-123 dead code | Handoff 17/18 §6 |
-| P-030 | OPEN | 2026-09-20 | Decidir destino de `proposal_apply_log.legacy-20260920.jsonl` | Sesión 20/9 |
+| P-030 | DONE | 2026-09-20 | Decidir destino de `proposal_apply_log.legacy-20260920.jsonl` | Sesión 20/9 |
 
 ## Macro / estratégico
 
@@ -79,6 +79,10 @@
 | P-004 | Verificar ts+timestamp+run_id en proposal_apply_log | Verificado 21/9 15:08, cycle-180-1790003032 |
 | P-005 | Verificar cap weekday max_posts_per_day=1 | Verificado ciclos 188-194 |
 | P-018 | Fix mojibake en `audit_dryrun_quality.py` | cf6721e + 1606c00 |
+| P-025 | Limpieza backups `.env.*` + `config/*.bak*` | backups/env-backups-20260921 + backups/config-backups-20260921 |
+| P-026 | `config_audit_20260911.json` archivado | data/archive/ |
+| P-027 | `snapshots.jsonl` archivado | monitoring/archive/ |
+| P-030 | `proposal_apply_log.legacy` archivado | data/archive/ |
 
 ## Cerrados esta sesión (2026-09-20)
 
