@@ -1,5 +1,11 @@
 # EIN Service Specification — COMET-RIOBAMBA
 
+> SPEC PROPUESTA - NO IMPLEMENTADA.
+> Este documento describe un servicio que aun no existe en codigo.
+> El checklist de la seccion 11 esta todo en [ ]. Se planea construir
+> en Fase 1 del plan de autosustentabilidad. NO confundir con
+> documentacion de algo funcional.
+
 > **Purpose:** Technical specification for the Energy Intelligence Node (EIN) as a paid verification service. This document describes endpoints, schemas, pricing, payment integration, and discovery. It is intended to be read alongside the code.
 
 ## 1. Overview

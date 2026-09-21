@@ -77,11 +77,11 @@
 |---|---|---|
 | Patron pausa | OK | pause_controller verificado |
 | Monitor de bateria | OK | Thread battery-monitor corriendo |
-| Guard de saldo | OK | check_deepseek_balance() -> $2.33 |
-| Auto-arranque al boot | PENDIENTE | Requiere NSSM |
+| Guard de saldo | OK | check_deepseek_balance() -> $1.90 (2026-09-20) |
+| **Auto-arranque al boot** | **OK** | **NSSM servicio `CometRiobamba` (SYSTEM, StartType=Automatic)** |
 | Notificacion Telegram | OK | 1 vez al pausar, 1 vez al reanudar |
 
-Verificacion empirica (2026-09-18):
+Verificacion empirica (2026-09-20):
 - WMI responde: {EstimatedChargeRemaining: 100, BatteryStatus: 2}
 - Thread arranca: battery-monitor, alive=True
 - Test funcional: pausar con 2 razones -> quitar 1 -> sigue pausado -> quitar la ultima -> reanudado
@@ -91,14 +91,18 @@ Verificacion empirica (2026-09-18):
 
 | # | Pendiente | Prioridad | Notas |
 |---|---|---|---|
-| 1 | NSSM (auto-arranque al boot) | Alta | Requiere permisos de administrador. Sin NSSM, si Windows se reinicia, el agente no arranca solo. |
+| 1 | Verificar auto-arranque tras reboot real | Media | NSSM configurado StartType=Automatic pero no confirmado con reboot real. Ver PENDING.md P-002. |
 | 2 | Verificar bateria real | Media | El hardware tiene ~5 min de autonomia. El monitor esta calibrado para 15%/25%, pero puede requerir ajuste. |
 | 3 | Runbook de pausa | Baja | Documentar como verificar si el agente esta pausado, como forzar reanudacion manual, como limpiar pause.flag. |
 
-## 6. Lo que NO sobrevive aun / What does NOT survive yet
+## 6. Lo que SI sobrevive / What DOES survive
 
-- Reinicio de Windows (update, corte de luz que excede la bateria): el agente no arranca solo. Requiere NSSM.
-- Cierre de sesion: si se cierra sesion sin apagar, el proceso puede morir. NSSM tambien resuelve esto.
+- **Reinicio de Windows:** NSSM arranca el servicio automaticamente al boot.
+- **Cierre de sesion:** el servicio corre como SYSTEM, no depende de sesion de usuario.
+- **Pausa por bateria o saldo:** el agente se pausa, no muere. Reanuda automaticamente.
+- **Actualizaciones del sistema:** NSSM re-arranca el agente tras update.
+
+**Verificacion pendiente:** arranque tras reboot real no confirmado. Ver PENDING.md P-002.
 
 ---
 

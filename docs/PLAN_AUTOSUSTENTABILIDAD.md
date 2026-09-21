@@ -48,7 +48,7 @@
 |---|---|
 | Que vende | Verificacion de claims energeticos |
 | Precio sugerido | $0.01 por verificacion |
-| Fuente de datos | claims_tracker.json (228,083 lineas), energy_intel.db |
+| Fuente de datos | claims_tracker.json (27,557 claims reales, verificado 2026-09-20), energy_intel.db |
 | Diferencial | Verificacion contextual, no datos crudos |
 | Competencia | Apify Claim Verifier ($0.008), AgentOracle ($0.02), Event Resolver ($0.003) |
 | Pregunta que responde | "Este claim es real, fabricado, o desactualizado?" |

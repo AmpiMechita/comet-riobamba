@@ -73,3 +73,25 @@ El bug de tier_fallback multiplicó el gasto por ~3x entre el 6 y el 10 de septi
 | 999999 | Intento 1 (2/9/2026), para desactivar quota_manager | Fósil histórico |
 | 0.00 | Intento pre-2/9 (no documentado) | Fósil histórico |
 | 0.5 | `.env` actual, aplicado por Fase 5 (2026-09-13) | **ACTIVO** |
+---
+
+## 11. Scheduling day-aware (2026-09-19)
+
+Helpers en `config/schedule.py`: get_quiet_hours/post_hours/comment_hours + get_max_posts_per_day/comments_per_day. Si es sab/dom y existe `*_WEEKEND` en `.env`, se usa. Si no, weekday.
+
+Vars weekend: `AGENT_QUIET_HOURS_WEEKEND`, `AGENT_POST_HOURS_WEEKEND`, `AGENT_COMMENT_HOURS_WEEKEND`, `AGENT_MAX_POSTS_PER_DAY_WEEKEND=2`, `AGENT_MAX_COMMENTS_PER_DAY_WEEKEND=40`.
+
+## 12. Trazabilidad: run_id
+
+- Phase A (985cd2f): `run_id=cycle-N-<unix_ts>` en `generation_attempts.jsonl`.
+- Auto-apply (6717543): `run_id` + `ts` (epoch) + `timestamp` (ISO UTC) en `proposal_apply_log.jsonl`.
+
+Regla #31: toda metrica persistida entre arranques debe incluir run_id.
+
+## 13. Allowlist auto-mejora
+
+`config/auto_appliable.py::ALLOWLIST`. Ver el archivo para valores actuales (7 params, min=2 en `max_comment_replies_per_cycle`). Overlay activo: `data/auto_applied_config.json`. Regla #36: min>0 si 0 desactiva una fase.
+
+---
+
+*Actualizado: 2026-09-20.*

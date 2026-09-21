@@ -3,8 +3,11 @@
 > **AVISO DE DESACTUALIZACIÓN** (2026-09-17):
 > README reescrito con datos verificables del `.env`, `config/config.py` y
 > `docs/AUDIT_PROGRESS.md`. Fuente de verdad en caso de duda:
+> - `docs/NORTH_STAR.md` — objetivo general + especificos + metricas
+> - `docs/AGENTS.md` — onboarding para agentes AI
 > - `docs/AUDIT_PROGRESS.md` — progreso de la auditoría integral
 > - `docs/CONFIG_TRUTH.md` — estado real de configuración
+> - `docs/PENDING.md` — ledger de pendientes
 > - `.env` — valores efectivos en runtime
 > - `CHANGELOG.md` — historial de cambios
 > Si algo aquí contradice al código o al `.env`, gana el código.
@@ -16,7 +19,7 @@ COMET-RIOBAMBA es un agente autónomo que opera en
 (IA, agentes, MLOps, infraestructura, seguridad) y realizando engagement
 estratégico con la comunidad.
 
-## Estado actual (2026-09-17)
+## Estado actual (2026-09-20)
 
 | Componente | Estado |
 |---|---|
@@ -33,8 +36,13 @@ estratégico con la comunidad.
 | **Fase B** | Posts propios + feed. Cap: 30 candidatos / 15 replies por ciclo |
 | **Fase C** | Watchlist + analytics. Cap: 3 comentarios, $0.15 por ciclo |
 | **Energy Intel (EIN)** | Habilitado. Alerts Telegram off (Fase D congelada) |
+| **Servicio** | NSSM CometRiobamba (SYSTEM, Automatic) |
+| **Tests** | 1507 passed, 1 skipped |
+| **Resiliencia** | Pausa por bateria + saldo; auto-arranque |
+| **Trazabilidad** | run_id por ciclo en Phase A + auto-apply |
+| **Scheduling** | Day-aware (weekday vs weekend) |
 
-## Configuración efectiva (2026-09-17)
+## Configuración efectiva (2026-09-20)
 
 Fuente: `.env` + `config/config.py`.
 

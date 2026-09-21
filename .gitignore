@@ -260,3 +260,7 @@ _audit_trash/
 
 # NSSM binary (externo, descargable de nssm.cc)
 tools/nssm.exe
+
+# Excepciones: historia de objetivos del proyecto (2026-09-20)
+!docs/archive/CONTEXTO_COMPLETO_PROYECTO_COMET.md
+!docs/archive/DOCUMENTACION_COMPLETA_COMET_RIOBAMBA.md

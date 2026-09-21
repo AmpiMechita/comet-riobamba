@@ -1978,3 +1978,24 @@ positivos.
 
 **Deuda que deja esta entrada:**
 Ninguna. Este no-op cierra el cabo suelto de H.8.
+---
+
+## H.12 — Fix run_id por ciclo en generation_attempts (2026-09-20)
+
+Problema: generation_attempts.jsonl mezclaba eventos de distintas ejecuciones. Fix (985cd2f): _RUN_ID global + set_run_id/get_run_id + campo run_id en cada record. core/agent.py lo llama al inicio de cada ciclo con formato cycle-N-<unix_ts>. 4 tests nuevos.
+
+## H.13 — Restaurar allowlist + min=2 en max_comment_replies (2026-09-20)
+
+Problema doble: (1) motor rechazo 582 propuestas con param_not_in_allowlist, 4 params desaparecidos, phase_b_max_replies era ghost. (2) auto-apply aplico max_comment_replies_per_cycle=0, desactivando Phase B. Fixes f265756 + 7dec8cb: 4 params restaurados, min 0->2, phase_b_max_replies -> phase_b_max_own_comments_per_cycle, _save_overlay atomico. Overlay corregido 0->2.
+
+## H.14 — ts/timestamp/run_id en proposal_apply_log (2026-09-20)
+
+Problema: proposal_apply_log.jsonl sin timestamp ISO ni run_id. 592 entries historicas, 0 con trazabilidad. Fix (6717543): _RUN_ID + set_run_id/get_run_id en proposal_applier, _append_apply_log enriquecido (ts + timestamp ISO UTC + run_id), _last_change_time endurecido. 2 tests nuevos. Regla #31 generalizada. Legacy archivado en data/proposal_apply_log.legacy-20260920.jsonl.
+
+## H.15 — Aislar JSONL de Phase A en tests (2026-09-20)
+
+Problema: generation_attempts.jsonl acumulaba 637 bytes por corrida de pytest con ts congelado 2026-07-22T12:00:00. Fix (ae72715): fixture autouse _isolate_phase_a_jsonl_logs en tests/conftest.py redirige 6 paths a tmp_path. Verificacion: 126 tests, delta=0 bytes. Purga: 2413 entries contaminadas removidas.
+
+## H.16 — Reorganizacion docs: NORTH_STAR + archive (2026-09-20)
+
+Problema: 34 docs en docs/ con solapamiento (3 READMEs, 2 objetivos, 2 estrategias). Creados: NORTH_STAR.md, CONTENT_STRATEGY.md, DOC_COHERENCE.md, PENDING.md. Archivados 19 docs a docs/archive/. Borrado LECCIONES_APRENDIDAS_2026-09-03.md (0 bytes). 7 docs stale actualizados.
