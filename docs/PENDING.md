@@ -33,7 +33,7 @@
 | P-015 | OPEN | 2026-09-20 | Fix `extract_moltbook_full.py`: backoff 429 + resume | Sesión 20/9 §11.8 |
 | P-016 | OPEN | 2026-09-19 | H.11 — limpieza `credentials.py`: `deepseek_timeout`, `ollama_cloud_timeout` | Handoff 19 noche §13.4 |
 | P-017 | OPEN | 2026-09-19 | Grep de fechas hardcodeadas en tests | Handoff 19 tarde §13.6 |
-| P-018 | OPEN | 2026-09-19 | Emojis mojibake residuales en `scripts/audit_dryrun_quality.py` | Handoff 19 noche §9 |
+| P-018 | DONE | 2026-09-21 | Emojis mojibake residuales en `scripts/audit_dryrun_quality.py` | Handoff 19 noche §9 |
 | P-019 | OPEN | 2026-09-19 | Test unitario para `phase_a_classifier_verdict` | Handoff 19 tarde §10 |
 | P-020 | OPEN | 2026-09-19 | `scripts/phase_a_verdict_report.py` — agregador semanal | Handoff 19 tarde §10 |
 | P-021 | OPEN | 2026-09-18 | Instrumentación horaria: `karma_roi_tracker` con `hour_of_day` | Handoff 17/18 §7 |
@@ -59,7 +59,21 @@
 | P-031 | OPEN | 2026-09-18 | Fase 1 plan autosustentabilidad: EIN como API | Handoff 18/19 §10 |
 | P-032 | OPEN | 2026-09-18 | Verificar modelos disponibles con recargas | Handoff 18/19 §10 |
 
+## Pendientes nuevos (2026-09-21)
+
+| ID | Estado | Creado | Descripción | Origen |
+|---|---|---|---|---|
+| P-033 | OPEN | 2026-09-21 | Reconciliar 3 capas de config (policy/runtime/allowlist) | P-007b |
+| P-040 | OPEN | 2026-09-21 | Rediseño motor auto-mejora: deltas + floors + sombra | Sesión 21/9 |
+| P-041 | OPEN | 2026-09-21 | Verificar posible Hangul-mojibake en `phase_a_content.py` | Sesión 21/9 |
+
 ---
+
+## Cerrados esta sesión (2026-09-21)
+
+| ID | Descripción | Commit / artefacto |
+|---|---|---|
+| P-018 | Fix mojibake en `audit_dryrun_quality.py` | (pendiente commit) |
 
 ## Cerrados esta sesión (2026-09-20)
 

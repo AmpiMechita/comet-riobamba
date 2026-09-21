@@ -361,13 +361,13 @@ def run_audit():
     rejected_count = len([r for r in results if r.status == "rejected"])
     manual_review_count = len([r for r in results if r.status == "manual_review"])
     
-    logger.info("â§ª Resumen de auditoría:")
-    logger.info(f"  âÂ§ Aprobados: {approved_count} ({approved_count/len(results)*100:.1f}%)")
-    logger.info(f"  âÂ§ Rechazados: {rejected_count} ({rejected_count/len(results)*100:.1f}%)")
-    logger.info(f"  âÂ§ Revisión manual: {manual_review_count} ({manual_review_count/len(results)*100:.1f}%)")
-    logger.info(f"â§ª Reporte completo: {AUDIT_REPORT_PATH}")
-    logger.info(f"â§ª Posts aprobados: {APPROVED_POSTS_PATH}")
-    logger.info(f"â§ª Posts rechazados: {REJECTED_POSTS_PATH}")
+    logger.info("🔧 Resumen de auditoría:")
+    logger.info(f"  - Aprobados: {approved_count} ({approved_count/len(results)*100:.1f}%)")
+    logger.info(f"  - Rechazados: {rejected_count} ({rejected_count/len(results)*100:.1f}%)")
+    logger.info(f"  - Revisión manual: {manual_review_count} ({manual_review_count/len(results)*100:.1f}%)")
+    logger.info(f"🔧 Reporte completo: {AUDIT_REPORT_PATH}")
+    logger.info(f"🔧 Posts aprobados: {APPROVED_POSTS_PATH}")
+    logger.info(f"🔧 Posts rechazados: {REJECTED_POSTS_PATH}")
 
 
 if __name__ == "__main__":
