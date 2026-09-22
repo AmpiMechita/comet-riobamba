@@ -7,6 +7,36 @@ from typing import Optional
 from dotenv import load_dotenv
 
 
+def _get_secret(name: str, default: str = "") -> str:
+    """Read secret with three-layer fallback.
+
+    Layer 1 (preferred): Windows DPAPI machine-scoped store
+        (services.secret_store) -- works for SYSTEM services like NSSM.
+    Layer 2: Windows Credential Manager via keyring -- works for
+        interactive user (rafae) but NOT for SYSTEM.
+    Layer 3: Environment variable -- dev/CI fallback.
+
+    Set COMET_DISABLE_KEYRING=1 to force layer 3 only (tests).
+    """
+    if os.getenv("COMET_DISABLE_KEYRING", "0") == "1":
+        return os.getenv(name.upper(), default)
+    try:
+        from services.secret_store import get_secret as _ss_get
+        v = _ss_get(name)
+        if v:
+            return v
+    except Exception:
+        pass
+    try:
+        import keyring
+        v = keyring.get_password("comet_riobamba", name)
+        if v:
+            return v
+    except Exception:
+        pass
+    return os.getenv(name.upper(), default)
+
+
 @dataclass
 class TierConfig:
     url: str
@@ -59,7 +89,7 @@ class Credentials:
 
         return cls(
             moltbook_base_url=os.getenv("MOLTBOOK_BASE_URL", "https://www.moltbook.com/api/v1"),
-            moltbook_api_key=os.getenv("MOLTBOOK_API_KEY", ""),
+            moltbook_api_key=_get_secret("moltbook_api_key", ""),
             ollama_url=os.getenv("OLLAMA_OPENAI_URL", "http://localhost:11434/v1/chat/completions"),
             ollama_model=os.getenv("OLLAMA_MODEL", "qwen2.5:3b"),
             ollama_timeout=int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "120")),

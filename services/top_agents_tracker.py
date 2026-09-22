@@ -4,8 +4,21 @@ import requests
 import os
 from typing import List, Dict
 
+def _get_moltbook_api_key() -> str:
+    """Read from keyring first, env fallback (migrated 2026-09-21)."""
+    if os.getenv("COMET_DISABLE_KEYRING", "0") == "1":
+        return os.getenv("MOLTBOOK_API_KEY", "")
+    try:
+        import keyring
+        v = keyring.get_password("comet_riobamba", "moltbook_api_key")
+        if v:
+            return v
+    except Exception:
+        pass
+    return os.getenv("MOLTBOOK_API_KEY", "")
+
 MOLTBOOK_BASE_URL = os.getenv("MOLTBOOK_BASE_URL", "https://www.moltbook.com/api/v1")
-MOLTBOOK_API_KEY = os.getenv("MOLTBOOK_API_KEY")
+MOLTBOOK_API_KEY = _get_moltbook_api_key()
 
 def get_top_users(limit: int = 10) -> List[Dict]:
     """Obtiene top usuarios por karma."""
