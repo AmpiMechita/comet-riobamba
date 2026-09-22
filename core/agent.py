@@ -1103,6 +1103,8 @@ class COMETRiobambaAgent:
         """
         try:
             while not self.shutdown_requested:
+                if self._check_stop_flag() or self._check_maintenance_flag():
+                    break
                 await asyncio.sleep(0.5)
             logger.info("Shutdown watcher: shutdown_requested detectado")
             task = self._phase_b_task
