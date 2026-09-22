@@ -13,7 +13,7 @@
 
 | ID | Estado | Creado | Descripción | Origen |
 |---|---|---|---|---|
-| P-001 | OPEN | 2026-09-19 | Bug `stop.flag` ignorado la primera vez | Handoff 18/19 §7 |
+| P-001 | DONE | 2026-09-19 | Bug `stop.flag` ignorado la primera vez (fix desplegado; verificacion mid-ciclo diferida) | Handoff 18/19 §7 |
 | P-002 | OPEN | 2026-09-19 | Verificar NSSM arranca tras reboot real de Windows | Handoff 18/19 §13.3 |
 | P-003 | DONE | 2026-09-20 | Verificar `run_id` en producción (Phase A, lunes con cap reset) | Sesión 20/9 §15.3 |
 | P-004 | DONE | 2026-09-20 | Verificar `run_id` + `timestamp` ISO en `proposal_apply_log` | Sesión 20/9 |
@@ -68,6 +68,9 @@
 | P-033 | DECIDE | 2026-09-21 | Reconciliar 3 capas de config (policy/runtime/allowlist). Evidencia 21/9: env=15 vs allowlist=(2,10,8) vs log previous=2 | P-007b |
 | P-040 | OPEN | 2026-09-21 | Rediseño motor auto-mejora: deltas + floors + sombra | Sesión 21/9 |
 | P-041 | DONE | 2026-09-21 | Verificar posible Hangul-mojibake en `phase_a_content.py` | Sesión 21/9 |
+| P-045 | OPEN | 2026-09-21 | 8 tests pre-existentes fallan (test_own_incident_source + test_phase_a_research) - no causados por cambios recientes | Sesion 21/9 |
+| P-046 | OPEN | 2026-09-21 | shutdown: agente completa cleanup en 1s pero proceso sigue vivo ~6min. Investigar threads no-daemon o tasks pendientes. | Sesion 21/9 |
+| P-047 | OPEN | 2026-09-21 | ROTAR MOLTBOOK_API_KEY: quedo expuesta en chat 21/9. Regenerar en Moltbook + set_secret('moltbook_api_key', nuevo) | Sesion 21/9 |
 
 ---
 
@@ -88,6 +91,9 @@
 | P-041 | Verificado: 0 Hangul en `phase_a_content.py` (artefacto de terminal) | no-op |
 | P-042 | Fix doble "data" en `claims_tracker.py` + unificar callers | (pendiente commit) |
 | P-043 | Recuperacion `data/data/` via VSS (claims 37B, topic_index 47B, write_log 1168B) + protocolo destructivo en DIRECTRICES.md | backups/recovered-data-data-20260921-185509/ |
+| P-001 | Fix shutdown watcher: detecta stop.flag mid-ciclo | 052f561 |
+| P-044 | DIRECTRICES.md creado (27+ reglas + protocolo destructivo + recuperacion VSS) | 1f88d0a |
+| --- | Migracion MOLTBOOK_API_KEY a DPAPI machine-scoped | e912fca |
 
 ## Cerrados esta sesión (2026-09-20)
 
