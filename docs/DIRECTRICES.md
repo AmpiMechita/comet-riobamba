@@ -63,3 +63,13 @@ Si se borra algo por error:
 5. Remove-Item C:\shadowN -Force            (limpiar symlink)
 
 Los snapshots suelen estar cada 3-12h. Ventana util: ~48-72h.
+
+## Anotacion de pendientes (2026-09-22)
+
+30. Todo pendiente detectado durante una sesion se anota INMEDIATAMENTE en PENDING.md.
+    No se acumula para el cierre. Si surge un pendiente, se anota en el momento.
+31. No basta con mencionar un pendiente en el chat o en un informe:
+    si no esta en PENDING.md, no existe.
+32. Al cierre de sesion, verificar que TODO pendiente mencionado durante la sesion
+    este en PENDING.md con ID, estado, fecha y descripcion. Si falta, anadirlo antes de cerrar.
+

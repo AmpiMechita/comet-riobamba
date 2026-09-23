@@ -4,8 +4,8 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-22 20:22 (martes, UTC-5). Sesión cerrada.
-> Sesión cerrada 2026-09-22 20:30. Ver `HANDOFF_2026-09-22.md` para retomar.
+> **Última actualización:** 2026-09-22 21:44 (martes, UTC-5). Sesión en curso.
+> Cierre pendiente. Anotar todos los pendientes antes de cerrar (ver reglas 8-9).
 
 ---
 
@@ -82,13 +82,22 @@
 | P-048 | OPEN | 2026-09-22 | Unificar los 3 wrappers de lectura de key (config/credentials.py, services/top_agents_tracker.py, services/editorial_self_audit.py) para que todos usen config.credentials._get_secret() | Auditoría 22/9 |
 | P-049 | OPEN | 2026-09-22 | Implementar script de rotación de key con backup previo + validación + rollback automático (ver docs/adr/ADR-002-moltbook-key-rotation.md) | Auditoría 22/9 |
 | P-050 | OPEN | 2026-09-22 | Documentar endpoints oficiales de Moltbook en docs/DIRECTRICES.md (incluir /feed, /users/top, /users/{id}; marcar /users/me como NO válido) | Auditoría 22/9 |
-| P-051 | OPEN | 2026-09-22 | Crear data\.secrets_backup\ con .gitignore antes de rotar key | Auditoría 22/9 |
+| P-051 | DONE | 2026-09-22 | Crear data\.secrets_backup\ con .gitignore antes de rotar key | Auditoría 22/9 |
 | P-052 | OPEN | 2026-09-22 | Añadir rotación trimestral de MOLTBOOK_API_KEY al calendario operativo | Auditoría 22/9 |
 | P-053 | DONE | 2026-09-22 | Crear docs/AUDITORIA_ENTORNO.md con snapshot del entorno | Auditoría 22/9 |
 | P-054 | DONE | 2026-09-22 | Crear docs/MAPA_TECNICO.md con mapa de servicios/wrappers/endpoints | Auditoría 22/9 |
 | P-055 | DONE | 2026-09-22 | Crear docs/adr/ADR-002-moltbook-key-rotation.md con procedimiento de rotación | Auditoría 22/9 |
 | P-056 | OPEN | 2026-09-22 | Evaluar rotación de logs\agent.log y logs\service_stdout.log (crecen >5 MB/día) | Auditoría 22/9 |
 | P-057 | OPEN | 2026-09-22 | Verificar que .env no contiene ninguna otra API key en texto plano (DeepSeek, Cerebras, Telegram sí están) | Auditoría 22/9 |
+
+
+## Pendientes nuevos (2026-09-22 tarde)
+
+| ID | Estado | Creado | Descripción | Origen |
+|---|---|---|---|---|
+| P-058 | OPEN | 2026-09-22 | Prompt de apertura contiene HEAD exacto. Al actualizarlo, el commit cambia el HEAD y el prompt queda obsoleto. Reemplazar por instruccion de verificar con git log --oneline -1 | Sesion 22/9 tarde |
+| P-059 | OPEN | 2026-09-22 | Verificar coherencia PENDING vs HANDOFF en cada cierre. Hoy HANDOFF 9 decia P-051 ya creado, pero PENDING lo tenia OPEN | Sesion 22/9 tarde |
+| P-060 | OPEN | 2026-09-22 | Revisar si otros wrappers de lectura de key ignoran DPAPI despues de unificar P-048. No basta con los 3 detectados: verificar imports sueltos de keyring | Sesion 22/9 tarde |
 
 ## Cerrados esta sesión (2026-09-21)
 
