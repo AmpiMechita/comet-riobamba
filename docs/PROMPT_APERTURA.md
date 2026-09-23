@@ -45,6 +45,9 @@ Rama git: feature/optimize-agent-config
 Servicio: CometRiobamba (NSSM, LocalSystem)
 
 VERIFICA EL HEAD actual con: git log --oneline -1
+(No confías en valores que aparezcan en documentos: siempre verifica con git.)
+
+VERIFICA EL HEAD actual con: git log --oneline -1
 (No confíes en valores que aparezcan en documentos: siempre verifica con git.)
 
 ═══════════════════════════════════════════════════════════════
@@ -59,12 +62,12 @@ PASO 1 — Verificación de existencia y tamaño:
   Ejecuta esto y pégame la salida:
 
     cd C:\comet-riobamba-v31
-    Get-Item .\docs\HANDOFF_2026-09-22.md, .\docs\PENDING.md, .\docs\MAPA_TECNICO.md | Select-Object Name, Length
-    (Get-Content .\docs\HANDOFF_2026-09-22.md).Count
+    Get-Item .\docs\HANDOFF_2026-09-22_noche.md, .\docs\PENDING.md, .\docs\MAPA_TECNICO.md | Select-Object Name, Length
+    (Get-Content .\docs\HANDOFF_2026-09-22_noche.md).Count
     (Get-Content .\docs\PENDING.md).Count
     (Get-Content .\docs\MAPA_TECNICO.md).Count
 
-  Esperas: HANDOFF = 200 líneas, PENDING = ~140 líneas, MAPA_TECNICO = ~97 líneas.
+  Esperas: HANDOFF = 112 líneas, PENDING = 153 líneas, MAPA_TECNICO = 97 líneas.
 
 PASO 2 — Leer HANDOFF completo:
 
@@ -72,7 +75,7 @@ PASO 2 — Leer HANDOFF completo:
 
     Get-Content .\docs\HANDOFF_2026-09-22.md
 
-  Confirma que recibiste 200 líneas y 12 secciones antes de pasar al PASO 3.
+  Confirma que recibiste 112 líneas y 12 secciones antes de pasar al PASO 3.
 
 PASO 3 — Leer PENDING completo:
 
@@ -99,10 +102,7 @@ PASO 5 — Estado del servicio y git:
     git log --oneline -3
     Get-Content .\logs\agent.log -Tail 5
 
-PASO 6 — Confirmación:
-
-  Con los 3 documentos y el estado verificado, ya puedes confirmar
-  lectura completa y comprensión.
+PASO 6 — Confirmación + objetivo sugerido
 
 ═══════════════════════════════════════════════════════════════
 MÉTODO DE TRABAJO (NO NEGOCIABLE)
@@ -121,8 +121,10 @@ MÉTODO DE TRABAJO (NO NEGOCIABLE)
 8. NO USAR Read-Host -AsSecureString. Cierra la terminal.
 9. NO USAR HEREDOCS GIGANTES. Dividir en bloques pequeños.
 10. SI ALGO FALLA, PARAR. No improvisar.
-11. AL CERRAR SESIÓN: SIEMPRE culminar con el prompt de apertura
-    del siguiente hilo. Ver docs/DIRECTRICES.md reglas 24-26.
+11. ANOTAR PENDIENTES EN EL MOMENTO. Si surge un pendiente durante la
+    sesión, va inmediatamente a PENDING.md. No se acumula para el cierre.
+12. AL CERRAR SESIÓN: SIEMPRE culminar con el prompt de apertura del
+    siguiente hilo. Ver docs/DIRECTRICES.md reglas 24-26 y 30-32.
 
 ═══════════════════════════════════════════════════════════════
 ANTI-PATRONES CONOCIDOS (aprendidos 22/9/2026)
@@ -174,6 +176,20 @@ ERROR J — Pedir contenido sin dar comando de lectura.
      - Estado de servicio: Get-Service <nombre>
      - Git: git log --oneline -N, git status --short
 
+ERROR K — Mencionar pendiente sin anotarlo en PENDING.md.
+   Ejemplo: "queda anotado que..." sin editar PENDING.md.
+   Si no está en PENDING.md, no existe.
+   PREVENCIÓN: toda mención de pendiente se acompaña de edición a
+   PENDING.md en el mismo bloque de comandos.
+
+ERROR L — Parchear archivos de texto con read_text/write_text de Python.
+   read_text colapsa CRLF en memoria y write_text traduce LF a CRLF al
+   escribir; con core.autocrlf=true esto renormaliza el blob y produce
+   diffs fantasma (incidente 22/9: CHANGELOG numstat 152/139 por solo EOL).
+   PREVENCIÓN: usar read_bytes/write_bytes y preservar el terminador
+   de cada línea; verificar numstat tras cada commit (regla 33 de
+   DIRECTRICES).
+
 ═══════════════════════════════════════════════════════════════
 PROTOCOLO DE VERIFICACIÓN ANTES DE ACTUAR
 ═══════════════════════════════════════════════════════════════
@@ -188,7 +204,7 @@ Antes de proponer cualquier acción, debes tener:
 Si falta alguno, NO propones. Solo pides lo que falta.
 
 ═══════════════════════════════════════════════════════════════
-CONFIRMACIÓN OBLIGATORIA ANTES DE PROPONER
+CONFIRMACIÓN OBLIGATORIA + OBJETIVO SUGERIDO
 ═══════════════════════════════════════════════════════════════
 
 Tu PRIMER mensaje debe contener SOLO:
@@ -220,9 +236,8 @@ Tu PRIMER mensaje debe contener SOLO:
     Alternativas: [1-2 pendientes que podrían tomar prioridad]."
 
 5. Pregunta final a Rafael:
-   "¿Confirmas el objetivo sugerido, eliges una alternativa,
-    o propones otro? Si confirmas, propongo el primer bloque
-    de comandos (solo lectura, sin escritura todavía)."
+   "¿Confirmas el objetivo sugerido, eliges una alternativa, o propones otro?
+    Si confirmas, propongo el primer bloque de comandos (solo lectura)."
 
 REGLAS:
 - SÍ puedes sugerir objetivo basado en HANDOFF §10 o PENDING.md.

@@ -73,3 +73,7 @@ Los snapshots suelen estar cada 3-12h. Ventana util: ~48-72h.
 32. Al cierre de sesion, verificar que TODO pendiente mencionado durante la sesion
     este en PENDING.md con ID, estado, fecha y descripcion. Si falta, anadirlo antes de cerrar.
 
+## Encoding de parches (2026-09-22)
+
+33. Parches de archivos de texto via Python: usar read_bytes/write_bytes, nunca read_text/write_text (colapsan CRLF y traducen LF->CRLF). Preservar el terminador de cada linea. Con core.autocrlf=true, read_text/write_text renormalizan blobs con CRLF y generan diffs fantasma (incidente CHANGELOG 22/9: numstat 152/139 por solo EOL). Tras cada commit, verificar git show --numstat HEAD.
+

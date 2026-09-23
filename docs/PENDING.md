@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-22 22:19 (martes, UTC-5). Sesión en curso: P-048 (unificar wrappers de key).
+> **Última actualización:** 2026-09-23 00:02 (miercoles, UTC-5). Sesión P-048 cerrada (commits 99bda68, 53345b0). Próximo foco sugerido: P-049.
 > Ver `HANDOFF_2026-09-22.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -100,6 +100,7 @@
 | P-060 | DONE | 2026-09-22 | Revisar si otros wrappers de lectura de key ignoran DPAPI despues de unificar P-048. No basta con los 3 detectados: verificar imports sueltos de keyring. CERRADO 22/9 noche: grep keyring/MOLTBOOK_API_KEY en todo el repo: unicos lectores restantes _get_secret (canonico) y _rotate_key.py (escritor); extract_* pasan por Credentials.from_env; config.py valida post-from_env. No hay mas wrappers | Sesion 22/9 tarde |
 | P-061 | OPEN | 2026-09-22 | Mensajes de error desactualizados: dicen 'no definido en .env' en scripts/extract_moltbook.py, scripts/extract_moltbook_full.py y config/config.py::validate_config. La key vive en DPAPI/keyring desde 21/9. Cosmetico, no rompe ejecucion | Sesion 22/9 noche (P-048) |
 | P-062 | OPEN | 2026-09-22 | ADR-002 desactualizado: status dice 'Propuesto' pese a rotacion ejecutada 22/9; Paso 3 recomienda Read-Host -AsSecureString (prohibido en este entorno); Consequences cita P-048 como pendiente. Actualizar junto a P-049 | Sesion 22/9 noche (P-048) |
+| P-063 | DONE | 2026-09-22 | Regla EOL para parches: read_text/write_text de Python colapsan CRLF y traducen LF->CRLF en Windows; con core.autocrlf=true esto renormaliza blobs con CRLF (incidente CHANGELOG commit 53345b0: numstat 152/139 por solo EOL). APLICADA 22/9 noche como regla 33 de DIRECTRICES.md: usar read_bytes/write_bytes y verificar numstat tras cada commit | Sesion 22/9 noche (fix EOL) |
 
 ## Cerrados esta sesión (2026-09-21)
 
