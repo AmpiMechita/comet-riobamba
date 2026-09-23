@@ -20,8 +20,12 @@ FLUJO DE TRABAJO:
   4. Tú analizas y propones el siguiente bloque.
   5. Repetimos hasta completar el objetivo.
 
-NUNCA digas "voy a leer el archivo X". No puedes. Pídeme que te
-pegue el contenido, o que ejecute el comando y te pase la salida.
+NUNCA digas "voy a leer el archivo X". No puedes. Pídeme que ejecute
+un comando y me pases la salida.
+
+REGLA CLAVE: toda solicitud de contenido se hace CON COMANDO EXPLÍCITO.
+Nunca digas "pégame el contenido de X". Di "ejecuta este comando y
+pégame la salida: <comando>".
 
 ═══════════════════════════════════════════════════════════════
 CONTEXTO DEL OPERADOR
@@ -38,53 +42,62 @@ Objetivo: el agente genera valor por múltiples vías, no una sola.
 
 Ruta: C:\comet-riobamba-v31\
 Rama git: feature/optimize-agent-config
-Último commit: 9045595
 Servicio: CometRiobamba (NSSM, LocalSystem)
+
+VERIFICA EL HEAD actual con: git log --oneline -1
+(No confíes en valores que aparezcan en documentos: siempre verifica con git.)
 
 ═══════════════════════════════════════════════════════════════
 PROTOCOLO DE LECTURA POR BLOQUES
 ═══════════════════════════════════════════════════════════════
 
-No puedes leer archivos. Debes pedirme que te los pegue, en bloques.
-Sigue este orden:
+No puedes leer archivos. Debes pedirme que ejecute comandos y me pases
+la salida. Toda solicitud de contenido lleva un comando explícito.
 
 PASO 1 — Verificación de existencia y tamaño:
 
-  Pídeme que ejecute:
+  Ejecuta esto y pégame la salida:
+
     cd C:\comet-riobamba-v31
     Get-Item .\docs\HANDOFF_2026-09-22.md, .\docs\PENDING.md, .\docs\MAPA_TECNICO.md | Select-Object Name, Length
     (Get-Content .\docs\HANDOFF_2026-09-22.md).Count
     (Get-Content .\docs\PENDING.md).Count
+    (Get-Content .\docs\MAPA_TECNICO.md).Count
 
-  Esperas: HANDOFF = 200 líneas, PENDING = ~X líneas, MAPA_TECNICO = ~Y líneas.
+  Esperas: HANDOFF = 200 líneas, PENDING = ~140 líneas, MAPA_TECNICO = ~97 líneas.
 
-PASO 2 — Pedir HANDOFF completo:
+PASO 2 — Leer HANDOFF completo:
 
-  "Rafael, pégame el contenido completo de HANDOFF_2026-09-22.md"
+  Ejecuta esto y pégame la salida completa:
 
-  Yo te lo pego. Tú confirmas que recibiste 200 líneas y 12 secciones.
+    Get-Content .\docs\HANDOFF_2026-09-22.md
 
-PASO 3 — Pedir PENDING completo:
+  Confirma que recibiste 200 líneas y 12 secciones antes de pasar al PASO 3.
 
-  "Ahora pégame PENDING.md"
+PASO 3 — Leer PENDING completo:
 
-  Yo te lo pego. Tú confirmas que ves las filas OPEN.
+  Ejecuta esto y pégame la salida completa:
 
-PASO 4 — Pedir MAPA_TECNICO completo:
+    Get-Content .\docs\PENDING.md
 
-  "Ahora pégame MAPA_TECNICO.md"
+  Confirma que ves las filas OPEN prioridad Alta antes de pasar al PASO 4.
 
-  Yo te lo pego. Tú confirmas secciones.
+PASO 4 — Leer MAPA_TECNICO completo:
+
+  Ejecuta esto y pégame la salida completa:
+
+    Get-Content .\docs\MAPA_TECNICO.md
+
+  Confirma que ves las secciones 1-9 antes de pasar al PASO 5.
 
 PASO 5 — Estado del servicio y git:
 
-  Pídeme que ejecute:
+  Ejecuta esto y pégame la salida:
+
     Get-Service CometRiobamba | Select-Object Name, Status
     git status --short
-    git log --oneline -2
+    git log --oneline -3
     Get-Content .\logs\agent.log -Tail 5
-
-  Yo te pego la salida.
 
 PASO 6 — Confirmación:
 
@@ -108,7 +121,7 @@ MÉTODO DE TRABAJO (NO NEGOCIABLE)
 8. NO USAR Read-Host -AsSecureString. Cierra la terminal.
 9. NO USAR HEREDOCS GIGANTES. Dividir en bloques pequeños.
 10. SI ALGO FALLA, PARAR. No improvisar.
-11. AL CERRAR SESIÓN: siempre culminar con el prompt de apertura
+11. AL CERRAR SESIÓN: SIEMPRE culminar con el prompt de apertura
     del siguiente hilo. Ver docs/DIRECTRICES.md reglas 24-26.
 
 ═══════════════════════════════════════════════════════════════
@@ -149,6 +162,17 @@ ERROR I — Asumir acceso al filesystem o terminal.
    ni a la terminal. Rafael ejecuta los comandos y pega la salida.
    PREVENCIÓN: toda "lectura" se hace pidiéndole a Rafael que ejecute
    el comando y te pegue la salida. NUNCA digas "voy a leer X".
+
+ERROR J — Pedir contenido sin dar comando de lectura.
+   Ejemplo: "Rafael, pégame el contenido de X" sin dar el comando.
+   Rafael queda obligado a abrir el archivo manualmente, copiarlo y pegarlo.
+   Eso rompe el flujo del chat.
+   PREVENCIÓN: toda solicitud de contenido lleva comando explícito:
+     - Archivo completo: Get-Content .\ruta\archivo.ext
+     - Últimas N líneas: Get-Content .\ruta\archivo.ext -Tail N
+     - Buscar patrón: Select-String -Path .\ruta\archivo.ext -Pattern "patron"
+     - Estado de servicio: Get-Service <nombre>
+     - Git: git log --oneline -N, git status --short
 
 ═══════════════════════════════════════════════════════════════
 PROTOCOLO DE VERIFICACIÓN ANTES DE ACTUAR
