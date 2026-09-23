@@ -1,5 +1,24 @@
 # Changelog — COMET-RIOBAMBA
 
+## [5.11.6] – 2026-09-23
+
+### Post-mortem model_error + cierres P-006/P-058/P-067
+
+- **docs/POSTMORTEM_MODEL_ERROR_2026-09.md:** nuevo (P-006). Sep 10 causa
+  raiz: circuit breaker con 3 tiers abiertos (flash/fallback/pro) + bug
+  phase_b (TypeError offset-naive/aware, 82 ocurr. en agent.log.2).
+  Sep 1/2 sin logs de agente; 661 y 198 entradas en generation_attempts.
+
+- **P-006 DONE.** Derivados: P-065 (anadir error_type a
+  generation_attempts), P-066 (confirmar commit del fix datetime).
+
+- **P-058 DONE:** verificado con Select-String que PROMPT_APERTURA.md no
+  hardcodea HEAD. La premisa original ("contiene HEAD exacto") no aplicaba.
+
+- **P-067 DONE:** PROMPT_APERTURA.md PASO 1 ahora detecta el handoff por
+  nombre-fecha descendente ($h) y no hardcodea conteos. Duplicado HEAD
+  eliminado. numstat 17/10. docs/HANDOFF_2026-09-23_p006.md creado.
+
 ## [5.11.5] – 2026-09-23
 
 ### Verificacion arranque automatico NSSM tras reboot real (P-002 cerrado)
