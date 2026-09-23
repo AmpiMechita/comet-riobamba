@@ -38,7 +38,7 @@ Objetivo: el agente genera valor por múltiples vías, no una sola.
 
 Ruta: C:\comet-riobamba-v31\
 Rama git: feature/optimize-agent-config
-Último commit: 411af5b
+Último commit: 9045595
 Servicio: CometRiobamba (NSSM, LocalSystem)
 
 ═══════════════════════════════════════════════════════════════
