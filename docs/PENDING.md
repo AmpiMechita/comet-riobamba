@@ -18,7 +18,7 @@
 | P-003 | DONE | 2026-09-20 | Verificar `run_id` en producción (Phase A, lunes con cap reset) | Sesión 20/9 §15.3 |
 | P-004 | DONE | 2026-09-20 | Verificar `run_id` + `timestamp` ISO en `proposal_apply_log` | Sesión 20/9 |
 | P-005 | DONE | 2026-09-20 | Verificar cap weekday efectivo `max_posts_per_day=1` el lunes | Sesión 20/9 §15.4 |
-| P-006 | OPEN | 2026-09-20 | Post-mortem incidentes `model_error` (sep 1, 2, 10) | Purga `generation_attempts` 20/9 |
+| P-006 | DONE | 2026-09-20 | Post-mortem incidentes `model_error` (sep 1, 2, 10). CERRADO 23/9: docs/POSTMORTEM_MODEL_ERROR_2026-09.md. Causas sep 10 identificadas (CB 3 tiers + bug datetime phase_b); sep 1/2 irreconstruibles sin logs. | Purga `generation_attempts` 20/9 |
 | P-007 | OPEN | 2026-09-17 | Revisar `min=0` en `max_comments_per_day`, `max_feed_replies_per_day`, `max_comments_per_post` | Sesión 20/9 §11.4 |
 
 ## Media prioridad
@@ -102,6 +102,8 @@
 | P-062 | DONE | 2026-09-23 | ADR-002 actualizado: status Aceptado; Paso 3 alineado con rotate_key.py (new_key.tmp, no Read-Host -AsSecureString); Consequences sin P-048 pendiente; añadido INV7 (rollback). CERRADO 23/9. | Sesion 22/9 noche, cerrado 23/9 |
 | P-063 | DONE | 2026-09-22 | Regla EOL para parches: read_text/write_text de Python colapsan CRLF y traducen LF->CRLF en Windows; con core.autocrlf=true esto renormaliza blobs con CRLF (incidente CHANGELOG commit 53345b0: numstat 152/139 por solo EOL). APLICADA 22/9 noche como regla 33 de DIRECTRICES.md: usar read_bytes/write_bytes y verificar numstat tras cada commit | Sesion 22/9 noche (fix EOL) |
 | P-064 | DONE | 2026-09-23 | Pulir PROMPT_APERTURA v6: punto (a) del objetivo cita HANDOFF §10 pero el handoff nocturno trae la sugerencia en §9; ERROR A cita '200 lineas' (handoff actual = 112). CERRADO 23/9: prompt v6 corregido in-place (§10->§9 en 3 sitios, 200->112); sin regenerar v7. | Cierre sesion 23/9 |
+| P-065 | OPEN | 2026-09-23 | Añadir error_type (y tier fallido) a generation_attempts.jsonl: hoy solo guarda outcome=model_error sin causa; impide diagnostico retroactivo. | P-006 |
+| P-066 | OPEN | 2026-09-23 | Confirmar commit que corrigio 'TypeError: offset-naive and offset-aware datetimes' en phases/phase_b.py (candidato 28acb8a). | P-006 |
 
 ## Cerrados esta sesión (2026-09-21)
 
