@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-23 00:02 (miercoles, UTC-5). Sesión P-048 cerrada (commits 99bda68, 53345b0). Próximo foco sugerido: P-049.
+> **Última actualización:** 2026-09-23 00:42 (miercoles, UTC-5). Sesión P-049/P-062 cerrada. P-064 anotado.
 > Ver `HANDOFF_2026-09-22.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -80,7 +80,7 @@
 | ID | Estado | Creado | Descripción | Origen |
 |---|---|---|---|---|
 | P-048 | DONE | 2026-09-22 | Unificar los 3 wrappers de lectura de key (config/credentials.py, services/top_agents_tracker.py, services/editorial_self_audit.py) para que todos usen config.credentials._get_secret(). CERRADO 22/9 noche: unificado en commit 99bda68 (top_agents_tracker.py + editorial_self_audit.py usan _get_secret; pytest 10 passed; py_compile OK; sin reinicio de servicio, modulos CLI/huerfanos) | Auditoría 22/9 |
-| P-049 | OPEN | 2026-09-22 | Implementar script de rotación de key con backup previo + validación + rollback automático (ver docs/adr/ADR-002-moltbook-key-rotation.md) | Auditoría 22/9 |
+| P-049 | DONE | 2026-09-23 | Implementar script de rotación de key con backup previo + validación + rollback automático. CERRADO 23/9: scripts/rotate_key.py (validación HTTP + backup timestamped + DPAPI/keyring + rollback automático + --dry-run; tests exit 1/2/4 OK; py_compile sin warnings). ADR-002 actualizado. | Auditoría 22/9, cerrado 23/9 |
 | P-050 | OPEN | 2026-09-22 | Documentar endpoints oficiales de Moltbook en docs/DIRECTRICES.md (incluir /feed, /users/top, /users/{id}; marcar /users/me como NO válido) | Auditoría 22/9 |
 | P-051 | DONE | 2026-09-22 | Crear data\.secrets_backup\ con .gitignore antes de rotar key | Auditoría 22/9 |
 | P-052 | OPEN | 2026-09-22 | Añadir rotación trimestral de MOLTBOOK_API_KEY al calendario operativo | Auditoría 22/9 |
@@ -99,8 +99,9 @@
 | P-059 | OPEN | 2026-09-22 | Verificar coherencia PENDING vs HANDOFF en cada cierre. Hoy HANDOFF 9 decia P-051 ya creado, pero PENDING lo tenia OPEN | Sesion 22/9 tarde |
 | P-060 | DONE | 2026-09-22 | Revisar si otros wrappers de lectura de key ignoran DPAPI despues de unificar P-048. No basta con los 3 detectados: verificar imports sueltos de keyring. CERRADO 22/9 noche: grep keyring/MOLTBOOK_API_KEY en todo el repo: unicos lectores restantes _get_secret (canonico) y _rotate_key.py (escritor); extract_* pasan por Credentials.from_env; config.py valida post-from_env. No hay mas wrappers | Sesion 22/9 tarde |
 | P-061 | OPEN | 2026-09-22 | Mensajes de error desactualizados: dicen 'no definido en .env' en scripts/extract_moltbook.py, scripts/extract_moltbook_full.py y config/config.py::validate_config. La key vive en DPAPI/keyring desde 21/9. Cosmetico, no rompe ejecucion | Sesion 22/9 noche (P-048) |
-| P-062 | OPEN | 2026-09-22 | ADR-002 desactualizado: status dice 'Propuesto' pese a rotacion ejecutada 22/9; Paso 3 recomienda Read-Host -AsSecureString (prohibido en este entorno); Consequences cita P-048 como pendiente. Actualizar junto a P-049 | Sesion 22/9 noche (P-048) |
+| P-062 | DONE | 2026-09-23 | ADR-002 actualizado: status Aceptado; Paso 3 alineado con rotate_key.py (new_key.tmp, no Read-Host -AsSecureString); Consequences sin P-048 pendiente; añadido INV7 (rollback). CERRADO 23/9. | Sesion 22/9 noche, cerrado 23/9 |
 | P-063 | DONE | 2026-09-22 | Regla EOL para parches: read_text/write_text de Python colapsan CRLF y traducen LF->CRLF en Windows; con core.autocrlf=true esto renormaliza blobs con CRLF (incidente CHANGELOG commit 53345b0: numstat 152/139 por solo EOL). APLICADA 22/9 noche como regla 33 de DIRECTRICES.md: usar read_bytes/write_bytes y verificar numstat tras cada commit | Sesion 22/9 noche (fix EOL) |
+| P-064 | OPEN | 2026-09-23 | Pulir PROMPT_APERTURA v6: punto (a) del objetivo cita HANDOFF §10 pero el handoff nocturno trae la sugerencia en §9; ERROR A cita '200 lineas' (handoff actual = 112). Cosmetico | Cierre sesion 23/9 |
 
 ## Cerrados esta sesión (2026-09-21)
 
