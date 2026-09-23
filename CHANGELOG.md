@@ -1,5 +1,18 @@
 # Changelog — COMET-RIOBAMBA
 
+## [5.11.4] – 2026-09-23
+
+### Rotacion de key automatizada + ADR-002 actualizado (P-049, P-062, P-064 cerrados)
+
+- **scripts/rotate_key.py:** nuevo script con validacion HTTP previa, backup
+  timestamped del blob DPAPI, escritura atomica DPAPI+keyring, rollback
+  automatico, y modo --dry-run. Reemplaza el procedimiento manual.
+- **docs/adr/ADR-002:** Status -> Aceptado; Paso 3 sin Read-Host -AsSecureString
+  (usa new_key.tmp); INV7 (rollback automatico); Consequences sin P-048 pendiente.
+- **P-064:** PROMPT_APERTURA v6 corregido in-place (HANDOFF 10->9 en 3 sitios;
+  200->112 en ERROR A). Sin bump.
+- **Pendiente derivado:** P-058 (prompt HEAD vs verificacion git).
+
 ## [5.11.3] – 2026-09-22
 
 ### Unificación de wrappers de lectura de MOLTBOOK_API_KEY (P-048 cerrado)

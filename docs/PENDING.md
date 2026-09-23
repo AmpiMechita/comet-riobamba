@@ -4,8 +4,8 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-23 00:42 (miercoles, UTC-5). Sesión P-049/P-062 cerrada. P-064 anotado.
-> Ver `HANDOFF_2026-09-22.md` + `PROMPT_APERTURA.md` para retomar.
+> **Última actualización:** 2026-09-23 00:56 (miercoles, UTC-5). Sesión P-049/P-062/P-064 cerrada. HANDOFF_2026-09-23.md generado.
+> Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
 
