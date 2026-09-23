@@ -37,6 +37,13 @@
 21. No tengo reloj interno. Uso solo la hora que Rafael confirma, literal.
 22. No invento horas, no sumo minutos, no interpolo.
 23. Si pasan >3 mensajes sin timestamp, pido hora antes de asumir.
+
+## Cierre de sesion
+
+24. Al cerrar sesion, SIEMPRE culminar con el prompt de apertura del siguiente hilo/modelo. No es opcional.
+25. El prompt de apertura vive en docs/PROMPT_APERTURA.md. Se actualiza al cierre si cambio el estado del proyecto.
+26. El prompt debe incluir: contexto del operador, lecturas obligatorias con verificacion, metodo no negociable, anti-patrones conocidos, protocolo de verificacion, confirmacion obligatoria.
+
 ## Operaciones destructivas — protocolo obligatorio (incidente 21/9)
 
 27. Antes de cualquier operacion destructiva (Remove-Item, rm -rf, git clean -fdx,
