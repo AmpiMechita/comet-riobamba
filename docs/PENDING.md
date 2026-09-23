@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-22 21:46 (martes, UTC-5). Sesión cerrada.
+> **Última actualización:** 2026-09-22 22:19 (martes, UTC-5). Sesión en curso: P-048 (unificar wrappers de key).
 > Ver `HANDOFF_2026-09-22.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -79,7 +79,7 @@
 
 | ID | Estado | Creado | Descripción | Origen |
 |---|---|---|---|---|
-| P-048 | OPEN | 2026-09-22 | Unificar los 3 wrappers de lectura de key (config/credentials.py, services/top_agents_tracker.py, services/editorial_self_audit.py) para que todos usen config.credentials._get_secret() | Auditoría 22/9 |
+| P-048 | DONE | 2026-09-22 | Unificar los 3 wrappers de lectura de key (config/credentials.py, services/top_agents_tracker.py, services/editorial_self_audit.py) para que todos usen config.credentials._get_secret(). CERRADO 22/9 noche: unificado en commit 99bda68 (top_agents_tracker.py + editorial_self_audit.py usan _get_secret; pytest 10 passed; py_compile OK; sin reinicio de servicio, modulos CLI/huerfanos) | Auditoría 22/9 |
 | P-049 | OPEN | 2026-09-22 | Implementar script de rotación de key con backup previo + validación + rollback automático (ver docs/adr/ADR-002-moltbook-key-rotation.md) | Auditoría 22/9 |
 | P-050 | OPEN | 2026-09-22 | Documentar endpoints oficiales de Moltbook en docs/DIRECTRICES.md (incluir /feed, /users/top, /users/{id}; marcar /users/me como NO válido) | Auditoría 22/9 |
 | P-051 | DONE | 2026-09-22 | Crear data\.secrets_backup\ con .gitignore antes de rotar key | Auditoría 22/9 |
@@ -97,7 +97,9 @@
 |---|---|---|---|---|
 | P-058 | OPEN | 2026-09-22 | Prompt de apertura contiene HEAD exacto. Al actualizarlo, el commit cambia el HEAD y el prompt queda obsoleto. Reemplazar por instruccion de verificar con git log --oneline -1 | Sesion 22/9 tarde |
 | P-059 | OPEN | 2026-09-22 | Verificar coherencia PENDING vs HANDOFF en cada cierre. Hoy HANDOFF 9 decia P-051 ya creado, pero PENDING lo tenia OPEN | Sesion 22/9 tarde |
-| P-060 | OPEN | 2026-09-22 | Revisar si otros wrappers de lectura de key ignoran DPAPI despues de unificar P-048. No basta con los 3 detectados: verificar imports sueltos de keyring | Sesion 22/9 tarde |
+| P-060 | DONE | 2026-09-22 | Revisar si otros wrappers de lectura de key ignoran DPAPI despues de unificar P-048. No basta con los 3 detectados: verificar imports sueltos de keyring. CERRADO 22/9 noche: grep keyring/MOLTBOOK_API_KEY en todo el repo: unicos lectores restantes _get_secret (canonico) y _rotate_key.py (escritor); extract_* pasan por Credentials.from_env; config.py valida post-from_env. No hay mas wrappers | Sesion 22/9 tarde |
+| P-061 | OPEN | 2026-09-22 | Mensajes de error desactualizados: dicen 'no definido en .env' en scripts/extract_moltbook.py, scripts/extract_moltbook_full.py y config/config.py::validate_config. La key vive en DPAPI/keyring desde 21/9. Cosmetico, no rompe ejecucion | Sesion 22/9 noche (P-048) |
+| P-062 | OPEN | 2026-09-22 | ADR-002 desactualizado: status dice 'Propuesto' pese a rotacion ejecutada 22/9; Paso 3 recomienda Read-Host -AsSecureString (prohibido en este entorno); Consequences cita P-048 como pendiente. Actualizar junto a P-049 | Sesion 22/9 noche (P-048) |
 
 ## Cerrados esta sesión (2026-09-21)
 

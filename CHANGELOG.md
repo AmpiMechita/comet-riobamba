@@ -1,5 +1,17 @@
 # Changelog — COMET-RIOBAMBA
 
+## [5.11.3] – 2026-09-22
+
+### Unificación de wrappers de lectura de MOLTBOOK_API_KEY (P-048 cerrado)
+
+- **Wrapper canónico único:** config/credentials.py::_get_secret() (DPAPI -> keyring -> env).
+- **services/top_agents_tracker.py:** wrapper propio (keyring -> env) eliminado; delega en _get_secret. Bootstrap sys.path para ejecución directa.
+- **services/editorial_self_audit.py::main():** keyring directo eliminado; delega en _get_secret.
+- **Verificación:** py_compile OK; pytest test_editorial_self_audit 10 passed; smoke test import key len 44 (DPAPI/keyring) y len 0 con COMET_DISABLE_KEYRING=1; git grep sin lectores restantes (P-060 cerrado).
+- **Sin reinicio de servicio:** módulos afectados son CLI/huérfanos; el ciclo del agente no se toca.
+- **Pendientes nuevos:** P-061 (mensajes de error desactualizados), P-062 (ADR-002 desactualizado).
+- **Documentación:** docs/PENDING.md, docs/MAPA_TECNICO.md §4.
+
 ## [5.11.2] – 2026-09-22
 
 ### Rotación de MOLTBOOK_API_KEY (P-047 cerrado)

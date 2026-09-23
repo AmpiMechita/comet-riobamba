@@ -36,15 +36,15 @@
 | Batería | Monitor batería | services/battery_monitor.py |
 | Balance | Guard saldo DeepSeek | services/balance_guard.py |
 
-## 4. Wrappers de lectura de key (inconsistencia)
+## 4. Lectura de key (unificada 22/9, P-048)
 
-| # | Archivo | Orden | Usa DPAPI |
-|---|---|---|---|
-| 1 | config/credentials.py::_get_secret() | DPAPI -> keyring -> env | Sí |
-| 2 | services/top_agents_tracker.py::_get_moltbook_api_key() | keyring -> env | No |
-| 3 | services/editorial_self_audit.py | keyring directo | No |
+| # | Archivo | Mecanismo |
+|---|---|---|
+| 1 | config/credentials.py::_get_secret() | Canonico: DPAPI -> keyring -> env |
+| 2 | services/top_agents_tracker.py::_get_moltbook_api_key() | Delega en _get_secret |
+| 3 | services/editorial_self_audit.py::main() | Delega en _get_secret |
 
-Wrapper primario: config.credentials._get_secret(). Pendiente: unificar (P-048).
+Wrapper canonico unico: config.credentials._get_secret() (respeta COMET_DISABLE_KEYRING=1 en tests). Unificado 22/9 (P-048, commit 99bda68); verificado sin otros lectores (P-060). scripts/_rotate_key.py es escritor, no lector.
 
 ## 5. Endpoints de Moltbook
 
