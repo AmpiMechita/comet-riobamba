@@ -1,5 +1,15 @@
 # Changelog — COMET-RIOBAMBA
 
+## [5.11.5] – 2026-09-23
+
+### Verificacion arranque automatico NSSM tras reboot real (P-002 cerrado)
+
+- **Reboot real 17:39:47:** servicio CometRiobamba auto-arranco 17:40:13 (PID 6840)
+  sin intervencion. StartType=Automatic (NSSM), cuenta LocalSystem.
+- **Evidencia:** LastBootUpTime 17:39:47 vs StartTime proceso nssm 17:40:13;
+  ciclo #283 completado OK post-boot (36.9s, sin error).
+- **PENDING.md:** P-002 OPEN -> DONE.
+
 ## [5.11.4] – 2026-09-23
 
 ### Rotacion de key automatizada + ADR-002 actualizado (P-049, P-062, P-064 cerrados)

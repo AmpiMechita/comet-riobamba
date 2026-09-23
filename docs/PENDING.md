@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-23 00:56 (miercoles, UTC-5). Sesión P-049/P-062/P-064 cerrada. HANDOFF_2026-09-23.md generado.
+> **Última actualización:** 2026-09-23 17:55 (miercoles, UTC-5). Sesión P-049/P-062/P-064 cerrada. HANDOFF_2026-09-23.md generado.
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -14,7 +14,7 @@
 | ID | Estado | Creado | Descripción | Origen |
 |---|---|---|---|---|
 | P-001 | DONE | 2026-09-19 | Bug `stop.flag` ignorado la primera vez (fix desplegado; verificacion mid-ciclo diferida) | Handoff 18/19 §7 |
-| P-002 | OPEN | 2026-09-19 | Verificar NSSM arranca tras reboot real de Windows | Handoff 18/19 §13.3 |
+| P-002 | DONE | 2026-09-19 | Verificar NSSM arranca tras reboot real de Windows. VERIFICADO 23/9: boot 17:39:47, servicio auto-arranco 17:40:13 (PID 6840), ciclo #283 OK | Handoff 18/19 §13.3 |
 | P-003 | DONE | 2026-09-20 | Verificar `run_id` en producción (Phase A, lunes con cap reset) | Sesión 20/9 §15.3 |
 | P-004 | DONE | 2026-09-20 | Verificar `run_id` + `timestamp` ISO en `proposal_apply_log` | Sesión 20/9 |
 | P-005 | DONE | 2026-09-20 | Verificar cap weekday efectivo `max_posts_per_day=1` el lunes | Sesión 20/9 §15.4 |
