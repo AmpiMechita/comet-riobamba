@@ -45,9 +45,6 @@ Rama git: feature/optimize-agent-config
 Servicio: CometRiobamba (NSSM, LocalSystem)
 
 VERIFICA EL HEAD actual con: git log --oneline -1
-(No confías en valores que aparezcan en documentos: siempre verifica con git.)
-
-VERIFICA EL HEAD actual con: git log --oneline -1
 (No confíes en valores que aparezcan en documentos: siempre verifica con git.)
 
 ═══════════════════════════════════════════════════════════════
@@ -59,23 +56,32 @@ la salida. Toda solicitud de contenido lleva un comando explícito.
 
 PASO 1 — Verificación de existencia y tamaño:
 
+  No hardcodees el nombre del handoff. Localízalo por nombre-fecha
+  descendente.
+
   Ejecuta esto y pégame la salida:
 
     cd C:\comet-riobamba-v31
-    Get-Item .\docs\HANDOFF_2026-09-22_noche.md, .\docs\PENDING.md, .\docs\MAPA_TECNICO.md | Select-Object Name, Length
-    (Get-Content .\docs\HANDOFF_2026-09-22_noche.md).Count
+    $h = (Get-ChildItem .\docs\HANDOFF_*.md | Sort-Object Name -Descending)[0]
+    $h.FullName
+    Get-Item $h.FullName, .\docs\PENDING.md, .\docs\MAPA_TECNICO.md | Select-Object Name, Length
+    (Get-Content $h.FullName).Count
     (Get-Content .\docs\PENDING.md).Count
     (Get-Content .\docs\MAPA_TECNICO.md).Count
 
-  Esperas: HANDOFF = 112 líneas, PENDING = 153 líneas, MAPA_TECNICO = 97 líneas.
+  NO confíes en conteos hardcodeados en este prompt: pueden variar por
+  sesión. Reporta los conteos reales que devuelva la salida.
 
 PASO 2 — Leer HANDOFF completo:
 
+  Usa el handoff identificado en el PASO 1 (no hardcodees el nombre).
+
   Ejecuta esto y pégame la salida completa:
 
-    Get-Content .\docs\HANDOFF_2026-09-22.md
+    Get-Content $h.FullName
 
-  Confirma que recibiste 112 líneas y 12 secciones antes de pasar al PASO 3.
+  Confirma que recibiste el mismo número de líneas que devolvió el .Count
+  del PASO 1, y enumera las secciones que veas, antes de pasar al PASO 3.
 
 PASO 3 — Leer PENDING completo:
 
@@ -132,8 +138,9 @@ ANTI-PATRONES CONOCIDOS (aprendidos 22/9/2026)
 
 ERROR A — Leer archivo truncado y reportar "completo"
    Ejemplo: leer HANDOFF con -TotalCount 120, decir "termina en §7".
-   El archivo tiene 112 líneas y 12 secciones.
-   PREVENCIÓN: verificar line count antes de reportar.
+   El archivo tiene N líneas y K secciones (N y K cambian por sesión).
+   PREVENCIÓN: verificar el .Count real y enumerar secciones antes de
+   reportar "completo".
 
 ERROR B — Asumir rutas sin verificar
    Ejemplo: asumir PENDING.md en raíz cuando está en docs/.

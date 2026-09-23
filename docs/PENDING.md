@@ -95,7 +95,7 @@
 
 | ID | Estado | Creado | Descripción | Origen |
 |---|---|---|---|---|
-| P-058 | OPEN | 2026-09-22 | Prompt de apertura contiene HEAD exacto. Al actualizarlo, el commit cambia el HEAD y el prompt queda obsoleto. Reemplazar por instruccion de verificar con git log --oneline -1 | Sesion 22/9 tarde |
+| P-058 | DONE | 2026-09-22 | Prompt de apertura contiene HEAD exacto. Verificado 23/9 con Select-String: PROMPT_APERTURA.md en disco no hardcodea HEAD; ya usa 'git log --oneline -1'. Premisa no aplica. | Sesion 22/9 tarde, cerrado 23/9 |
 | P-059 | OPEN | 2026-09-22 | Verificar coherencia PENDING vs HANDOFF en cada cierre. Hoy HANDOFF 9 decia P-051 ya creado, pero PENDING lo tenia OPEN | Sesion 22/9 tarde |
 | P-060 | DONE | 2026-09-22 | Revisar si otros wrappers de lectura de key ignoran DPAPI despues de unificar P-048. No basta con los 3 detectados: verificar imports sueltos de keyring. CERRADO 22/9 noche: grep keyring/MOLTBOOK_API_KEY en todo el repo: unicos lectores restantes _get_secret (canonico) y _rotate_key.py (escritor); extract_* pasan por Credentials.from_env; config.py valida post-from_env. No hay mas wrappers | Sesion 22/9 tarde |
 | P-061 | OPEN | 2026-09-22 | Mensajes de error desactualizados: dicen 'no definido en .env' en scripts/extract_moltbook.py, scripts/extract_moltbook_full.py y config/config.py::validate_config. La key vive en DPAPI/keyring desde 21/9. Cosmetico, no rompe ejecucion | Sesion 22/9 noche (P-048) |
@@ -104,6 +104,7 @@
 | P-064 | DONE | 2026-09-23 | Pulir PROMPT_APERTURA v6: punto (a) del objetivo cita HANDOFF §10 pero el handoff nocturno trae la sugerencia en §9; ERROR A cita '200 lineas' (handoff actual = 112). CERRADO 23/9: prompt v6 corregido in-place (§10->§9 en 3 sitios, 200->112); sin regenerar v7. | Cierre sesion 23/9 |
 | P-065 | OPEN | 2026-09-23 | Añadir error_type (y tier fallido) a generation_attempts.jsonl: hoy solo guarda outcome=model_error sin causa; impide diagnostico retroactivo. | P-006 |
 | P-066 | OPEN | 2026-09-23 | Confirmar commit que corrigio 'TypeError: offset-naive and offset-aware datetimes' en phases/phase_b.py (candidato 28acb8a). | P-006 |
+| P-067 | DONE | 2026-09-23 | PROMPT_APERTURA.md apuntaba a HANDOFF_2026-09-22_noche.md y conteos 112/153/97. CERRADO 23/9: PASO 1 ahora detecta handoff por nombre-fecha descendente ($h) y no hardcodea conteos; PASO 2 usa $h; ERROR A sin conteos; duplicado HEAD eliminado. numstat 17/10. | Sesion 23/9 cierre |
 
 ## Cerrados esta sesión (2026-09-21)
 
