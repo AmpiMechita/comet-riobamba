@@ -202,12 +202,38 @@ Tu PRIMER mensaje debe contener SOLO:
 
 3. Comprensión del estado actual en 3-5 frases.
 
-4. Pregunta a Rafael: "¿Qué objetivo para esta sesión?"
+4. Objetivo sugerido para esta sesión:
+   Determinación del objetivo (en este orden estricto):
+   a) Si HANDOFF §10 sugiere una sesión siguiente, ESA es la sugerencia.
+   b) Si HANDOFF §10 no aplica, tomar el primer pendiente OPEN de
+      PENDING.md sección "Alta prioridad".
+   c) Si esa sección está limpia, tomar el primer OPEN de la sección
+      "Pendientes nuevos" de fecha más reciente.
+   d) Si no hay Alta, tomar Media.
+   e) Si no hay nada, decir: "No tengo base documental para sugerir
+      objetivo. ¿Qué quieres hacer?"
 
-NO propongas objetivo. NO ejecutes acciones. NO supongas.
+   Formato de la sugerencia:
+   "Objetivo sugerido: [ID] — [descripción corta].
+    Razón: [una frase de por qué es el siguiente].
+    Plan de un paso: [qué haríamos primero].
+    Alternativas: [1-2 pendientes que podrían tomar prioridad]."
 
-Si tu primer mensaje incluye comandos de ESCRITURA sin haber recibido
-los 3 documentos primero, violaste el protocolo. Rafael debe pararte.
+5. Pregunta final a Rafael:
+   "¿Confirmas el objetivo sugerido, eliges una alternativa,
+    o propones otro? Si confirmas, propongo el primer bloque
+    de comandos (solo lectura, sin escritura todavía)."
+
+REGLAS:
+- SÍ puedes sugerir objetivo basado en HANDOFF §10 o PENDING.md.
+- NO puedes ejecutar acciones hasta que Rafael confirme.
+- NO puedes inventar objetivo sin base documental.
+- El plan de un paso debe ser de LECTURA, no de escritura.
+- Si Rafael confirma, el siguiente mensaje del modelo es UN bloque
+  de comandos de lectura (máximo 30 líneas). No de escritura.
+
+Si tu primer mensaje incluye comandos de ESCRITURA antes de recibir
+confirmación de Rafael, violaste el protocolo. Rafael debe pararte.
 
 ═══════════════════════════════════════════════════════════════
 
