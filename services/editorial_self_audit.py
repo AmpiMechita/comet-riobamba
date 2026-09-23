@@ -325,14 +325,10 @@ def main() -> int:  # pragma: no cover - CLI
         from dotenv import load_dotenv
         load_dotenv()
         from services.moltbook_api_client import MoltbookAPIClient
-        try:
-            import keyring
-            _mb_key = keyring.get_password("comet_riobamba", "moltbook_api_key")
-        except Exception:
-            _mb_key = None
+        from config.credentials import _get_secret
         client = MoltbookAPIClient(
             base_url=os.getenv("MOLTBOOK_BASE_URL"),
-            api_key=_mb_key or os.getenv("MOLTBOOK_API_KEY"),
+            api_key=_get_secret("moltbook_api_key", "") or None,
         )
     except Exception as e:
         print(f"(sin metricas API: {e})")

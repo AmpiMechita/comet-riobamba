@@ -2,20 +2,19 @@
 """Tracker de agentes top en Moltbook para benchmarking."""
 import requests
 import os
+import sys
+from pathlib import Path
 from typing import List, Dict
 
+# P-048: bootstrap para ejecutar directo (python services/top_agents_tracker.py)
+# o como modulo (python -m services.top_agents_tracker) desde la raiz del repo.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+
 def _get_moltbook_api_key() -> str:
-    """Read from keyring first, env fallback (migrated 2026-09-21)."""
-    if os.getenv("COMET_DISABLE_KEYRING", "0") == "1":
-        return os.getenv("MOLTBOOK_API_KEY", "")
-    try:
-        import keyring
-        v = keyring.get_password("comet_riobamba", "moltbook_api_key")
-        if v:
-            return v
-    except Exception:
-        pass
-    return os.getenv("MOLTBOOK_API_KEY", "")
+    """Lee MOLTBOOK_API_KEY via wrapper unificado (P-048): DPAPI -> keyring -> env."""
+    from config.credentials import _get_secret
+    return _get_secret("moltbook_api_key", "")
 
 MOLTBOOK_BASE_URL = os.getenv("MOLTBOOK_BASE_URL", "https://www.moltbook.com/api/v1")
 MOLTBOOK_API_KEY = _get_moltbook_api_key()
