@@ -132,7 +132,7 @@ ANTI-PATRONES CONOCIDOS (aprendidos 22/9/2026)
 
 ERROR A — Leer archivo truncado y reportar "completo"
    Ejemplo: leer HANDOFF con -TotalCount 120, decir "termina en §7".
-   El archivo tiene 200 líneas y 12 secciones.
+   El archivo tiene 112 líneas y 12 secciones.
    PREVENCIÓN: verificar line count antes de reportar.
 
 ERROR B — Asumir rutas sin verificar
@@ -220,8 +220,8 @@ Tu PRIMER mensaje debe contener SOLO:
 
 4. Objetivo sugerido para esta sesión:
    Determinación del objetivo (en este orden estricto):
-   a) Si HANDOFF §10 sugiere una sesión siguiente, ESA es la sugerencia.
-   b) Si HANDOFF §10 no aplica, tomar el primer pendiente OPEN de
+   a) Si HANDOFF §9 sugiere una sesión siguiente, ESA es la sugerencia.
+   b) Si HANDOFF §9 no aplica, tomar el primer pendiente OPEN de
       PENDING.md sección "Alta prioridad".
    c) Si esa sección está limpia, tomar el primer OPEN de la sección
       "Pendientes nuevos" de fecha más reciente.
@@ -240,7 +240,7 @@ Tu PRIMER mensaje debe contener SOLO:
     Si confirmas, propongo el primer bloque de comandos (solo lectura)."
 
 REGLAS:
-- SÍ puedes sugerir objetivo basado en HANDOFF §10 o PENDING.md.
+- SÍ puedes sugerir objetivo basado en HANDOFF §9 o PENDING.md.
 - NO puedes ejecutar acciones hasta que Rafael confirme.
 - NO puedes inventar objetivo sin base documental.
 - El plan de un paso debe ser de LECTURA, no de escritura.

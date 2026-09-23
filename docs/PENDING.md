@@ -101,7 +101,7 @@
 | P-061 | OPEN | 2026-09-22 | Mensajes de error desactualizados: dicen 'no definido en .env' en scripts/extract_moltbook.py, scripts/extract_moltbook_full.py y config/config.py::validate_config. La key vive en DPAPI/keyring desde 21/9. Cosmetico, no rompe ejecucion | Sesion 22/9 noche (P-048) |
 | P-062 | DONE | 2026-09-23 | ADR-002 actualizado: status Aceptado; Paso 3 alineado con rotate_key.py (new_key.tmp, no Read-Host -AsSecureString); Consequences sin P-048 pendiente; añadido INV7 (rollback). CERRADO 23/9. | Sesion 22/9 noche, cerrado 23/9 |
 | P-063 | DONE | 2026-09-22 | Regla EOL para parches: read_text/write_text de Python colapsan CRLF y traducen LF->CRLF en Windows; con core.autocrlf=true esto renormaliza blobs con CRLF (incidente CHANGELOG commit 53345b0: numstat 152/139 por solo EOL). APLICADA 22/9 noche como regla 33 de DIRECTRICES.md: usar read_bytes/write_bytes y verificar numstat tras cada commit | Sesion 22/9 noche (fix EOL) |
-| P-064 | OPEN | 2026-09-23 | Pulir PROMPT_APERTURA v6: punto (a) del objetivo cita HANDOFF §10 pero el handoff nocturno trae la sugerencia en §9; ERROR A cita '200 lineas' (handoff actual = 112). Cosmetico | Cierre sesion 23/9 |
+| P-064 | DONE | 2026-09-23 | Pulir PROMPT_APERTURA v6: punto (a) del objetivo cita HANDOFF §10 pero el handoff nocturno trae la sugerencia en §9; ERROR A cita '200 lineas' (handoff actual = 112). CERRADO 23/9: prompt v6 corregido in-place (§10->§9 en 3 sitios, 200->112); sin regenerar v7. | Cierre sesion 23/9 |
 
 ## Cerrados esta sesión (2026-09-21)
 
