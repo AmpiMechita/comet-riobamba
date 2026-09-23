@@ -1,3 +1,39 @@
+# Changelog — COMET-RIOBAMBA
+
+## [5.11.2] – 2026-09-22
+
+### Rotación de MOLTBOOK_API_KEY (P-047 cerrado)
+
+- **Backup:** data\.secrets_backup\moltbook_api_key.20260922_200436.enc (hash DB0EF5C9...).
+- **Validación previa:** HTTP 200 contra GET /api/v1/feed antes de sobrescribir.
+- **Persistencia:** DPAPI + keyring actualizados, verificación post-escritura OK.
+- **Servicio:** detenido 20:06, reiniciado 20:20:35, sin errores 401/403.
+- **Procedimiento:** ver docs/adr/ADR-002-moltbook-key-rotation.md.
+- **Archivos temporales:** scripts\_validate_key.py, scripts\_validate_key_file.py, scripts\_rotate_key.py, new_key.tmp (borrado).
+- **Pendiente derivado:** P-048 (unificar los 3 wrappers de lectura de key).
+
+
+
+
+## [5.11.1] – 2026-09-22
+
+### Auditoría de entorno + preparación de rotación de key
+
+- **docs/AUDITORIA_ENTORNO.md** creado — snapshot de servicios, wrappers, endpoints, secretos.
+- **docs/MAPA_TECNICO.md** creado — mapa de servicios, módulos, wrappers y endpoints.
+- **docs/adr/ADR-002-moltbook-key-rotation.md** creado — procedimiento con backup y rollback.
+- **docs/PENDING.md** actualizado — P-048 a P-057 añadidos.
+- **Hallazgo:** DPAPI y keyring contienen la misma MOLTBOOK_API_KEY; 2 wrappers ignoran DPAPI.
+- **Hallazgo:** GET /api/v1/users/me no existe (404); endpoint correcto para validación es GET /api/v1/feed.
+- **Pendiente:** P-047 (rotar key) en ejecución.
+
+### Notas operativas
+
+- Working dir del servicio: C:\comet-riobamba-v31
+- Entry point: run_agent.py (Python 3.14.7)
+- NSSM: C:\comet-riobamba-v31\tools\nssm.exe
+- Frecuencia del agente: ciclo ~250s + espera 1800s
+
 \# Changelog — COMET-RIOBAMBA
 
 
@@ -141,4 +177,8 @@
 \- Fases acopladas al objeto `agent`, circuit breakers duplicados y Phase B/C en archivos monolíticos.
 
 \- Punto de partida para la migración a la arquitectura v5.0.
+
+
+
+
 
