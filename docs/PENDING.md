@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-24 (jueves, UTC-5). P-065 DONE (error_type+tier en generation_attempts, commit f450094). P-066 DONE (fix naive/aware = 2e60d3f, NO 28acb8a; ruta real phases/phase_b/orchestrator.py). P-072 OPEN (EOL inflation CHANGELOG). Sesion P-075 (Sonnet 4.6) + P-076.
+> **Última actualización:** 2026-09-24 (jueves, UTC-5). P-065 DONE (error_type+tier en generation_attempts, commit f450094). P-066 DONE (fix naive/aware = 2e60d3f, NO 28acb8a; ruta real phases/phase_b/orchestrator.py). P-072 OPEN (EOL inflation CHANGELOG). P-073..P-077 OPEN (analisis produccion Moltbook, docs/ESTADO_PRODUCCION_2026-09-24.md). Sesion P-075 (Sonnet 4.6) + P-076 + P-077.
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -115,6 +115,11 @@
 | ID | Estado | Creado | Descripción | Origen |
 |---|---|---|---|---|
 | P-072 | OPEN | 2026-09-24 | Prevenir inflación EOL en diffs de docs (patrón recurrente). Evidencia: CHANGELOG en commit c08ec1e (cierre P-075) numstat 330++/163-- solo por EOL, idéntico a incidente P-063 (53345b0). Contenido correcto; Regla 33 aplicada en Python (read_bytes/write_bytes); git renormaliza al commitear con core.autocrlf=true. Evaluar '* text=auto eol=lf' o regla para *.md en .gitattributes. No bloqueante. | Sesión P-076 (hallazgo P-075) |
+| P-073 | OPEN | 2026-09-24 | Reportes diarios monitoring/daily-*.md detenidos desde 2026-09-05 (agente sigue corriendo). Restaurar generacion o decidir retiro formal. | Sesion P-077 (analisis produccion) |
+| P-074 | OPEN | 2026-09-24 | Lazo feedback engagement muerto/instrumentado en falso. Evidencia: karma_roi_tracker 0/212 con upvote/karma>0; dual_scores engagement_avg=0.000 (n=179); karma_trend.jsonl congelado 2026-08-19; social_metrics.jsonl 2026-05-22; comment_events.jsonl 2026-05-27. | Sesion P-077 |
+| P-075 | OPEN | 2026-09-24 | Dominancia fallback en topic_source: dedup_fallback 1025 + forced_fallback 1003 = 69.6% historico (n=2914). Revisar pipeline de topics y decidir si es sano o deuda. | Sesion P-077 |
+| P-076 | OPEN | 2026-09-24 | run_id historico ausente en generation_attempts: presente en 4/2914, solo desde 2026-09-21. Fix P-102 (985cd2f, 20/9) empieza a poblar tarde; decidir backfill o aceptar. | Sesion P-077 |
+| P-077 | OPEN | 2026-09-24 | value_log clasifica 108/108 como aporte_util en 14d. Posible sesgo del clasificador; muestrear y validar. | Sesion P-077 |
 
 ## Cerrados esta sesión (2026-09-21)
 
