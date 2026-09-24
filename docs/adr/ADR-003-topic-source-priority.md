@@ -2,7 +2,7 @@
 
 ## Status
 
-Propuesto (2026-09-23). Aprobacion pendiente de Rafael.
+Aceptado (2026-09-24). Aprobado por Rafael.
 
 ## Context
 
@@ -84,4 +84,4 @@ evolution un ciclo no consume recursos; perder un incidente si.
 
 ---
 
-*Generado 2026-09-23 (P-071). Status Propuesto; aprobacion pendiente.*
+*Generado 2026-09-23 (P-071). Status Aceptado 2026-09-24.*

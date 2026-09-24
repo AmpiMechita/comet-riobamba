@@ -69,7 +69,7 @@ DPAPI y keyring contienen la misma key (sha256[:16]=ae58656c69374d65).
 ## 7. Documentación existente
 
 - docs/ contiene 27 documentos top-level
-- docs/adr/ contiene ADR-001-system-invariants.md, ADR-002-moltbook-key-rotation.md
+- docs/adr/ contiene ADR-001-system-invariants.md, ADR-002-moltbook-key-rotation.md, ADR-003-topic-source-priority.md
 - CHANGELOG.md en raíz (última entrada 5.11.4, 2026-09-23)
 - docs/PENDING.md formato ID|Estado|Creado|Descripción|Origen
 - docs/DIRECTRICES.md con sección "Principios (Rafael)"
