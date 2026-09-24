@@ -56,13 +56,14 @@ la salida. Toda solicitud de contenido lleva un comando explícito.
 
 PASO 1 — Verificación de existencia y tamaño:
 
-  No hardcodees el nombre del handoff. Localízalo por nombre-fecha
-  descendente.
+  No hardcodees el nombre del handoff. Toma el más reciente por
+  LastWriteTime descendente (más robusto que nombre-fecha: sufijos
+  como _p006 rompen el orden ASCII y el viejo quedaría primero).
 
   Ejecuta esto y pégame la salida:
 
     cd C:\comet-riobamba-v31
-    $h = (Get-ChildItem .\docs\HANDOFF_*.md | Sort-Object Name -Descending)[0]
+    $h = (Get-ChildItem .\docs\HANDOFF_*.md | Sort-Object LastWriteTime -Descending)[0]
     $h.FullName
     Get-Item $h.FullName, .\docs\PENDING.md, .\docs\MAPA_TECNICO.md | Select-Object Name, Length
     (Get-Content $h.FullName).Count

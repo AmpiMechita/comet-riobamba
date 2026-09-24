@@ -1,5 +1,21 @@
 # Changelog — COMET-RIOBAMBA
 
+## [5.11.8] - 2026-09-23
+
+### Fix auto-detect de handoff en PROMPT_APERTURA + saneamiento post-Claude
+
+- **P-069 (nuevo, DONE):** PASO 1 del prompt usaba Sort-Object Name,
+  que en ASCII ordena punto antes que underscore; un sufijo _p006
+  quedaba segundo y el detectado era el handoff viejo. Ahora usa
+  Sort-Object LastWriteTime -Descending. Verificado: detecta
+  HANDOFF_2026-09-23_p006.md (54 lineas). numstat 4/3.
+
+- **Saneamiento:** sesion previa con Claude cerro P-007 (05dd801:
+  floors min=0->2/1/1; b62de09: P-007 DONE + P-068 + CHANGELOG 5.11.7)
+  y enriquecio P-045 (gate _count_incident_figures existe; commits
+  2e60d3f/93e72f2 verificados), pero dejo PENDING.md modificado sin
+  commitear. Incorporado en este cierre.
+
 ## [5.11.7] - 2026-09-23
 ### Fixed
 - P-007: floor `min=0` corregido en `max_comments_per_day` (0->2), `max_feed_replies_per_day` (0->1), `max_comments_per_post` (0->1) en `config/auto_appliable.py`. Impedia que el motor de auto-mejora silenciara al agente. 12 tests passed.

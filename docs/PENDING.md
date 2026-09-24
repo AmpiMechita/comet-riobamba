@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-23 19:18 (miercoles, UTC-5). P-007 DONE (floors 0->2/1/1, commit 05dd801). P-068 registrado.
+> **Última actualización:** 2026-09-23 20:05 (miercoles, UTC-5). P-069 DONE (auto-detect handoff por LastWriteTime). Sesion Claude (P-007) saneada.
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -68,7 +68,7 @@
 | P-033 | DECIDE | 2026-09-21 | Reconciliar 3 capas de config (policy/runtime/allowlist). Evidencia 21/9: env=15 vs allowlist=(2,10,8) vs log previous=2 | P-007b |
 | P-040 | OPEN | 2026-09-21 | Rediseño motor auto-mejora: deltas + floors + sombra | Sesión 21/9 |
 | P-041 | DONE | 2026-09-21 | Verificar posible Hangul-mojibake en `phase_a_content.py` | Sesión 21/9 |
-| P-045 | OPEN | 2026-09-21 | 8 tests pre-existentes fallan (test_own_incident_source + test_phase_a_research) - no causados por cambios recientes | Sesion 21/9 |
+| P-045 | OPEN | 2026-09-21 | 8 tests fallan (6 test_own_incident_source + 2 test_phase_a_research). Diagnóstico parcial 23/9: gate _count_incident_figures EXISTS en phase_a_content.py (L148+); inyección arXiv eliminada post-93e72f2; 2e60d3f tocó 28L en phase_a_content (UnboundLocalError+datetime). Causa raíz pendiente: ver qué cambió 2e60d3f en el gate y dónde se llama. | Sesion 21/9 |
 | P-046 | OPEN | 2026-09-21 | shutdown: agente completa cleanup en 1s pero proceso sigue vivo ~6min. Investigar threads no-daemon o tasks pendientes. | Sesion 21/9 |
 | P-047 | DONE | 2026-09-21 | ROTAR MOLTBOOK_API_KEY: key expuesta 21/9. Rotada 22/9 20:18. DPAPI + keyring actualizados, validados. Backup en data\.secrets_backup\moltbook_api_key.20260922_200436.enc (hash DB0EF5C9). Servicio reiniciado 20:20:35, sin errores auth. Ver docs/adr/ADR-002-moltbook-key-rotation.md | Sesion 21/9, cerrado 22/9 |
 
@@ -106,6 +106,7 @@
 | P-066 | OPEN | 2026-09-23 | Confirmar commit que corrigio 'TypeError: offset-naive and offset-aware datetimes' en phases/phase_b.py (candidato 28acb8a). | P-006 |
 | P-067 | DONE | 2026-09-23 | PROMPT_APERTURA.md apuntaba a HANDOFF_2026-09-22_noche.md y conteos 112/153/97. CERRADO 23/9: PASO 1 ahora detecta handoff por nombre-fecha descendente ($h) y no hardcodea conteos; PASO 2 usa $h; ERROR A sin conteos; duplicado HEAD eliminado. numstat 17/10. | Sesion 23/9 cierre |
 | P-068 | OPEN | 2026-09-23 | config/behavior_cfg.py (v4.3.0) codigo muerto: nadie lo importa en produccion (todos usan config/config.py::behavior_cfg). Eliminar o archivar. | Hallazgo P-007 23/9 |
+| P-069 | DONE | 2026-09-23 | PROMPT_APERTURA.md PASO 1 usaba Sort-Object Name -Descending, roto para sufijos _p006 (ASCII: punto < underscore). CERRADO 23/9: ahora usa Sort-Object LastWriteTime -Descending; verificado que detecta _p006 (54 lineas). numstat 4/3. | Sesion 23/9 (post-Claude) |
 
 ## Cerrados esta sesión (2026-09-21)
 
