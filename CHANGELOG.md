@@ -1,5 +1,18 @@
 # Changelog — COMET-RIOBAMBA
 
+## [5.11.9] - 2026-09-23
+
+### Directrices: regla 7b + operativa 12b (P-070)
+
+- **P-070 (nuevo, OPEN):** registra violaciones a reglas 1/2/12 durante
+  el diagnostico de P-045 en esta sesion.
+- **DIRECTRICES.md Principios:** agrega regla 7b "No ser condescendiente."
+- **DIRECTRICES.md Operativas:** agrega 12b exigiendo reproducir el fallo
+  antes de proponer fix. Lectura estatica de codigo NO es verificacion.
+- numstat 2/0 (DIRECTRICES) + 1/0 (PENDING). Commit 4684933.
+- Nota EOL: PENDING.md arrastraba un LF-suelto pre-existente en linea de
+  P-067 (commit b62de09); normalizado al commitear.
+
 ## [5.11.8] - 2026-09-23
 
 ### Fix auto-detect de handoff en PROMPT_APERTURA + saneamiento post-Claude
