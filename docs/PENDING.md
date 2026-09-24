@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-24 (jueves, UTC-5). P-065 DONE (error_type+tier en generation_attempts, commit f450094). Sesion P-075 (Sonnet 4.6).
+> **Última actualización:** 2026-09-24 (jueves, UTC-5). P-065 DONE (error_type+tier en generation_attempts, commit f450094). P-066 DONE (fix naive/aware = 2e60d3f, NO 28acb8a; ruta real phases/phase_b/orchestrator.py). P-072 OPEN (EOL inflation CHANGELOG). Sesion P-075 (Sonnet 4.6) + P-076.
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -103,12 +103,18 @@
 | P-063 | DONE | 2026-09-22 | Regla EOL para parches: read_text/write_text de Python colapsan CRLF y traducen LF->CRLF en Windows; con core.autocrlf=true esto renormaliza blobs con CRLF (incidente CHANGELOG commit 53345b0: numstat 152/139 por solo EOL). APLICADA 22/9 noche como regla 33 de DIRECTRICES.md: usar read_bytes/write_bytes y verificar numstat tras cada commit | Sesion 22/9 noche (fix EOL) |
 | P-064 | DONE | 2026-09-23 | Pulir PROMPT_APERTURA v6: punto (a) del objetivo cita HANDOFF §10 pero el handoff nocturno trae la sugerencia en §9; ERROR A cita '200 lineas' (handoff actual = 112). CERRADO 23/9: prompt v6 corregido in-place (§10->§9 en 3 sitios, 200->112); sin regenerar v7. | Cierre sesion 23/9 |
 | P-065 | DONE | 2026-09-23 | Añadir error_type (y tier fallido) a generation_attempts.jsonl. CERRADO 24/9: kwargs opcionales en _log_generation_attempt + caller model_error actualizado + test; commit f450094; suite 1510 passed. | P-006 |
-| P-066 | OPEN | 2026-09-23 | Confirmar commit que corrigio 'TypeError: offset-naive and offset-aware datetimes' en phases/phase_b.py (candidato 28acb8a). | P-006 |
+| P-066 | DONE | 2026-09-23 | Confirmar commit que corrigio 'TypeError: offset-naive and offset-aware datetimes' en phases/phase_b.py (candidato 28acb8a). CERRADO 24/9 (P-076): fix real = 2e60d3f (audit 13-16/09); ruta real phases/phase_b/orchestrator.py (NO phases/phase_b.py, inexistente); hunk L2112-2113 ts_dt.replace(tzinfo=timezone.utc) + comentario FIX 2026-09-13 naive->aware. Candidato 28acb8a (scheduling day-aware) erroneo. | P-006 |
 | P-067 | DONE | 2026-09-23 | PROMPT_APERTURA.md apuntaba a HANDOFF_2026-09-22_noche.md y conteos 112/153/97. CERRADO 23/9: PASO 1 ahora detecta handoff por nombre-fecha descendente ($h) y no hardcodea conteos; PASO 2 usa $h; ERROR A sin conteos; duplicado HEAD eliminado. numstat 17/10. | Sesion 23/9 cierre |
 | P-068 | OPEN | 2026-09-23 | config/behavior_cfg.py (v4.3.0) codigo muerto: nadie lo importa en produccion (todos usan config/config.py::behavior_cfg). Eliminar o archivar. | Hallazgo P-007 23/9 |
 | P-069 | DONE | 2026-09-23 | PROMPT_APERTURA.md PASO 1 usaba Sort-Object Name -Descending, roto para sufijos _p006 (ASCII: punto < underscore). CERRADO 23/9: ahora usa Sort-Object LastWriteTime -Descending; verificado que detecta _p006 (54 lineas). numstat 4/3. | Sesion 23/9 (post-Claude) |
 | P-070 | DONE | 2026-09-23 | Añadir "No ser condescendiente" a DIRECTRICES.md §7b; agregar sub-regla 12b (reproducir antes de diagnosticar). Origen: violaciones reglas 1/2/12 en sesión P-045. CERRADO 24/9: commit 4684933; verificado Select-String. | Sesión 23/9 P-045 |
 | P-071 | DONE | 2026-09-23 | Bug de produccion: cuando topic_evolution_state.json tiene serie active, evolution asigna topic antes que choose_topic y rompe la prioridad own_incident (material unico no se publica). Reproducido 23/9 inyectando 1 active: test 1 falla con 'topic Evidence for: ... rejected by editorial filter, using fallback'. State restaurado desde backups/topic_evolution_state.json.bak-20260923-210313. Servicio no afectado. Requiere ADR para decidir precedencia own_incident vs evolution. Origen: P-045. CERRADO 24/9: own_incident corre ANTES de evolution en execute() (commit feac722, ADR-003 INV1-INV4); 2 tests nuevos TestExecuteOwnIncidentPrecedence; suite 1509 passed. | Sesion 23/9 P-045 |
+
+## Pendientes nuevos (2026-09-24)
+
+| ID | Estado | Creado | Descripción | Origen |
+|---|---|---|---|---|
+| P-072 | OPEN | 2026-09-24 | Prevenir inflación EOL en diffs de docs (patrón recurrente). Evidencia: CHANGELOG en commit c08ec1e (cierre P-075) numstat 330++/163-- solo por EOL, idéntico a incidente P-063 (53345b0). Contenido correcto; Regla 33 aplicada en Python (read_bytes/write_bytes); git renormaliza al commitear con core.autocrlf=true. Evaluar '* text=auto eol=lf' o regla para *.md en .gitattributes. No bloqueante. | Sesión P-076 (hallazgo P-075) |
 
 ## Cerrados esta sesión (2026-09-21)
 

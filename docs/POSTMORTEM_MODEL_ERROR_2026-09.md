@@ -9,7 +9,7 @@ Fecha: 2026-09-23. Origen: P-006. Fuentes: generation_attempts.jsonl, backup-202
 | 2026-09-10 | 197 | múltiples | variado |
 
 ## 2026-09-10 — Causa raíz
-agent.log.2 inicia 04:46:43. Ese minuto el CB de model_cascade tenía los 3 tiers abiertos (flash, fallback, pro). 15.168 WARNINGs model_cascade ese día. Bug adicional en phase_b: "TypeError: can't compare offset-naive and offset-aware datetimes" (82 ocurrencias, todas en agent.log.2). Candidato a fix: 28acb8a, a confirmar.
+agent.log.2 inicia 04:46:43. Ese minuto el CB de model_cascade tenía los 3 tiers abiertos (flash, fallback, pro). 15.168 WARNINGs model_cascade ese día. Bug adicional en phase_b: "TypeError: can't compare offset-naive and offset-aware datetimes" (82 ocurrencias, todas en agent.log.2). Candidato previo 28acb8a descartado 2026-09-24 (P-076: ese commit es scheduling day-aware, no toca datetime). Fix real CONFIRMADO: 2e60d3f (audit 13-16/09, 17-sep); hunk en phases/phase_b/orchestrator.py L2112-2113 (ts_dt.replace(tzinfo=timezone.utc)) con comentario FIX 2026-09-13 naive->aware.
 
 ## 2026-09-01 / 2026-09-02 — Sin logs
 agent.log.2 inicia 10-sep, .1 el 18-sep, service_stdout* el 19-sep. Solo queda generation_attempts. 09-01: 661 en ~4h42m (18:05-22:47 UTC), un topic, forced_fallback. 09-02: 198 en ~53min (12:14-13:07 UTC), un topic, dedup_fallback.
@@ -17,7 +17,7 @@ agent.log.2 inicia 10-sep, .1 el 18-sep, service_stdout* el 19-sep. Solo queda g
 ## Acciones derivadas
 1. Añadir error_type a generation_attempts.
 2. Revisar retención de logs (P-056).
-3. Confirmar fix 28acb8a.
+3. Confirmar fix 28acb8a. CERRADO 2026-09-24 (P-076): fix real = 2e60d3f; candidato 28acb8a erroneo.
 
 ## Referencias
 P-006 en docs/PENDING.md. logs/agent.log.2. backups/generation_attempts.jsonl.backup-20260920-1844.

@@ -1,5 +1,13 @@
 # Changelog — COMET-RIOBAMBA
 
+## [5.11.17] - 2026-09-24
+
+### Sesion P-076: P-066 DONE + P-072 registrado (EOL CHANGELOG)
+
+- **docs/PENDING.md:** P-066 DONE. Fix real naive/aware = 2e60d3f (audit 13-16/09); candidato 28acb8a descartado (era scheduling day-aware); ruta real phases/phase_b/orchestrator.py (phases/phase_b.py no existe). P-072 OPEN: inflacion EOL recurrente en CHANGELOG (patron P-063). Header actualizado a P-076.
+- **docs/POSTMORTEM_MODEL_ERROR_2026-09.md:** candidato 28acb8a descartado con evidencia; fix confirmado 2e60d3f; accion derivada 3 cerrada.
+- **docs/HANDOFF_2026-09-24_p076.md:** nuevo.
+
 ## [5.11.16] - 2026-09-24
 
 ### Sesion P-075: P-065 DONE (error_type + tier en generation_attempts)
