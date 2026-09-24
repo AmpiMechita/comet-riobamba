@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-23 20:05 (miercoles, UTC-5). P-069 DONE (auto-detect handoff por LastWriteTime). Sesion Claude (P-007) saneada.
+> **Última actualización:** 2026-09-24 (jueves, UTC-5). P-071 DONE (fix produccion, commit feac722). Sesion P-072 (Sonnet 4.6).
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -108,7 +108,7 @@
 | P-068 | OPEN | 2026-09-23 | config/behavior_cfg.py (v4.3.0) codigo muerto: nadie lo importa en produccion (todos usan config/config.py::behavior_cfg). Eliminar o archivar. | Hallazgo P-007 23/9 |
 | P-069 | DONE | 2026-09-23 | PROMPT_APERTURA.md PASO 1 usaba Sort-Object Name -Descending, roto para sufijos _p006 (ASCII: punto < underscore). CERRADO 23/9: ahora usa Sort-Object LastWriteTime -Descending; verificado que detecta _p006 (54 lineas). numstat 4/3. | Sesion 23/9 (post-Claude) |
 | P-070 | DONE | 2026-09-23 | Añadir "No ser condescendiente" a DIRECTRICES.md §7b; agregar sub-regla 12b (reproducir antes de diagnosticar). Origen: violaciones reglas 1/2/12 en sesión P-045. CERRADO 24/9: commit 4684933; verificado Select-String. | Sesión 23/9 P-045 |
-| P-071 | OPEN | 2026-09-23 | Bug de produccion: cuando topic_evolution_state.json tiene serie active, evolution asigna topic antes que choose_topic y rompe la prioridad own_incident (material unico no se publica). Reproducido 23/9 inyectando 1 active: test 1 falla con 'topic Evidence for: ... rejected by editorial filter, using fallback'. State restaurado desde backups/topic_evolution_state.json.bak-20260923-210313. Servicio no afectado. Requiere ADR para decidir precedencia own_incident vs evolution. Origen: P-045. | Sesion 23/9 P-045 |
+| P-071 | DONE | 2026-09-23 | Bug de produccion: cuando topic_evolution_state.json tiene serie active, evolution asigna topic antes que choose_topic y rompe la prioridad own_incident (material unico no se publica). Reproducido 23/9 inyectando 1 active: test 1 falla con 'topic Evidence for: ... rejected by editorial filter, using fallback'. State restaurado desde backups/topic_evolution_state.json.bak-20260923-210313. Servicio no afectado. Requiere ADR para decidir precedencia own_incident vs evolution. Origen: P-045. CERRADO 24/9: own_incident corre ANTES de evolution en execute() (commit feac722, ADR-003 INV1-INV4); 2 tests nuevos TestExecuteOwnIncidentPrecedence; suite 1509 passed. | Sesion 23/9 P-045 |
 
 ## Cerrados esta sesión (2026-09-21)
 

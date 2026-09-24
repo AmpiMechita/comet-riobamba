@@ -1,5 +1,12 @@
 # Changelog — COMET-RIOBAMBA
 
+## [5.11.14] - 2026-09-24
+
+### Cierre sesion P-072: fix produccion P-071 (ADR-003 INV4)
+
+- **phases/phase_a_content.py:** bloque own_incident agregado ANTES de topic_evolution en execute(); get_unused_incident() decide topic_source. Evolution condicionado a topic is None. Commit feac722.
+- **tests/test_own_incident_source.py:** 2 tests nuevos en TestExecuteOwnIncidentPrecedence: own_incident gana a evolution activo; sin incidente unused, evolution sigue eligiendo. Suite 1509 passed, 1 skipped.
+
 ## [5.11.13] - 2026-09-24
 
 ### Sesion P-072: ADR-003 Aceptado + P-045 DONE + P-070 DONE
