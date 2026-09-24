@@ -1,5 +1,16 @@
 # Changelog — COMET-RIOBAMBA
 
+## [5.11.11] - 2026-09-23
+
+### ADR-003: precedencia de fuentes de tema en Phase A
+
+- **docs/adr/ADR-003-topic-source-priority.md (nuevo, Status Propuesto):**
+  define jerarquia own_incident > evolution > agenda > roadmap > matrix > niche.
+- **Razon:** material unico (own_incident) no puede bloquearse por material
+  derivado (evolution). Restaura coherencia con v5.3 documentado en choose_topic.
+- **Bug P-071** documentado en el ADR. Fix de produccion y de tests queda
+  pendiente de aprobacion del ADR.
+
 ## [5.11.10] - 2026-09-23
 
 ### P-045: causa raiz reproducida (P-071 registrado)
