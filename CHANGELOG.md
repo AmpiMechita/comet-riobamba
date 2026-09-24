@@ -1,5 +1,12 @@
 # Changelog — COMET-RIOBAMBA
 
+## [5.11.7] - 2026-09-23
+### Fixed
+- P-007: floor `min=0` corregido en `max_comments_per_day` (0->2), `max_feed_replies_per_day` (0->1), `max_comments_per_post` (0->1) en `config/auto_appliable.py`. Impedia que el motor de auto-mejora silenciara al agente. 12 tests passed.
+### Added
+- P-068: registrado hallazgo `config/behavior_cfg.py` (v4.3.0) codigo muerto.
+
+
 ## [5.11.6] – 2026-09-23
 
 ### Post-mortem model_error + cierres P-006/P-058/P-067

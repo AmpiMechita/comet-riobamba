@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-23 17:55 (miercoles, UTC-5). Sesión P-049/P-062/P-064 cerrada. HANDOFF_2026-09-23.md generado.
+> **Última actualización:** 2026-09-23 19:18 (miercoles, UTC-5). P-007 DONE (floors 0->2/1/1, commit 05dd801). P-068 registrado.
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -19,7 +19,7 @@
 | P-004 | DONE | 2026-09-20 | Verificar `run_id` + `timestamp` ISO en `proposal_apply_log` | Sesión 20/9 |
 | P-005 | DONE | 2026-09-20 | Verificar cap weekday efectivo `max_posts_per_day=1` el lunes | Sesión 20/9 §15.4 |
 | P-006 | DONE | 2026-09-20 | Post-mortem incidentes `model_error` (sep 1, 2, 10). CERRADO 23/9: docs/POSTMORTEM_MODEL_ERROR_2026-09.md. Causas sep 10 identificadas (CB 3 tiers + bug datetime phase_b); sep 1/2 irreconstruibles sin logs. | Purga `generation_attempts` 20/9 |
-| P-007 | OPEN | 2026-09-17 | Revisar `min=0` en `max_comments_per_day`, `max_feed_replies_per_day`, `max_comments_per_post` | Sesión 20/9 §11.4 |
+| P-007 | DONE | 2026-09-17 | Revisar `min=0` en `max_comments_per_day`, `max_feed_replies_per_day`, `max_comments_per_post`. CERRADO 23/9: floors 0->2/1/1 (commit 05dd801); P-068 registrado. | Sesión 20/9 §11.4 |
 
 ## Media prioridad
 
@@ -105,6 +105,7 @@
 | P-065 | OPEN | 2026-09-23 | Añadir error_type (y tier fallido) a generation_attempts.jsonl: hoy solo guarda outcome=model_error sin causa; impide diagnostico retroactivo. | P-006 |
 | P-066 | OPEN | 2026-09-23 | Confirmar commit que corrigio 'TypeError: offset-naive and offset-aware datetimes' en phases/phase_b.py (candidato 28acb8a). | P-006 |
 | P-067 | DONE | 2026-09-23 | PROMPT_APERTURA.md apuntaba a HANDOFF_2026-09-22_noche.md y conteos 112/153/97. CERRADO 23/9: PASO 1 ahora detecta handoff por nombre-fecha descendente ($h) y no hardcodea conteos; PASO 2 usa $h; ERROR A sin conteos; duplicado HEAD eliminado. numstat 17/10. | Sesion 23/9 cierre |
+| P-068 | OPEN | 2026-09-23 | config/behavior_cfg.py (v4.3.0) codigo muerto: nadie lo importa en produccion (todos usan config/config.py::behavior_cfg). Eliminar o archivar. | Hallazgo P-007 23/9 |
 
 ## Cerrados esta sesión (2026-09-21)
 
