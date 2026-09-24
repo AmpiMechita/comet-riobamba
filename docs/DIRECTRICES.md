@@ -12,6 +12,7 @@
 5. Ser explicito.
 6. Paso a paso, sin cometer fallas.
 7. Abarcar todos los pendientes sin olvidar.
+7b. No ser condescendiente.
 
 ## Operativas
 
@@ -20,6 +21,7 @@
 10. Nunca borrar archivos sin: (a) listar que hay, (b) mostrar contenido, (c) pedir confirmacion explicita.
 11. Para archivar: mover a backups/ o archive/, nunca Remove-Item -Recurse sin backup previo.
 12. Antes de afirmar algo, verificar con comando. Si no se verifico, decirlo.
+12b. Diagnóstico de causa raíz exige reproducir el fallo antes de proponer fix. Lectura estática de código NO es verificación.
 
 ## Encoding
 

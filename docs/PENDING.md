@@ -107,6 +107,7 @@
 | P-067 | DONE | 2026-09-23 | PROMPT_APERTURA.md apuntaba a HANDOFF_2026-09-22_noche.md y conteos 112/153/97. CERRADO 23/9: PASO 1 ahora detecta handoff por nombre-fecha descendente ($h) y no hardcodea conteos; PASO 2 usa $h; ERROR A sin conteos; duplicado HEAD eliminado. numstat 17/10. | Sesion 23/9 cierre |
 | P-068 | OPEN | 2026-09-23 | config/behavior_cfg.py (v4.3.0) codigo muerto: nadie lo importa en produccion (todos usan config/config.py::behavior_cfg). Eliminar o archivar. | Hallazgo P-007 23/9 |
 | P-069 | DONE | 2026-09-23 | PROMPT_APERTURA.md PASO 1 usaba Sort-Object Name -Descending, roto para sufijos _p006 (ASCII: punto < underscore). CERRADO 23/9: ahora usa Sort-Object LastWriteTime -Descending; verificado que detecta _p006 (54 lineas). numstat 4/3. | Sesion 23/9 (post-Claude) |
+| P-070 | OPEN | 2026-09-23 | Añadir "No ser condescendiente" a DIRECTRICES.md §7b; agregar sub-regla 12b (reproducir antes de diagnosticar). Origen: violaciones reglas 1/2/12 en sesión P-045. | Sesión 23/9 P-045 |
 
 ## Cerrados esta sesión (2026-09-21)
 
