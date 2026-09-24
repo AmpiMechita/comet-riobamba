@@ -870,3 +870,122 @@ async def test_execute_marks_incident_used_on_publish():
     records = incident_store.load_incidents()
     assert records[0]["id"] == "inc-pub"
     assert records[0]["used"] is True, "el incidente debe marcarse usado al publicar"
+
+# ── ADR-003 (P-071): execute() debe priorizar own_incident sobre evolution ──
+
+class TestExecuteOwnIncidentPrecedence:
+    """INV1-INV4 del ADR-003: si hay incidente unused, execute() lo elige
+    antes de consultar evolution; sin incidente, evolution sigue ganando."""
+
+    def _deps(self):
+        from phases.deps import PhaseADeps
+        return PhaseADeps(
+            model_cascade=_mock_cascade(),
+            moltbook_client=MagicMock(),
+            behavior_cfg={"max_posts_per_day": 5},
+            posts_today=0,
+            get_posts_today=lambda: 0,
+        )
+
+    def _evolution_topic(self, series_id):
+        return {
+            "title": "Foundation: agent runtime observability gaps",
+            "series_id": series_id,
+            "angle": "foundation",
+        }
+
+    @pytest.mark.asyncio
+    async def test_own_incident_beats_active_evolution_series(self, tmp_path):
+        """INV1 + INV4: evolution activo no debe robar el topic del incidente."""
+        from phases.phase_a_content import PhaseAContentGeneration
+
+        deps = self._deps()
+        fake_now = datetime(2026, 7, 22, 12, 0, 0)
+        mock_call_model = AsyncMock(return_value=_NO_FIGURES_BODY)
+
+        captured = {}
+
+        def fake_build_prompts(topic, policy=None, **kw):
+            captured["topic"] = topic
+            captured["incident"] = kw.get("incident")
+            captured["incident_figures"] = kw.get("incident_figures")
+            return ("sys", "user")
+
+        with (
+            patch("phases.phase_a_content.datetime") as mock_dt,
+            patch("phases.phase_a_content.behavior_cfg",
+                  {"max_posts_per_day": 5, "phase_a_mode": "research", "whisper_mode": True}),
+            patch("phases.phase_a_content.EDITORIAL_CONFIG",
+                  {**EDITORIAL_CONFIG, "phase_a_max_attempts": 1}),
+            patch("services.persistence.load_agent_state", return_value={}),
+            patch("services.own_post_store.count_posts_since", return_value=0),
+            patch("phases.phase_a_content.get_unused_incident",
+                  return_value=dict(_NESTED_INCIDENT)),
+            patch("phases.phase_a_content.get_incident_by_id",
+                  return_value=dict(_NESTED_INCIDENT)),
+            patch("services.topic_evolution.get_next_evolution_topic",
+                  return_value=self._evolution_topic("series-X")),
+            patch("phases.phase_a_content.load_topic_matrix", return_value=None),
+            patch("phases.phase_a_content._is_allowed_topic", return_value=True),
+            patch("phases.phase_a_content._is_topic_recently_used", return_value=False),
+            patch("phases.phase_a_content.build_prompts", side_effect=fake_build_prompts),
+            patch("phases.phase_a_content.load_editorial_policy", return_value={}),
+            patch("phases.phase_a_content.is_similar_to_recent", return_value=False),
+            patch("phases.phase_a_content.call_model", new=mock_call_model),
+        ):
+            mock_dt.now.return_value = fake_now
+            mock_dt.fromisoformat.side_effect = lambda s: datetime.fromisoformat(s)
+            phase_a = PhaseAContentGeneration(deps=deps)
+            await phase_a.execute()
+
+        assert captured.get("topic") == _NESTED_INCIDENT["title"], (
+            "INV1: own_incident debe ganar a evolution; "
+            f"topic recibido={captured.get('topic')!r}"
+        )
+        assert captured.get("incident") is not None, "INV2: _incident debe estar cargado"
+        assert captured["incident"]["id"] == _NESTED_INCIDENT["id"], "INV2: id correcto"
+        assert captured.get("incident_figures"), "INV2: cifras extraidas del incidente"
+
+    @pytest.mark.asyncio
+    async def test_evolution_still_wins_when_no_unused_incident(self, tmp_path):
+        """Regresion: sin incidente unused, evolution sigue siendo elegido."""
+        from phases.phase_a_content import PhaseAContentGeneration
+
+        deps = self._deps()
+        fake_now = datetime(2026, 7, 22, 12, 0, 0)
+        mock_call_model = AsyncMock(return_value=_NO_FIGURES_BODY)
+
+        ev = self._evolution_topic("series-Y")
+        captured = {}
+
+        def fake_build_prompts(topic, policy=None, **kw):
+            captured["topic"] = topic
+            return ("sys", "user")
+
+        with (
+            patch("phases.phase_a_content.datetime") as mock_dt,
+            patch("phases.phase_a_content.behavior_cfg",
+                  {"max_posts_per_day": 5, "phase_a_mode": "research", "whisper_mode": True}),
+            patch("phases.phase_a_content.EDITORIAL_CONFIG",
+                  {**EDITORIAL_CONFIG, "phase_a_max_attempts": 1}),
+            patch("services.persistence.load_agent_state", return_value={}),
+            patch("services.own_post_store.count_posts_since", return_value=0),
+            patch("phases.phase_a_content.get_unused_incident", return_value=None),
+            patch("services.topic_evolution.get_next_evolution_topic", return_value=ev),
+            patch("phases.phase_a_content.load_topic_matrix", return_value=None),
+            patch("phases.phase_a_content._is_allowed_topic", return_value=True),
+            patch("phases.phase_a_content._is_topic_recently_used", return_value=False),
+            patch("phases.phase_a_content.build_prompts", side_effect=fake_build_prompts),
+            patch("phases.phase_a_content.load_editorial_policy", return_value={}),
+            patch("phases.phase_a_content.is_similar_to_recent", return_value=False),
+            patch("phases.phase_a_content.call_model", new=mock_call_model),
+        ):
+            mock_dt.now.return_value = fake_now
+            mock_dt.fromisoformat.side_effect = lambda s: datetime.fromisoformat(s)
+            phase_a = PhaseAContentGeneration(deps=deps)
+            await phase_a.execute()
+
+        assert captured.get("topic") == ev["title"], (
+            "regresion: evolution debe elegir cuando no hay own_incident; "
+            f"topic recibido={captured.get('topic')!r}"
+        )

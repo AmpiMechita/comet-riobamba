@@ -40,6 +40,7 @@ from utils.phase_utils import phase_error_boundary, validate_phase_deps
 from services.editorial_policy import load_editorial_policy
 from services.dual_scoring import compute_dual_score, log_dual_score, _count_signals
 from services.incident_store import (
+    get_unused_incident,
     get_incident_by_id,
     mark_incident_used,
     extract_incident_figures,
@@ -1719,11 +1720,20 @@ class PhaseAContentGeneration:
             topic_source = "topic_matrix"
             _evolution_topic = None
             _evolution_extra = ""
+            # ADR-003 (P-071): own_incident precede a evolution.
+            try:
+                _own_inc = get_unused_incident()
+                if _own_inc and _own_inc.get("id"):
+                    topic = _own_inc.get("title", "")
+                    topic_source = "own_incident:" + str(_own_inc["id"])
+                    logger.info("Phase A: own_incident precedencia ADR-003: %s", _own_inc["id"])
+            except Exception as _e:
+                logger.warning("Phase A: own_incident check failed: %s", _e)
 
             # ── Topic Evolution: deepen mature claims (first priority) ──
             try:
                 from services.topic_evolution import get_next_evolution_topic
-                _evolution_topic = get_next_evolution_topic()
+                _evolution_topic = get_next_evolution_topic() if topic is None else None
                 if _evolution_topic:
                     topic = _evolution_topic["title"]
                     topic_source = f"evolution:{_evolution_topic['series_id']}"
