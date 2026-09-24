@@ -181,3 +181,23 @@ def _isolate_phase_a_jsonl_logs(tmp_path, monkeypatch):
         )
     except Exception:
         pass
+
+
+@pytest.fixture(autouse=True)
+def _isolate_topic_state(tmp_path, monkeypatch):
+    """FIX P-045 2026-09-24: aisla topic_evolution_state y topic_matrix en tmp_path."""
+    try:
+        import services.topic_evolution as te
+        monkeypatch.setattr(te, "EVOLUTION_STATE_FILE",
+                            tmp_path / "topic_evolution_state.json", raising=False)
+    except Exception:
+        pass
+    try:
+        import phases.phase_a_content as pac
+        import config.topic_matrix as ctm
+        _ol, _os = ctm.load_topic_matrix, ctm.save_topic_matrix
+        _mp = tmp_path / "topic_matrix_state.json"
+        monkeypatch.setattr(pac, "load_topic_matrix", lambda _p: _ol(_mp), raising=False)
+        monkeypatch.setattr(pac, "save_topic_matrix", lambda m, _p: _os(m, _mp), raising=False)
+    except Exception:
+        pass
