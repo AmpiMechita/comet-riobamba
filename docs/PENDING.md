@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-24 (jueves, UTC-5). P-071 DONE (fix produccion, commit feac722). Sesion P-072 (Sonnet 4.6).
+> **Última actualización:** 2026-09-24 (jueves, UTC-5). P-065 DONE (error_type+tier en generation_attempts, commit f450094). Sesion P-075 (Sonnet 4.6).
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -102,7 +102,7 @@
 | P-062 | DONE | 2026-09-23 | ADR-002 actualizado: status Aceptado; Paso 3 alineado con rotate_key.py (new_key.tmp, no Read-Host -AsSecureString); Consequences sin P-048 pendiente; añadido INV7 (rollback). CERRADO 23/9. | Sesion 22/9 noche, cerrado 23/9 |
 | P-063 | DONE | 2026-09-22 | Regla EOL para parches: read_text/write_text de Python colapsan CRLF y traducen LF->CRLF en Windows; con core.autocrlf=true esto renormaliza blobs con CRLF (incidente CHANGELOG commit 53345b0: numstat 152/139 por solo EOL). APLICADA 22/9 noche como regla 33 de DIRECTRICES.md: usar read_bytes/write_bytes y verificar numstat tras cada commit | Sesion 22/9 noche (fix EOL) |
 | P-064 | DONE | 2026-09-23 | Pulir PROMPT_APERTURA v6: punto (a) del objetivo cita HANDOFF §10 pero el handoff nocturno trae la sugerencia en §9; ERROR A cita '200 lineas' (handoff actual = 112). CERRADO 23/9: prompt v6 corregido in-place (§10->§9 en 3 sitios, 200->112); sin regenerar v7. | Cierre sesion 23/9 |
-| P-065 | OPEN | 2026-09-23 | Añadir error_type (y tier fallido) a generation_attempts.jsonl: hoy solo guarda outcome=model_error sin causa; impide diagnostico retroactivo. | P-006 |
+| P-065 | DONE | 2026-09-23 | Añadir error_type (y tier fallido) a generation_attempts.jsonl. CERRADO 24/9: kwargs opcionales en _log_generation_attempt + caller model_error actualizado + test; commit f450094; suite 1510 passed. | P-006 |
 | P-066 | OPEN | 2026-09-23 | Confirmar commit que corrigio 'TypeError: offset-naive and offset-aware datetimes' en phases/phase_b.py (candidato 28acb8a). | P-006 |
 | P-067 | DONE | 2026-09-23 | PROMPT_APERTURA.md apuntaba a HANDOFF_2026-09-22_noche.md y conteos 112/153/97. CERRADO 23/9: PASO 1 ahora detecta handoff por nombre-fecha descendente ($h) y no hardcodea conteos; PASO 2 usa $h; ERROR A sin conteos; duplicado HEAD eliminado. numstat 17/10. | Sesion 23/9 cierre |
 | P-068 | OPEN | 2026-09-23 | config/behavior_cfg.py (v4.3.0) codigo muerto: nadie lo importa en produccion (todos usan config/config.py::behavior_cfg). Eliminar o archivar. | Hallazgo P-007 23/9 |

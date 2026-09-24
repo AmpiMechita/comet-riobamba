@@ -1,5 +1,13 @@
 # Changelog — COMET-RIOBAMBA
 
+## [5.11.16] - 2026-09-24
+
+### Sesion P-075: P-065 DONE (error_type + tier en generation_attempts)
+
+- **phases/phase_a_content.py:** _log_generation_attempt recibe kwargs opcionales error_type y tier; se insertan condicionalmente en el record JSONL. Caller model_error actualizado: pasa error_type=type(e).__name__, tier=_gen_tier. Commit f450094.
+- **tests/test_phase_a_research.py:** test_log_generation_attempt_error_type_and_tier: verifica presencia de campos con model_error y ausencia en success (backward compat). Suite 1510 passed, 1 skipped.
+- **docs/PENDING.md:** P-065 DONE; header actualizado a P-075.
+
 ## [5.11.15] - 2026-09-25
 
 ### Cierre sesion P-074: P-059 DONE (Regla 34 agregada a DIRECTRICES.md)
