@@ -1337,7 +1337,7 @@ def get_run_id() -> str:
     return _RUN_ID
 
 
-def _log_generation_attempt(topic: str, topic_source: str, attempt: int, max_attempts: int, outcome: str) -> None:
+def _log_generation_attempt(topic: str, topic_source: str, attempt: int, max_attempts: int, outcome: str, error_type: str | None = None, tier: str | None = None) -> None:
     """Registra cada intento de generacion (exito o motivo de rechazo). Antes
     esta informacion solo vivia en el log de texto y se perdia al terminar
     el ciclo -- es la base para medir tasas de rechazo por tipo/tema."""
@@ -1352,6 +1352,10 @@ def _log_generation_attempt(topic: str, topic_source: str, attempt: int, max_att
             "max_attempts": max_attempts,
             "outcome": outcome,
         }
+        if error_type is not None:
+            record["error_type"] = error_type
+        if tier is not None:
+            record["tier"] = tier
         with open(_GENERATION_ATTEMPTS_LOG, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
     except Exception as e:
@@ -1950,7 +1954,7 @@ class PhaseAContentGeneration:
                     logger.info("Phase A: costos capturados - input=%s, output=%s, cost=$%.6f", _input_tokens, _output_tokens, _cost_usd)
                 except Exception as e:
                     logger.warning("Phase A: error en llamada al modelo: %s", e)
-                    _log_generation_attempt(topic, topic_source, attempt, max_attempts, "model_error")
+                    _log_generation_attempt(topic, topic_source, attempt, max_attempts, "model_error", error_type=type(e).__name__, tier=_gen_tier)
                     retry_correction = _build_retry_correction("model_error")
                     if attempt >= max_attempts:
                         generated_post = {"title": "", "body": "", "metadata": {"topic": topic}, "error": str(e), "attempts": attempt, "published": False, "error_type": "model_error"}

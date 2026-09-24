@@ -923,3 +923,46 @@ def test_run_id_defaults_to_unknown(tmp_path, monkeypatch):
         assert record["run_id"] == "unknown"
     finally:
         pac.set_run_id(original)
+
+
+def test_log_generation_attempt_error_type_and_tier(tmp_path, monkeypatch):
+    """_log_generation_attempt() registra error_type y tier cuando se pasan (P-065)."""
+    import json
+    import phases.phase_a_content as pac
+
+    log_path = tmp_path / "generation_attempts.jsonl"
+    monkeypatch.setattr(pac, "_GENERATION_ATTEMPTS_LOG", log_path)
+
+    original = pac.get_run_id()
+    try:
+        pac.set_run_id("cycle-99-9999999999")
+        # Con error_type y tier
+        pac._log_generation_attempt(
+            topic="topic X",
+            topic_source="roadmap",
+            attempt=1,
+            max_attempts=3,
+            outcome="model_error",
+            error_type="ConnectionError",
+            tier="premium",
+        )
+        # Sin error_type ni tier (backward compat)
+        pac._log_generation_attempt(
+            topic="topic Y",
+            topic_source="roadmap",
+            attempt=2,
+            max_attempts=3,
+            outcome="success",
+        )
+        lines = log_path.read_text(encoding="utf-8").strip().split("\n")
+        assert len(lines) == 2
+        r1 = json.loads(lines[0])
+        assert r1["outcome"] == "model_error"
+        assert r1["error_type"] == "ConnectionError"
+        assert r1["tier"] == "premium"
+        r2 = json.loads(lines[1])
+        assert r2["outcome"] == "success"
+        assert "error_type" not in r2
+        assert "tier" not in r2
+    finally:
+        pac.set_run_id(original)
