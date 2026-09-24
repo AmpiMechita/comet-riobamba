@@ -1,5 +1,14 @@
 # Changelog — COMET-RIOBAMBA
 
+## [5.11.13] - 2026-09-24
+
+### Sesion P-072: ADR-003 Aceptado + P-045 DONE + P-070 DONE
+
+- **docs/adr/ADR-003-topic-source-priority.md:** status Propuesto -> Aceptado. Precedencia own_incident > evolution ratificada por Rafael.
+- **docs/PENDING.md:** P-070 DONE (reglas 7b/12b verificadas en DIRECTRICES). P-045 DONE (capa A conftest.py + capa B ADR-003).
+- **docs/MAPA_TECNICO.md:** ADR-003 agregado a lista de ADRs en seccion 7.
+- **tests/conftest.py:** fixture _isolate_topic_state (autouse): aisla topic_evolution_state.json y topic_matrix_state.json. Suite 1507 passed, 1 skipped.
+
 ## [5.11.12] - 2026-09-23
 
 ### Cierre sesion P-071: handoff + anti-patron ERROR M
