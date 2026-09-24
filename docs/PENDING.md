@@ -96,7 +96,7 @@
 | ID | Estado | Creado | Descripción | Origen |
 |---|---|---|---|---|
 | P-058 | DONE | 2026-09-22 | Prompt de apertura contiene HEAD exacto. Verificado 23/9 con Select-String: PROMPT_APERTURA.md en disco no hardcodea HEAD; ya usa 'git log --oneline -1'. Premisa no aplica. | Sesion 22/9 tarde, cerrado 23/9 |
-| P-059 | OPEN | 2026-09-22 | Verificar coherencia PENDING vs HANDOFF en cada cierre. Hoy HANDOFF 9 decia P-051 ya creado, pero PENDING lo tenia OPEN | Sesion 22/9 tarde |
+| P-059 | DONE | 2026-09-22 | Verificar coherencia PENDING vs HANDOFF en cada cierre. CERRADO 25/9: Regla 34 agregada a DIRECTRICES.md. | Sesion 22/9 tarde, cerrado 25/9 |
 | P-060 | DONE | 2026-09-22 | Revisar si otros wrappers de lectura de key ignoran DPAPI despues de unificar P-048. No basta con los 3 detectados: verificar imports sueltos de keyring. CERRADO 22/9 noche: grep keyring/MOLTBOOK_API_KEY en todo el repo: unicos lectores restantes _get_secret (canonico) y _rotate_key.py (escritor); extract_* pasan por Credentials.from_env; config.py valida post-from_env. No hay mas wrappers | Sesion 22/9 tarde |
 | P-061 | OPEN | 2026-09-22 | Mensajes de error desactualizados: dicen 'no definido en .env' en scripts/extract_moltbook.py, scripts/extract_moltbook_full.py y config/config.py::validate_config. La key vive en DPAPI/keyring desde 21/9. Cosmetico, no rompe ejecucion | Sesion 22/9 noche (P-048) |
 | P-062 | DONE | 2026-09-23 | ADR-002 actualizado: status Aceptado; Paso 3 alineado con rotate_key.py (new_key.tmp, no Read-Host -AsSecureString); Consequences sin P-048 pendiente; añadido INV7 (rollback). CERRADO 23/9. | Sesion 22/9 noche, cerrado 23/9 |

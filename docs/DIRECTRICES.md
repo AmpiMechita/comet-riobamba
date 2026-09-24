@@ -46,6 +46,11 @@
 25. El prompt de apertura vive en docs/PROMPT_APERTURA.md. Se actualiza al cierre si cambio el estado del proyecto.
 26. El prompt debe incluir: contexto del operador, lecturas obligatorias con verificacion, metodo no negociable, anti-patrones conocidos, protocolo de verificacion, confirmacion obligatoria.
 
+34. Al cierre de sesion, verificar coherencia HANDOFF vs PENDING:
+    extraer IDs mencionados en HANDOFF seccion 8, buscar cada uno en PENDING.md,
+    comparar estado (OPEN/DONE). Si hay discrepancia, corregir PENDING.md
+    antes de cerrar. Documentar la verificacion en HANDOFF seccion 8.
+
 ## Operaciones destructivas — protocolo obligatorio (incidente 21/9)
 
 27. Antes de cualquier operacion destructiva (Remove-Item, rm -rf, git clean -fdx,

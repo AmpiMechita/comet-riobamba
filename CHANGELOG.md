@@ -1,5 +1,12 @@
 # Changelog — COMET-RIOBAMBA
 
+## [5.11.15] - 2026-09-25
+
+### Cierre sesion P-074: P-059 DONE (Regla 34 agregada a DIRECTRICES.md)
+
+- **docs/DIRECTRICES.md:** Regla 34 agregada: verificar coherencia HANDOFF seccion 8 vs PENDING.md al cierre de sesion.
+- **docs/PENDING.md:** P-059 marcado como DONE.
+
 ## [5.11.14] - 2026-09-24
 
 ### Cierre sesion P-072: fix produccion P-071 (ADR-003 INV4)
