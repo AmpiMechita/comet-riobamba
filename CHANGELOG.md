@@ -1,5 +1,20 @@
 # Changelog — COMET-RIOBAMBA
 
+## [5.11.10] - 2026-09-23
+
+### P-045: causa raiz reproducida (P-071 registrado)
+
+- **Reproduccion:** con data/topic_evolution_state.json alterado (1 serie status=active), el
+  test TestIncidentFiguresGate::test_body_without_figures_rejected_and_incident_stays_unused
+  falla con 'topic ... rejected by editorial filter, using fallback'. Con state restaurado (0 active), pasa.
+- **Causa raiz (2 capas):** (A) tests/conftest.py no aisla topic_evolution_state.json ni
+  topic_matrix_state.json; (B) evolution asigna topic antes que choose_topic, y el fallback de
+  _apply_editorial_filter no restaura la prioridad own_incident (bug de produccion).
+- **P-045 corregido:** no son 8 tests; son 2, y solo con series activas en disco.
+- **P-071 (nuevo, OPEN):** bug de produccion por perdida de prioridad own_incident cuando evolution
+  tiene serie active. Requiere ADR para decidir precedencia.
+- **State restaurado** desde backups/topic_evolution_state.json.bak-20260923-210313. Servicio no afectado.
+
 ## [5.11.9] - 2026-09-23
 
 ### Directrices: regla 7b + operativa 12b (P-070)
