@@ -198,6 +198,12 @@ ERROR L — Parchear archivos de texto con read_text/write_text de Python.
    de cada línea; verificar numstat tras cada commit (regla 33 de
    DIRECTRICES).
 
+ERROR M — Diagnosticar sin reproducir.
+   Ejemplo: inferir causa raíz leyendo código estático ("evolution le gana
+   a own_incident") cuando la reproducción del fallo la contradice.
+   PREVENCIÓN: antes de proponer fix, reproducir el fallo observando el
+   path real. Regla 12b de DIRECTRICES.
+
 ═══════════════════════════════════════════════════════════════
 PROTOCOLO DE VERIFICACIÓN ANTES DE ACTUAR
 ═══════════════════════════════════════════════════════════════

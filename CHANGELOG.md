@@ -1,5 +1,16 @@
 # Changelog — COMET-RIOBAMBA
 
+## [5.11.12] - 2026-09-23
+
+### Cierre sesion P-071: handoff + anti-patron ERROR M
+
+- **docs/HANDOFF_2026-09-23_p071.md (nuevo):** cierre de sesion. Cubre
+  diagnostico P-045/P-071, ADR-003, reglas 7b/12b.
+- **docs/PROMPT_APERTURA.md:** agrega ERROR M (diagnosticar sin reproducir).
+  Alinea el prompt con regla 12b agregada hoy a DIRECTRICES.
+- Pendientes abiertos para proxima sesion: P-045 (fix tests), P-070
+  (aplicar 7b/12b), P-071 (fix produccion). Dependen de aprobar ADR-003.
+
 ## [5.11.11] - 2026-09-23
 
 ### ADR-003: precedencia de fuentes de tema en Phase A
