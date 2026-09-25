@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-25 p088 (viernes, UTC-5). P-087 DONE (fix thread_id=post_id en load_recent_entries, commit 9275a64, verificado en prod ciclo #374 17:08 updated=4 failed=7; los 7 son feed_reply=P-088, no regresion). P-083 DONE (retiro JSONL ADR-004, commit 5658073, suite 1509 passed). P-085 DONE (PROMPT_APERTURA sin premisa 'sin Internet'). P-086 OPEN (regla: borrar artefactos antes de git add -A). P-082 EN CURSO (inventario real 25/9: 211 filas = 192 score NULL + 15 score=0 + 4 score>0; 181 published sin score = 120 recuperables [22 A + 34 C1 + 64 C2] + 61 feed_replies irrecuperables; bug load_recent_entries abre P-087). Nuevos P-087, P-088. Ver HANDOFF_2026-09-25_p082b.md (nota: p082 original = sesion nocturna P-084 parcial, commit 7035ac9; restaurado tras sobrescritura en 997f337).
+> **Última actualización:** 2026-09-25 p092 (viernes, UTC-5). P-092 DONE (columna action_type en comment_actions + filtros en get_roi_summary/roi_dashboard, commit 03ec072; backfill 24 post + 11 post_rejected; tests 8/8 + 19 adyacentes; verificado A=35/B=176). P-091 DONE. P-086/P-090 siguen OPEN. P-087 DONE (fix thread_id=post_id en load_recent_entries, commit 9275a64, verificado en prod ciclo #374 17:08 updated=4 failed=7; los 7 son feed_reply=P-088, no regresion). P-083 DONE (retiro JSONL ADR-004, commit 5658073, suite 1509 passed). P-085 DONE (PROMPT_APERTURA sin premisa 'sin Internet'). P-086 OPEN (regla: borrar artefactos antes de git add -A). P-082 EN CURSO (inventario real 25/9: 211 filas = 192 score NULL + 15 score=0 + 4 score>0; 181 published sin score = 120 recuperables [22 A + 34 C1 + 64 C2] + 61 feed_replies irrecuperables; bug load_recent_entries abre P-087). Nuevos P-087, P-088. Ver HANDOFF_2026-09-25_p082b.md (nota: p082 original = sesion nocturna P-084 parcial, commit 7035ac9; restaurado tras sobrescritura en 997f337).
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -148,7 +148,14 @@
 
 | ID | Estado | Creado | Descripción | Origen |
 |---|---|---|---|---|
-| P-091 | OPEN | 2026-09-25 | Bug writer: 24 filas own_post_reply published parent NULL con post_id == comment_id. get_post(comment_id) devuelve el comment tratado como post; fetch_post_comments(post_id) -> 404. Preexistente, no regresion. Afecta 22 A + 2 con score>0. Hipotesis fix: corregir punto de escritura (record_phase_b_comment o track_action) para guardar post_id real. | Sesion p088 |
+| P-091 | DONE | 2026-09-25 | Bug writer: 24 filas own_post_reply published parent NULL con post_id == comment_id. get_post(comment_id) devuelve el comment tratado como post; fetch_post_comments(post_id) -> 404. Preexistente, no regresion. Afecta 22 A + 2 con score>0. Hipotesis fix: corregir punto de escritura (record_phase_b_comment o track_action) para guardar post_id real. | Sesion p088 |
+
+## Cerrados esta sesión (2026-09-25 p092)
+
+| ID | Descripción | Commit / artefacto |
+|---|---|---|
+| P-092 | Fix P-091: action_type en comment_actions + filtros en get_roi_summary y roi_dashboard. Backfill 24 post + 11 post_rejected. Tests 8/8 tracker + 19 adyacentes. Verificado A=35/B=176. | 03ec072 |
+| P-091 | Bug writer post_id==comment_id (causa raiz track_action) | resuelto por P-092 (03ec072) |
 
 ## Cerrados esta sesión (2026-09-25 p088)
 
@@ -210,6 +217,6 @@
 
 | ID | Estado | Creado | Descripción | Origen |
 |---|---|---|---|---|
-| P-092 | OPEN | 2026-09-25 | Fix P-091 (causa raiz real: track_action no discrimina action_type; Phase A llama con action_type='post'/'post_rejected' y siempre inserta en comment_actions -> 24 filas own_post_reply parent NULL + 11 post_rejected espurios). Opcion A propuesta: anadir columna action_type a comment_actions + filtrar consumidores. Requiere tests + decision backfill SQL. Ver HANDOFF_2026-09-25_p092.md. | Sesion p092 |
+| P-092 | DONE | 2026-09-25 | Fix P-091 (causa raiz real: track_action no discrimina action_type; Phase A llama con action_type='post'/'post_rejected' y siempre inserta en comment_actions -> 24 filas own_post_reply parent NULL + 11 post_rejected espurios). Opcion A propuesta: anadir columna action_type a comment_actions + filtrar consumidores. Requiere tests + decision backfill SQL. Ver HANDOFF_2026-09-25_p092.md. | Sesion p092 |
 
 > **Correccion P-091 (p092):** la hipotesis del HANDOFF p088 (bug en _post_own_reply L4611 o record_phase_b_comment L1423) fue DESCARTADA por lectura de codigo + logs. Causa raiz real: Phase A, phase_a_content.py:2193 llama track_action(action_type='post') y L2116 track_action(action_type='post_rejected'); track_action carece de discriminacion por tipo y escribe a comment_actions con source='own_post_reply' por default. Alcance: 24 publicados + 11 rejected = 35 filas espurias. P-091 sigue OPEN hasta que P-092 se ejecute.
