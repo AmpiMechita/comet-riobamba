@@ -112,7 +112,7 @@ def update_all_karma(moltbook_client, hours: int = 24) -> dict:
         else:
             failed += 1
 
-    return {"updated": updated, "failed": failed, "skipped": skipped, "total": len(entries)}
+    return {"updated": updated, "failed": failed, "skipped_window": skipped, "total": len(entries)}
 
 
 def _load_last_run() -> float:

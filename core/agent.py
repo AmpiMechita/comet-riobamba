@@ -1093,8 +1093,8 @@ class COMETRiobambaAgent:
             kr = update_all_karma_guarded(self.moltbook_api_client)
             if not kr.get("skipped"):
                 logger.info(
-                    "karma_updater: updated=%d failed=%d skipped=%d",
-                    kr.get("updated", 0), kr.get("failed", 0), kr.get("skipped", 0),
+                    "karma_updater: updated=%d failed=%d skipped_window=%d",
+                    kr.get("updated", 0), kr.get("failed", 0), kr.get("skipped_window", 0),
                 )
             results["karma_updated"] = not kr.get("skipped")
         except Exception as e:
