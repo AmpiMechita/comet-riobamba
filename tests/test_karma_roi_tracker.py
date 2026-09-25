@@ -173,3 +173,23 @@ def test_get_roi_summary_no_confunde_phase_a_con_b():
     assert summary["phase_b"]["count"] == 1
     assert abs(summary["phase_a"]["total_cost"] - 0.01) < 1e-9
     assert abs(summary["phase_b"]["total_cost"] - 0.02) < 1e-9
+
+
+def test_load_recent_entries_feed_reply_top_level_p090():
+    """P-090: feed_reply top-level (parent NULL) debe clasificarse como comment,
+    no como post (bug: get_post(comment_id) -> 404)."""
+    from services.karma_roi_tracker import (
+        record_phase_b_comment,
+        load_recent_entries,
+    )
+    record_phase_b_comment(
+        comment_id="c_fr_top", post_id="p_root_fr",
+        parent_comment_id=None, source="feed_reply",
+        target_author="bob", target_is_watchlist=0, score=None,
+        model="m", tier="t", input_tokens=0, output_tokens=0,
+        cost_usd=0.0, status="published",
+    )
+    entries = {e["moltbook_id"]: e for e in load_recent_entries(hours=24)}
+    e = entries["c_fr_top"]
+    assert e["type"] == "comment"
+    assert e["thread_id"] == "p_root_fr"

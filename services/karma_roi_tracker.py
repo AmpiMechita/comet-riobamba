@@ -637,13 +637,13 @@ def load_recent_entries(hours: int = 24) -> list:
     try:
         conn = _get_conn()
         cur = conn.execute(
-            "SELECT comment_id, post_id, parent_comment_id, created_at "
+            "SELECT comment_id, post_id, created_at, action_type "
             "FROM comment_actions WHERE created_at >= ? "
             "ORDER BY created_at DESC",
             (cutoff_iso,),
         )
-        for comment_id, post_id_val, parent_id, created_at in cur:
-            is_comment = parent_id is not None
+        for comment_id, post_id_val, created_at, atype in cur:
+            is_comment = (atype == "comment")  # P-090
             out.append({
                 "type": "comment" if is_comment else "post",
                 "moltbook_id": comment_id,
