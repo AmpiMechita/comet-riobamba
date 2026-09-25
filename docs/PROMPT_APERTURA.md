@@ -43,7 +43,7 @@ PASO 5 — Estado del servicio y git:
   Get-Service CometRiobamba | Select-Object Name, Status
   git status --short
   git log --oneline -3
-  Get-Content .\logsgent.log -Tail 5
+  Get-Content .\logs\agent.log -Tail 5
 
 ═══════════════════════════════════════════════════════════════
 MÉTODO DE TRABAJO (NO NEGOCIABLE)

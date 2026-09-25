@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-24 p079 (jueves, UTC-5). P-074 DONE, P-079 DONE (commits 277ba5b + 824cf85 + 94ecbc2). P-080..P-082 OPEN. P-072 OPEN (EOL inflation CHANGELOG). P-073, P-075..P-077 OPEN (analisis produccion Moltbook).
+> **Última actualización:** 2026-09-24 p081 (jueves, UTC-5). P-080 DONE (fix BEL PROMPT_APERTURA). P-081 DONE (ADR-004: JSONL obsoleto, SQLite canonico). P-082 OPEN (backfill). P-072 OPEN (EOL inflation CHANGELOG). P-073, P-075..P-077 OPEN (analisis produccion Moltbook).
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -121,9 +121,10 @@
 | P-076 | OPEN | 2026-09-24 | run_id historico ausente en generation_attempts: presente en 4/2914, solo desde 2026-09-21. Fix P-102 (985cd2f, 20/9) empieza a poblar tarde; decidir backfill o aceptar. | Sesion P-077 |
 | P-077 | OPEN | 2026-09-24 | value_log clasifica 108/108 como aporte_util en 14d. Posible sesgo del clasificador; muestrear y validar. | Sesion P-077 |
 | P-079 | DONE | 2026-09-24 | Fix P-074 (commit 277ba5b). Camino B: (a) via fetch_post_comments(thread_id)+match por id (no existe get_comment). (b) update_karma_from_moltbook despacha por type. (c) update_all_karma_guarded 6h cableado en core/agent.py. (d) 15 tests dirigidos + suite 1510 passed. | Sesion P-078 + p079 |
-| P-080 | OPEN | 2026-09-24 | Cosmetico: PROMPT_APERTURA.md:24 tiene `\n` literal tras C:\comet-riobamba-v31, y PASO 5 usa `.\logs gent.log` en vez de `.\logs\agent.log`. Detectado al abrir p079. | Sesion P-079 |
-| P-081 | OPEN | 2026-09-24 | Divergencia schema JSONL (upvotes_1h/upvotes_24h/comments_received/karma_score) vs SQLite (score,last_updated). comments_received no existe en SQLite. Decidir migracion o declarar JSONL obsoleto. | Sesion P-079 |
-| P-082 | OPEN | 2026-09-24 | Backfill historico SQLite: 200 filas en comment_actions, 0 con score>0, 0 con last_updated. Fix p079 solo actualiza hacia adelante (ventana 24h). Evaluar script backfill + 10 filas con comment_id NULL. | Sesion P-079 |
+| P-080 | DONE | 2026-09-24 | PROMPT_APERTURA.md L46: byte BEL (0x07) entre `\logs` y `gent.log` (premisa "\n literal" incorrecta, era BEL). Corregido a `.\logs\agent.log`. Sin inflacion EOL. | Sesion P-079, cerrado p081 |
+| P-081 | DONE | 2026-09-24 | Divergencia schema JSONL vs SQLite. Inventario p081: 0 consumidores en produccion (solo karma_dashboard.py CLI + load_tracker_entries interno); engagement_events/daily_snapshots vacias; comments_received sin consumidor. Decision ADR-004: JSONL OBSOLETO, SQLite unica fuente. Retiro ejecutable en P-083. | Sesion P-079, cerrado p081 (ADR-004) |
+| P-082 | OPEN | 2026-09-24 | Backfill historico SQLite. Estado p081: 200 filas, score>0 = 1, last_updated NOT NULL = 9 (fix p079 activo hacia adelante). Pendiente backfill de ~199 filas historicas + 10 filas con comment_id NULL. | Sesion P-079, actualizado p081 |
+| P-083 | OPEN | 2026-09-24 | Ejecutar retiro JSONL (ADR-004): (1) eliminar _jsonl_write_entry + 2 call sites en karma_roi_tracker.py; (2) borrar monitoring/karma_dashboard.py; (3) karma_updater.py deja de leer JSONL; (4) archivar data/karma_roi_tracker.jsonl a data/archive/ con timestamp; (5) limpiar monkeypatch en tests/conftest.py. Un commit, tests verdes. | Sesion p081 (ADR-004) |
 
 ## Cerrados esta sesión (2026-09-21)
 
