@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-25 p083b (viernes, UTC-5). P-083 DONE (retiro JSONL ADR-004, commit 5658073, suite 1509 passed). P-085 DONE (PROMPT_APERTURA sin premisa 'sin Internet'). P-086 OPEN (regla: borrar artefactos antes de git add -A). P-082 EN CURSO (inventario real 25/9: 211 filas = 192 score NULL + 15 score=0 + 4 score>0; 181 published sin score = 120 recuperables [22 A + 34 C1 + 64 C2] + 61 feed_replies irrecuperables; bug load_recent_entries abre P-087). Nuevos P-087, P-088. Ver HANDOFF_2026-09-25_p082.md.
+> **Última actualización:** 2026-09-25 p083b (viernes, UTC-5). P-083 DONE (retiro JSONL ADR-004, commit 5658073, suite 1509 passed). P-085 DONE (PROMPT_APERTURA sin premisa 'sin Internet'). P-086 OPEN (regla: borrar artefactos antes de git add -A). P-082 EN CURSO (inventario real 25/9: 211 filas = 192 score NULL + 15 score=0 + 4 score>0; 181 published sin score = 120 recuperables [22 A + 34 C1 + 64 C2] + 61 feed_replies irrecuperables; bug load_recent_entries abre P-087). Nuevos P-087, P-088. Ver HANDOFF_2026-09-25_p082b.md (nota: p082 original = sesion nocturna P-084 parcial, commit 7035ac9; restaurado tras sobrescritura en 997f337).
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
