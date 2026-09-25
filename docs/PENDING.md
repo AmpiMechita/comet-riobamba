@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-24 p079 (jueves, UTC-5). P-074 DONE (reconectado lazo feedback engagement, commit 277ba5b). P-079 DONE (Camino B: enrutar por karma_roi_tracker canonico, guard 6h). P-080..P-082 OPEN (cosmetico PROMPT_APERTURA, divergencia schema JSONL/SQLite, backfill historico SQLite). P-072 OPEN (EOL inflation CHANGELOG). P-073, P-075..P-077 OPEN (analisis produccion Moltbook).
+> **Última actualización:** 2026-09-24 p079 (jueves, UTC-5). P-074 DONE, P-079 DONE (commits 277ba5b + 824cf85 + 94ecbc2). P-080..P-082 OPEN. P-072 OPEN (EOL inflation CHANGELOG). P-073, P-075..P-077 OPEN (analisis produccion Moltbook).
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
