@@ -205,3 +205,11 @@
 ---
 
 *Actualizar en cada sesión. Nunca borrar filas.*
+
+## Pendientes nuevos (2026-09-25 p092)
+
+| ID | Estado | Creado | Descripción | Origen |
+|---|---|---|---|---|
+| P-092 | OPEN | 2026-09-25 | Fix P-091 (causa raiz real: track_action no discrimina action_type; Phase A llama con action_type='post'/'post_rejected' y siempre inserta en comment_actions -> 24 filas own_post_reply parent NULL + 11 post_rejected espurios). Opcion A propuesta: anadir columna action_type a comment_actions + filtrar consumidores. Requiere tests + decision backfill SQL. Ver HANDOFF_2026-09-25_p092.md. | Sesion p092 |
+
+> **Correccion P-091 (p092):** la hipotesis del HANDOFF p088 (bug en _post_own_reply L4611 o record_phase_b_comment L1423) fue DESCARTADA por lectura de codigo + logs. Causa raiz real: Phase A, phase_a_content.py:2193 llama track_action(action_type='post') y L2116 track_action(action_type='post_rejected'); track_action carece de discriminacion por tipo y escribe a comment_actions con source='own_post_reply' por default. Alcance: 24 publicados + 11 rejected = 35 filas espurias. P-091 sigue OPEN hasta que P-092 se ejecute.
