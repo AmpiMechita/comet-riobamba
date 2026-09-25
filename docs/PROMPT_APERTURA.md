@@ -3,7 +3,7 @@ Nuevo chat. Retomo proyecto COMET-RIOBAMBA. Lee esto completo antes de responder
 ═══════════════════════════════════════════════════════════════
 CÓMO FUNCIONA ESTE CHAT (LEER PRIMERO)
 ═══════════════════════════════════════════════════════════════
-Yo (Rafael) ejecuto los comandos de PowerShell. Tú (modelo) propones qué ejecutar. NO tienes acceso a: C:\comet-riobamba-v31\, el servicio CometRiobamba, la terminal, ni Internet (sin herramientas). Solo ves lo que yo te pego.
+Yo (Rafael) ejecuto los comandos de PowerShell. Tú (modelo) propones qué ejecutar. NO tienes acceso a: C:\comet-riobamba-v31\, el servicio CometRiobamba, la terminal. Solo ves lo que yo te pego. (Sí tienes acceso a Internet para buscar herramientas y mejoras.)
 
 FLUJO DE TRABAJO:
 1. Tú propones UN bloque de comandos (máximo 30 líneas).

@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-25 p083 (viernes, UTC-5). P-080 DONE, P-081 DONE (ADR-004). P-082 OPEN, P-083 OPEN, P-084 DONE (verificado p083: lineas karma_updater + state file + delta SQLite OK). P-072 OPEN (EOL inflation CHANGELOG). P-073, P-075..P-077 OPEN (analisis produccion Moltbook).
+> **Última actualización:** 2026-09-25 p083b (viernes, UTC-5). P-083 DONE (retiro JSONL ADR-004, commit 5658073, suite 1509 passed). P-085 DONE (PROMPT_APERTURA sin premisa 'sin Internet'). P-086 OPEN (regla: borrar artefactos antes de git add -A). P-082 OPEN (backfill SQLite). Ver HANDOFF_2026-09-25_p083b.md.
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -124,14 +124,15 @@
 | P-080 | DONE | 2026-09-24 | PROMPT_APERTURA.md L46: byte BEL (0x07) entre `\logs` y `gent.log` (premisa "\n literal" incorrecta, era BEL). Corregido a `.\logs\agent.log`. Sin inflacion EOL. | Sesion P-079, cerrado p081 |
 | P-081 | DONE | 2026-09-24 | Divergencia schema JSONL vs SQLite. Inventario p081: 0 consumidores en produccion (solo karma_dashboard.py CLI + load_tracker_entries interno); engagement_events/daily_snapshots vacias; comments_received sin consumidor. Decision ADR-004: JSONL OBSOLETO, SQLite unica fuente. Retiro ejecutable en P-083. | Sesion P-079, cerrado p081 (ADR-004) |
 | P-082 | OPEN | 2026-09-24 | Backfill historico SQLite. Estado p081: 200 filas, score>0 = 1, last_updated NOT NULL = 9 (fix p079 activo hacia adelante). Pendiente backfill de ~199 filas historicas + 10 filas con comment_id NULL. | Sesion P-079, actualizado p081 |
-| P-083 | OPEN | 2026-09-24 | Ejecutar retiro JSONL (ADR-004): (1) eliminar _jsonl_write_entry + 2 call sites en karma_roi_tracker.py; (2) borrar monitoring/karma_dashboard.py; (3) karma_updater.py deja de leer JSONL; (4) archivar data/karma_roi_tracker.jsonl a data/archive/ con timestamp; (5) limpiar monkeypatch en tests/conftest.py. Un commit, tests verdes. | Sesion p081 (ADR-004) |
+| P-083 | DONE | 2026-09-24 | Ejecutar retiro JSONL (ADR-004). CERRADO 25/9 p083b commit 5658073: (1) krt sin _jsonl_write_entry/JSONL_PATH/KARMA_TRACKER_FILE + load_recent_entries(hours) lee SQLite (parent_comment_id discrimina post/comment); (2) monitoring/karma_dashboard.py eliminado (huerfano); (3) karma_updater.load_tracker_entries delega en load_recent_entries; (4) data/karma_roi_tracker.jsonl (108843B) -> data/archive/karma_roi_tracker.jsonl.20260925_154911 (gitignored); (5) conftest sin monkeypatches huerfanos + test_karma_roi_tracker.py reescrito. Suite 1509 passed, 1 skipped. | Sesion p081, cerrado p083b |
 | P-084 | DONE | 2026-09-24 | Reiniciar servicio NSSM para activar fix 94ecbc2 (colision skipped->skipped_window). Diagnostico p081: proceso PID 6452 arranco 19:40:59, commit 94ecbc2 fue 19:52:15 -> proceso stale. 0 lineas "karma_updater:" en agent.log ni rotados. Post-restart: observar 1 ciclo, confirmar linea en log y score>0 en SQLite. CERRADO 25/9 (verif p083): 2 lineas karma_updater en agent.log (08:19:03 updated=9 failed=2; 14:24:39 updated=10 failed=1, skipped_window 212/223) + state file 14:24:39 + SQLite rows 200->211 score>0 1->4 lu_nn 9->19. ERRATA p081: PID stale real 7132, NO 6452. | Sesion p081, cerrado p083 |
 
 ## Pendientes nuevos (2026-09-25)
 
 | ID | Estado | Creado | Descripción | Origen |
 |---|---|---|---|---|
-| P-085 | OPEN | 2026-09-25 | Corregir plantilla de apertura: premisa sin Internet incorrecta (modelos SI tienen acceso para buscar herramientas y mejoras). Corregir PROMPT_APERTURA.md si contiene la premisa. | Handoff p082 seccion 6 |
+| P-085 | DONE | 2026-09-25 | Corregir plantilla de apertura: premisa sin Internet incorrecta. CERRADO 25/9 p083b: PROMPT_APERTURA.md linea 'ni Internet (sin herramientas)' eliminada; anadida aclaracion '(Si tienes acceso a Internet para buscar herramientas y mejoras.)'. | Handoff p082 s6, cerrado p083b |
+| P-086 | OPEN | 2026-09-25 | Anadir regla a DIRECTRICES.md: borrar artefactos de sesion (scripts/patch_*.py) ANTES de git add -A, no despues del commit. Origen: p083b amend a5ea345->5658073. | Handoff p083b |
 
 ## Cerrados esta sesión (2026-09-21)
 
