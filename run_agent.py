@@ -23,7 +23,6 @@ setup_logging()
 from config.credentials import Credentials
 from config.config import get_banner
 from core.agent import main
-from services.karma_updater import update_all_karma
 from services.karma_roi_tracker import get_roi_summary
 
 

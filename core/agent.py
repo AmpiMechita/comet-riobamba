@@ -1086,6 +1086,21 @@ class COMETRiobambaAgent:
         self._log_cycle_summary(results, duration)
         send_event("cycle_end", {"cycle": self.cycle_count, "duration": duration, "error": results.get("error")})
 
+        # P-079: refrescar karma real (upvotes/comentarios) desde Moltbook.
+        # Guard interno (default 6h) evita GETs en cada ciclo.
+        try:
+            from services.karma_updater import update_all_karma_guarded
+            kr = update_all_karma_guarded(self.moltbook_api_client)
+            if not kr.get("skipped"):
+                logger.info(
+                    "karma_updater: updated=%d failed=%d skipped=%d",
+                    kr.get("updated", 0), kr.get("failed", 0), kr.get("skipped", 0),
+                )
+            results["karma_updated"] = not kr.get("skipped")
+        except Exception as e:
+            logger.warning("karma_updater failed: %s", e)
+            results["karma_updated"] = False
+
         self._rotate_cycle_logs()
 
         logger.info("=" * 58)

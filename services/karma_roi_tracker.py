@@ -331,29 +331,32 @@ def track_action(
 
 def update_karma(moltbook_id: str, upvotes: int, comments: int = 0) -> None:
     """Actualiza karma para una acción existente."""
-    # Actualizar en JSONL (compatibilidad)
+    # Actualizar en JSONL (compatibilidad). Regla 33: bytes, no texto.
     try:
         if JSONL_PATH.exists():
             entries: List[Dict[str, Any]] = []
-            with open(JSONL_PATH, "r", encoding="utf-8") as f:
-                for line in f:
-                    if line.strip():
-                        entries.append(json.loads(line))
-            
+            raw_bytes = JSONL_PATH.read_bytes()
+            for line in raw_bytes.split(b"\n"):
+                if line.strip():
+                    entries.append(json.loads(line.decode("utf-8")))
+
             updated = False
             for entry in entries:
                 if entry.get("moltbook_id") == moltbook_id:
+                    entry["upvotes_1h"] = upvotes
                     entry["upvotes_24h"] = upvotes
                     entry["comments_received"] = comments
-                    entry["karma_score"] = upvotes  # karma = upvotes × 1.0
+                    entry["karma_score"] = upvotes
                     entry["last_updated"] = datetime.now(timezone.utc).isoformat()
                     updated = True
                     break
-            
+
             if updated:
-                with open(JSONL_PATH, "w", encoding="utf-8") as f:
-                    for entry in entries:
-                        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                payload = b"".join(
+                    (json.dumps(e, ensure_ascii=False) + "\n").encode("utf-8")
+                    for e in entries
+                )
+                JSONL_PATH.write_bytes(payload)
     except Exception as e:
         import logging
         logging.getLogger("services.karma_roi_tracker").warning(
