@@ -3,7 +3,7 @@
 
 Camino B (P-079): este modulo ya NO reescribe el JSONL completo. Delega la
 escritura al modulo canonico services.karma_roi_tracker.update_karma(), que
-es la fuente de verdad (SQLite + espejo JSONL).
+es la fuente de verdad (SQLite).
 """
 
 from __future__ import annotations
@@ -20,7 +20,6 @@ from services.karma_roi_tracker import update_karma as _canonical_update_karma
 
 logger = logging.getLogger("services.karma_updater")
 
-KARMA_TRACKER_FILE = Path("data/karma_roi_tracker.jsonl")
 STATE_PATH = Path("data/karma_updater_last_run.json")
 DEFAULT_INTERVAL_HOURS = float(os.getenv("KARMA_UPDATER_INTERVAL_HOURS", "6"))
 
@@ -33,14 +32,13 @@ def _upvotes(d: Dict[str, Any]) -> int:
     return 0
 
 
-def load_tracker_entries() -> list:
-    """Carga todas las entradas del tracker (lectura binaria, Regla 33)."""
-    entries = []
-    if KARMA_TRACKER_FILE.exists():
-        for raw in KARMA_TRACKER_FILE.read_bytes().split(b"\n"):
-            if raw.strip():
-                entries.append(json.loads(raw.decode("utf-8")))
-    return entries
+def load_tracker_entries(hours: int = 24) -> list:
+    """Carga acciones recientes desde SQLite (ADR-004, P-083).
+
+    El JSONL espejo fue retirado; SQLite es la unica fuente de verdad.
+    """
+    from services.karma_roi_tracker import load_recent_entries
+    return load_recent_entries(hours=hours)
 
 
 def update_karma_from_moltbook(moltbook_client, entry: dict) -> dict:
@@ -83,7 +81,7 @@ def update_karma_from_moltbook(moltbook_client, entry: dict) -> dict:
 
 def update_all_karma(moltbook_client, hours: int = 24) -> dict:
     """Actualiza karma de acciones recientes. Delega la escritura al canonico."""
-    entries = load_tracker_entries()
+    entries = load_tracker_entries(hours=hours)
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).timestamp()
 
     updated = 0

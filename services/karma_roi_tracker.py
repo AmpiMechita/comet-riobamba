@@ -11,7 +11,6 @@ mientras usa SQLite como fuente de verdad.
 """
 
 import sqlite3
-import json
 import os
 import re
 from datetime import datetime, timezone
@@ -20,7 +19,6 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = BASE_DIR / "data" / "karma_roi.db"
-JSONL_PATH = BASE_DIR / "data" / "karma_roi_tracker.jsonl"
 
 SCHEMA_SQL = """
 -- Tabla: comment_actions
@@ -157,25 +155,9 @@ def _sql_upsert_daily_snapshot(conn: sqlite3.Connection, snapshot: Dict[str, Any
 
 
 # ═══════════════════════════════════════════════════════════════
-# Persistencia JSONL (compatibilidad hacia abajo)
-# ═══════════════════════════════════════════════════════════════
-
-def _jsonl_write_entry(entry: Dict[str, Any]) -> None:
-    """Append entry to JSONL file for backward compatibility."""
-    try:
-        JSONL_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(JSONL_PATH, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-    except Exception as e:
-        logger = __import__("logging").getLogger("services.karma_roi_tracker")
-        logger.warning("No se pudo escribir JSONL: %s", e)
-
-
-# ═══════════════════════════════════════════════════════════════
 # Funciones públicas (mismas firmas que la versión JSONL anterior)
 # ═══════════════════════════════════════════════════════════════
 
-KARMA_TRACKER_FILE = str(JSONL_PATH)
 
 
 def track_action(
@@ -193,8 +175,7 @@ def track_action(
 ) -> Dict[str, Any]:
     """Registra una acción (post/comment) en el tracker de karma ROI.
     
-    Escribe en SQLite (data/karma_roi.db) y mantiene compatibilidad JSONL
-    en data/karma_roi_tracker.jsonl para scripts existentes.
+    Escribe en SQLite (data/karma_roi.db).
     
     Parámetros opcionales:
     - status: published | rejected | duplicate | failed (default: published)
@@ -274,26 +255,6 @@ def track_action(
         "status": status if status in VALID_STATUSES else "published",
     }
     
-    # Entrada JSONL (compatibilidad)
-    jsonl_entry = {
-        "type": action_type,
-        "moltbook_id": moltbook_id,
-        "generated_at": created_at,
-        "phase": phase,
-        "cost_usd": round(cost_usd, 6),
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "total_tokens": input_tokens + output_tokens,
-        "model": model,
-        "thread_id": thread_id,  # Para comments: ID del post padre
-        "author": author,  # Autor del post/thread
-        "upvotes_1h": 0,
-        "upvotes_24h": 0,
-        "comments_received": 0,
-        "karma_score": 0,  # upvotes × 1.0
-        "last_updated": created_at
-    }
-    
     # Guardar en SQLite
     try:
         conn = _get_conn()
@@ -305,8 +266,6 @@ def track_action(
             "SQL error insertando comment_action: %s", e
         )
     
-    # Escribir JSONL para compatibilidad
-    _jsonl_write_entry(jsonl_entry)
     
     # Retornar formato consistente con la versión anterior
     return {
@@ -331,39 +290,7 @@ def track_action(
 
 def update_karma(moltbook_id: str, upvotes: int, comments: int = 0) -> None:
     """Actualiza karma para una acción existente."""
-    # Actualizar en JSONL (compatibilidad). Regla 33: bytes, no texto.
-    try:
-        if JSONL_PATH.exists():
-            entries: List[Dict[str, Any]] = []
-            raw_bytes = JSONL_PATH.read_bytes()
-            for line in raw_bytes.split(b"\n"):
-                if line.strip():
-                    entries.append(json.loads(line.decode("utf-8")))
-
-            updated = False
-            for entry in entries:
-                if entry.get("moltbook_id") == moltbook_id:
-                    entry["upvotes_1h"] = upvotes
-                    entry["upvotes_24h"] = upvotes
-                    entry["comments_received"] = comments
-                    entry["karma_score"] = upvotes
-                    entry["last_updated"] = datetime.now(timezone.utc).isoformat()
-                    updated = True
-                    break
-
-            if updated:
-                payload = b"".join(
-                    (json.dumps(e, ensure_ascii=False) + "\n").encode("utf-8")
-                    for e in entries
-                )
-                JSONL_PATH.write_bytes(payload)
-    except Exception as e:
-        import logging
-        logging.getLogger("services.karma_roi_tracker").warning(
-            "Error actualizando JSONL karma: %s", e
-    )
-    
-    # También actualizar en SQLite si existe
+    # Actualizar en SQLite
     try:
         conn = _get_conn()
         # Buscar entrada existente
@@ -674,33 +601,6 @@ def record_phase_b_comment(
                 pass
             return False
 
-        # Escribir JSONL para compatibilidad hacia atrás (best-effort)
-        try:
-            jsonl_entry = {
-                "type": "comment",
-                "moltbook_id": comment_id,
-                "generated_at": created_at,
-                "phase": "B",
-                "cost_usd": round(cost_val, 6),
-                "input_tokens": int(input_tokens) if input_tokens is not None else 0,
-                "output_tokens": int(output_tokens) if output_tokens is not None else 0,
-                "total_tokens": (int(input_tokens) if input_tokens is not None else 0)
-                + (int(output_tokens) if output_tokens is not None else 0),
-                "model": safe_model,
-                "thread_id": post_id,
-                "author": target_author,
-                "upvotes_1h": 0,
-                "upvotes_24h": 0,
-                "comments_received": 0,
-                "karma_score": int(score_val) if score_val is not None else 0,
-                "last_updated": created_at,
-                "source": source,
-                "tier": safe_tier,
-            }
-            _jsonl_write_entry(jsonl_entry)
-        except Exception:
-            pass  # JSONL failure no detiene Phase B
-
         # Log estructurado de éxito
         import logging
         logger = logging.getLogger("services.karma_roi_tracker")
@@ -721,16 +621,42 @@ def record_phase_b_comment(
 
 
 # ═══════════════════════════════════════════════════════════════
-# Función de ayuda para compatibilidad: KARMA_TRACKER_FILE aún apunta a JSONL
-# ═══════════════════════════════════════════════════════════════
+def load_recent_entries(hours: int = 24) -> list:
+    """Carga acciones recientes de SQLite con el shape que consume
+    karma_updater: type, moltbook_id, thread_id, generated_at.
 
-# NOTE: KARMA_TRACKER_FILE mantiene la ruta JSONL para scripts existentes.
-# El tracker usa SQLite como fuente de verdad; el JSONL se mantiene por compatibilidad.
-# Scripts que lean data/karma_roi_tracker.jsonl aún funcionarán, pero la fuente de verdad
-# es data/karma_roi.db. Migre gradualmente a las nuevas funciones SQL.
+    Reemplaza la lectura del JSONL obsoleto (ADR-004, P-083).
+    """
+    now_ts = datetime.now(timezone.utc).timestamp()
+    cutoff_iso = datetime.fromtimestamp(
+        now_ts - hours * 3600, tz=timezone.utc
+    ).isoformat()
+    out: list = []
+    try:
+        conn = _get_conn()
+        cur = conn.execute(
+            "SELECT comment_id, parent_comment_id, created_at "
+            "FROM comment_actions WHERE created_at >= ? "
+            "ORDER BY created_at DESC",
+            (cutoff_iso,),
+        )
+        for comment_id, parent_id, created_at in cur:
+            is_comment = parent_id is not None
+            out.append({
+                "type": "comment" if is_comment else "post",
+                "moltbook_id": comment_id,
+                "thread_id": parent_id if is_comment else None,
+                "generated_at": created_at,
+            })
+        conn.close()
+    except Exception as e:
+        import logging
+        logging.getLogger(
+            "services.karma_roi_tracker"
+        ).warning("load_recent_entries: %s", e)
+    return out
 
 
-# ════════════════════════════════════════════════════════════════
 __all__ = [
     "track_action",
     "update_karma", 
@@ -738,6 +664,6 @@ __all__ = [
     "record_engagement",
     "record_daily_snapshot",
     "record_phase_b_comment",
-    "KARMA_TRACKER_FILE",
+    "load_recent_entries",
     "DB_PATH",
 ]

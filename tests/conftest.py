@@ -128,11 +128,7 @@ def _isolate_karma_roi_db(tmp_path, monkeypatch):
     try:
         import services.karma_roi_tracker as krt
         monkeypatch.setattr(krt, "DB_PATH", tmp_path / "karma_roi.db", raising=False)
-        monkeypatch.setattr(krt, "JSONL_PATH", tmp_path / "karma_roi_tracker.jsonl", raising=False)
-        if hasattr(krt, "KARMA_TRACKER_FILE"):
-            monkeypatch.setattr(krt, "KARMA_TRACKER_FILE", tmp_path / "karma_roi_tracker.jsonl", raising=False)
         import services.karma_updater as ku
-        monkeypatch.setattr(ku, "KARMA_TRACKER_FILE", tmp_path / "karma_roi_tracker.jsonl", raising=False)
         monkeypatch.setattr(ku, "STATE_PATH", tmp_path / "karma_updater_last_run.json", raising=False)
     except Exception:
         pass
