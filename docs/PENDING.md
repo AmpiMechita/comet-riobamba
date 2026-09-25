@@ -142,7 +142,7 @@
 | P-088 | OPEN | 2026-09-25 | 61 filas historicas `source=feed_reply` (parent_comment_id NULL, comment_id != post_id) NO recuperables con API actual: `get_post(comment_id)` -> 404; `fetch_post_comments(post_id)` no las incluye (probe B: 197 comments, hit=False). Aceptar perdida historica o explorar otro endpoint. | Sesion p082 |
 
 | P-089 | OPEN | 2026-09-25 | Verificar que `docs/HANDOFF_<fecha>_<id>.md` no exista antes de escribir HANDOFF nuevo. Sesion p082b: `HANDOFF_2026-09-25_p082.md` ya existia (sesion nocturna 03:35-04:25 P-084, commit 7035ac9) y fue sobrescrito en 997f337; restaurado desde 7035ac9 en 4df134f renombrando el propio a p082b. Regla candidata para DIRECTRICES.md. | Sesion p082b |
-| P-090 | OPEN | 2026-09-25 | `load_recent_entries` discrimina `type` por `parent_comment_id IS NULL`: `feed_reply` top-level (parent NULL) se clasifica como `post` y llama `get_post(comment_id)` -> 404. Semanticamente deberia discriminar por `source` (own_post_reply/thread_followup/feed_reply -> comment). No bloqueante hoy (P-088 dice que no se recuperan igual), pero ensucia logs y podria morder si la API cambia. | Sesion p087 |
+| P-090 | DONE | 2026-09-25 | `load_recent_entries` discrimina `type` por `parent_comment_id IS NULL`: `feed_reply` top-level (parent NULL) se clasifica como `post` y llama `get_post(comment_id)` -> 404. Semanticamente deberia discriminar por `source` (own_post_reply/thread_followup/feed_reply -> comment). No bloqueante hoy (P-088 dice que no se recuperan igual), pero ensucia logs y podria morder si la API cambia. CERRADO 25/9 p094: load_recent_entries usa action_type; 72/72 feed_reply top-level ahora type=comment con thread_id=post_id. Commit 7d28f95. | Sesion p087 |
 
 ## Pendientes nuevos (2026-09-25 p088)
 
@@ -208,6 +208,14 @@
 | ID | Descripción | Razón |
 |---|---|---|
 | P-901 | Monetizar directamente en Moltbook | Ecosistema joven sin tracción. Ver `PRESUPUESTO_Y_MONETIZACION_2026-07-21.md` |
+
+---
+
+## Cerrados esta sesión (2026-09-25 p094)
+
+| ID | Descripción | Commit / artefacto |
+|---|---|---|
+| P-090 | load_recent_entries discrimina type por action_type (no por parent_comment_id IS NULL); 72/72 feed_reply top-level correctos | 7d28f95 |
 
 ---
 
