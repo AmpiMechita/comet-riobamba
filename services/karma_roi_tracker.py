@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS comment_actions (
     cost_usd REAL NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     last_updated TEXT,                 -- timestamp de última actualización
-    status TEXT NOT NULL               -- published | rejected | duplicate | failed
+    status TEXT NOT NULL,              -- published | rejected | duplicate | failed
+    action_type TEXT NOT NULL DEFAULT 'comment'  -- comment | post | post_rejected
 );
 
 -- Tabla: engagement_events
@@ -94,8 +95,8 @@ def _sql_insert_comment_action(conn: sqlite3.Connection, entry: Dict[str, Any]) 
         """INSERT OR REPLACE INTO comment_actions
         (comment_id, post_id, parent_comment_id, target_author, target_is_watchlist,
          source, score, model, tier, input_tokens, output_tokens, cost_usd,
-         created_at, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+         created_at, status, action_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             entry.get("comment_id"),
             entry.get("post_id"),
@@ -111,6 +112,7 @@ def _sql_insert_comment_action(conn: sqlite3.Connection, entry: Dict[str, Any]) 
             float(entry.get("cost_usd", 0)) if entry.get("cost_usd") is not None else 0.0,
             entry.get("created_at"),
             entry.get("status"),
+            entry.get("action_type", "comment"),
         ),
     )
     conn.commit()
@@ -253,6 +255,7 @@ def track_action(
         "cost_usd": round(cost_usd, 6),
         "created_at": created_at,
         "status": status if status in VALID_STATUSES else "published",
+        "action_type": "comment" if action_type == "comment" else action_type,
     }
     
     # Guardar en SQLite
@@ -326,21 +329,20 @@ def get_roi_summary(hours: int = 24) -> Dict[str, Any]:
     
     # Comments por phase
     cursor = conn.execute(
-        """SELECT cost_usd, status, source FROM comment_actions 
+        """SELECT cost_usd, status, action_type FROM comment_actions 
            WHERE created_at >= ?""",
         (cutoff_iso,),
     )
     rows = cursor.fetchall()
     
-    # Phase A y Phase B las distinguimos por el campo source o por convenciones
-    # Por ahora, Phase A = posts (own_post_reply), Phase B = comments
+    # Fix P-092: Phase A = action_type in {post, post_rejected}.
+    # Phase B = action_type='comment' (feed_reply, thread_followup, own_post_reply).
     phase_a_entries = []
     phase_b_entries = []
     
     for row in rows:
-        cost, status, source = row
-        # Phase A: posts (own_post_reply), Phase B: comments (feed_reply, thread_followup)
-        if source == "own_post_reply":
+        cost, status, action_type = row
+        if action_type and action_type.startswith("post"):
             phase_a_entries.append({"cost_usd": cost, "status": status})
         else:
             phase_b_entries.append({"cost_usd": cost, "status": status})
@@ -569,8 +571,8 @@ def record_phase_b_comment(
                 """INSERT OR REPLACE INTO comment_actions
                 (comment_id, post_id, parent_comment_id, target_author, target_is_watchlist,
                  source, score, model, tier, input_tokens, output_tokens, cost_usd,
-                 created_at, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                 created_at, status, action_type)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'comment')""",
                 (
                     comment_id,
                     post_id,

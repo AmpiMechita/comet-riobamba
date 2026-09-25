@@ -47,8 +47,10 @@ def _rows_since(hours: int) -> list:
     """Devuelve rows de comment_actions en las últimas *hours* horas."""
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
     cutoff_iso = cutoff.isoformat()
+    # Fix P-092: este panel mide comentarios. Excluye posts Phase A
+    # (action_type in {post, post_rejected}) que inflaban rechazados y costos.
     return _query(
-        "SELECT * FROM comment_actions WHERE created_at >= ?",
+        "SELECT * FROM comment_actions WHERE created_at >= ? AND action_type = \'comment\'",
         (cutoff_iso,),
     )
 

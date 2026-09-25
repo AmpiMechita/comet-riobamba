@@ -20,23 +20,11 @@ from services.karma_roi_tracker import (
 
 
 @pytest.fixture(autouse=True)
-def cleanup_after_test():
-    """Limpia la BD antes y despues de cada test."""
-
-    def _clean():
-        p = krt.DB_PATH if isinstance(krt.DB_PATH, Path) else Path(krt.DB_PATH)
-        if not p.exists():
-            return
-        conn = sqlite3.connect(str(p))
-        conn.execute("DELETE FROM comment_actions")
-        conn.execute("DELETE FROM engagement_events")
-        conn.execute("DELETE FROM daily_snapshots")
-        conn.commit()
-        conn.close()
-
-    _clean()
-    yield
-    _clean()
+def isolated_db(tmp_path, monkeypatch):
+    """P-092: aislar la BD real; cada test usa un archivo temporal."""
+    db = tmp_path / "karma_roi_test.db"
+    monkeypatch.setattr(krt, "DB_PATH", db)
+    yield db
 
 
 def test_track_action_basic():
@@ -133,3 +121,55 @@ def test_load_recent_entries_thread_id_is_post_id_for_comment_c2():
     assert entries["c_c2_t1"]["thread_id"] != "c_parent_t1"
     assert entries["p_top_t1"]["type"] == "post"
     assert entries["p_top_t1"]["thread_id"] is None
+
+
+
+def test_track_action_post_no_se_marca_como_comment():
+    """P-092: track_action(action_type='post') debe guardar action_type='post'."""
+    track_action(
+        action_type="post", moltbook_id="p_p092", phase="A",
+        cost_usd=0.001, input_tokens=1, output_tokens=1, model="m",
+    )
+    conn = sqlite3.connect(str(krt.DB_PATH))
+    row = conn.execute(
+        "SELECT action_type FROM comment_actions WHERE comment_id = ?",
+        ("p_p092",),
+    ).fetchone()
+    conn.close()
+    assert row is not None
+    assert row[0] == "post"
+
+
+def test_track_action_comment_sigue_siendo_comment():
+    """P-092: comentarios Phase B mantienen action_type='comment'."""
+    track_action(
+        action_type="comment", moltbook_id="c_p092", phase="B",
+        thread_id="p_root", cost_usd=0.001, input_tokens=1,
+        output_tokens=1, model="m", source="feed_reply",
+    )
+    conn = sqlite3.connect(str(krt.DB_PATH))
+    row = conn.execute(
+        "SELECT action_type FROM comment_actions WHERE comment_id = ?",
+        ("c_p092",),
+    ).fetchone()
+    conn.close()
+    assert row is not None
+    assert row[0] == "comment"
+
+
+def test_get_roi_summary_no_confunde_phase_a_con_b():
+    """P-092: post -> phase_a; comment -> phase_b. No mezclar por source."""
+    track_action(
+        action_type="post", moltbook_id="p_sep", phase="A",
+        cost_usd=0.01, input_tokens=1, output_tokens=1, model="m",
+    )
+    track_action(
+        action_type="comment", moltbook_id="c_sep", phase="B",
+        thread_id="p_sep", cost_usd=0.02, input_tokens=1,
+        output_tokens=1, model="m", source="own_post_reply",
+    )
+    summary = get_roi_summary(hours=24)
+    assert summary["phase_a"]["count"] == 1
+    assert summary["phase_b"]["count"] == 1
+    assert abs(summary["phase_a"]["total_cost"] - 0.01) < 1e-9
+    assert abs(summary["phase_b"]["total_cost"] - 0.02) < 1e-9
