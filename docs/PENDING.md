@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-24 p081 (jueves, UTC-5). P-080 DONE (fix BEL PROMPT_APERTURA). P-081 DONE (ADR-004: JSONL obsoleto, SQLite canonico). P-082 OPEN (backfill). P-072 OPEN (EOL inflation CHANGELOG). P-073, P-075..P-077 OPEN (analisis produccion Moltbook).
+> **Última actualización:** 2026-09-24 p081 (jueves, UTC-5). P-080 DONE, P-081 DONE (ADR-004). P-082 OPEN, P-083 OPEN, P-084 OPEN (reinicio NSSM para verificar linea karma_updater viva; proceso stale pre-94ecbc2). P-072 OPEN (EOL inflation CHANGELOG). P-073, P-075..P-077 OPEN (analisis produccion Moltbook).
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -125,6 +125,7 @@
 | P-081 | DONE | 2026-09-24 | Divergencia schema JSONL vs SQLite. Inventario p081: 0 consumidores en produccion (solo karma_dashboard.py CLI + load_tracker_entries interno); engagement_events/daily_snapshots vacias; comments_received sin consumidor. Decision ADR-004: JSONL OBSOLETO, SQLite unica fuente. Retiro ejecutable en P-083. | Sesion P-079, cerrado p081 (ADR-004) |
 | P-082 | OPEN | 2026-09-24 | Backfill historico SQLite. Estado p081: 200 filas, score>0 = 1, last_updated NOT NULL = 9 (fix p079 activo hacia adelante). Pendiente backfill de ~199 filas historicas + 10 filas con comment_id NULL. | Sesion P-079, actualizado p081 |
 | P-083 | OPEN | 2026-09-24 | Ejecutar retiro JSONL (ADR-004): (1) eliminar _jsonl_write_entry + 2 call sites en karma_roi_tracker.py; (2) borrar monitoring/karma_dashboard.py; (3) karma_updater.py deja de leer JSONL; (4) archivar data/karma_roi_tracker.jsonl a data/archive/ con timestamp; (5) limpiar monkeypatch en tests/conftest.py. Un commit, tests verdes. | Sesion p081 (ADR-004) |
+| P-084 | OPEN | 2026-09-24 | Reiniciar servicio NSSM para activar fix 94ecbc2 (colision skipped->skipped_window). Diagnostico p081: proceso PID 6452 arranco 19:40:59, commit 94ecbc2 fue 19:52:15 -> proceso stale. 0 lineas "karma_updater:" en agent.log ni rotados. Post-restart: observar 1 ciclo, confirmar linea en log y score>0 en SQLite. | Sesion p081 |
 
 ## Cerrados esta sesión (2026-09-21)
 
