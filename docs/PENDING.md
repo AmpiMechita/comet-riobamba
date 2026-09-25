@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-25 p087 (viernes, UTC-5). P-087 DONE (fix thread_id=post_id en load_recent_entries, commit 9275a64, verificado en prod ciclo #374 17:08 updated=4 failed=7; los 7 son feed_reply=P-088, no regresion). P-083 DONE (retiro JSONL ADR-004, commit 5658073, suite 1509 passed). P-085 DONE (PROMPT_APERTURA sin premisa 'sin Internet'). P-086 OPEN (regla: borrar artefactos antes de git add -A). P-082 EN CURSO (inventario real 25/9: 211 filas = 192 score NULL + 15 score=0 + 4 score>0; 181 published sin score = 120 recuperables [22 A + 34 C1 + 64 C2] + 61 feed_replies irrecuperables; bug load_recent_entries abre P-087). Nuevos P-087, P-088. Ver HANDOFF_2026-09-25_p082b.md (nota: p082 original = sesion nocturna P-084 parcial, commit 7035ac9; restaurado tras sobrescritura en 997f337).
+> **Última actualización:** 2026-09-25 p088 (viernes, UTC-5). P-087 DONE (fix thread_id=post_id en load_recent_entries, commit 9275a64, verificado en prod ciclo #374 17:08 updated=4 failed=7; los 7 son feed_reply=P-088, no regresion). P-083 DONE (retiro JSONL ADR-004, commit 5658073, suite 1509 passed). P-085 DONE (PROMPT_APERTURA sin premisa 'sin Internet'). P-086 OPEN (regla: borrar artefactos antes de git add -A). P-082 EN CURSO (inventario real 25/9: 211 filas = 192 score NULL + 15 score=0 + 4 score>0; 181 published sin score = 120 recuperables [22 A + 34 C1 + 64 C2] + 61 feed_replies irrecuperables; bug load_recent_entries abre P-087). Nuevos P-087, P-088. Ver HANDOFF_2026-09-25_p082b.md (nota: p082 original = sesion nocturna P-084 parcial, commit 7035ac9; restaurado tras sobrescritura en 997f337).
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -123,7 +123,7 @@
 | P-079 | DONE | 2026-09-24 | Fix P-074 (commit 277ba5b). Camino B: (a) via fetch_post_comments(thread_id)+match por id (no existe get_comment). (b) update_karma_from_moltbook despacha por type. (c) update_all_karma_guarded 6h cableado en core/agent.py. (d) 15 tests dirigidos + suite 1510 passed. | Sesion P-078 + p079 |
 | P-080 | DONE | 2026-09-24 | PROMPT_APERTURA.md L46: byte BEL (0x07) entre `\logs` y `gent.log` (premisa "\n literal" incorrecta, era BEL). Corregido a `.\logs\agent.log`. Sin inflacion EOL. | Sesion P-079, cerrado p081 |
 | P-081 | DONE | 2026-09-24 | Divergencia schema JSONL vs SQLite. Inventario p081: 0 consumidores en produccion (solo karma_dashboard.py CLI + load_tracker_entries interno); engagement_events/daily_snapshots vacias; comments_received sin consumidor. Decision ADR-004: JSONL OBSOLETO, SQLite unica fuente. Retiro ejecutable en P-083. | Sesion P-079, cerrado p081 (ADR-004) |
-| P-082 | OPEN | 2026-09-24 | Backfill historico SQLite. Estado p081: 200 filas, score>0 = 1, last_updated NOT NULL = 9 (fix p079 activo hacia adelante). Pendiente backfill de ~199 filas historicas + 10 filas con comment_id NULL. | Sesion P-079, actualizado p081 |
+| P-082 | DONE PARCIAL | 2026-09-24 | Backfill historico SQLite. CERRADO PARCIAL 25/9 p088: 85/120 recuperables (C2 64/64 + C1 21/34 + 2 muestra). SQLite score NULL 192->107, last_updated NOT NULL 19->104. Irrecuperables con API: 61 feed_reply (P-088) + 13 thread_followup (comment borrado) + 22 A (bug post_id==comment_id, ver P-091) + 11 rejected. | Sesion P-079, cerrado p088 |
 | P-083 | DONE | 2026-09-24 | Ejecutar retiro JSONL (ADR-004). CERRADO 25/9 p083b commit 5658073: (1) krt sin _jsonl_write_entry/JSONL_PATH/KARMA_TRACKER_FILE + load_recent_entries(hours) lee SQLite (parent_comment_id discrimina post/comment); (2) monitoring/karma_dashboard.py eliminado (huerfano); (3) karma_updater.load_tracker_entries delega en load_recent_entries; (4) data/karma_roi_tracker.jsonl (108843B) -> data/archive/karma_roi_tracker.jsonl.20260925_154911 (gitignored); (5) conftest sin monkeypatches huerfanos + test_karma_roi_tracker.py reescrito. Suite 1509 passed, 1 skipped. | Sesion p081, cerrado p083b |
 | P-084 | DONE | 2026-09-24 | Reiniciar servicio NSSM para activar fix 94ecbc2 (colision skipped->skipped_window). Diagnostico p081: proceso PID 6452 arranco 19:40:59, commit 94ecbc2 fue 19:52:15 -> proceso stale. 0 lineas "karma_updater:" en agent.log ni rotados. Post-restart: observar 1 ciclo, confirmar linea en log y score>0 en SQLite. CERRADO 25/9 (verif p083): 2 lineas karma_updater en agent.log (08:19:03 updated=9 failed=2; 14:24:39 updated=10 failed=1, skipped_window 212/223) + state file 14:24:39 + SQLite rows 200->211 score>0 1->4 lu_nn 9->19. ERRATA p081: PID stale real 7132, NO 6452. | Sesion p081, cerrado p083 |
 
@@ -143,6 +143,18 @@
 
 | P-089 | OPEN | 2026-09-25 | Verificar que `docs/HANDOFF_<fecha>_<id>.md` no exista antes de escribir HANDOFF nuevo. Sesion p082b: `HANDOFF_2026-09-25_p082.md` ya existia (sesion nocturna 03:35-04:25 P-084, commit 7035ac9) y fue sobrescrito en 997f337; restaurado desde 7035ac9 en 4df134f renombrando el propio a p082b. Regla candidata para DIRECTRICES.md. | Sesion p082b |
 | P-090 | OPEN | 2026-09-25 | `load_recent_entries` discrimina `type` por `parent_comment_id IS NULL`: `feed_reply` top-level (parent NULL) se clasifica como `post` y llama `get_post(comment_id)` -> 404. Semanticamente deberia discriminar por `source` (own_post_reply/thread_followup/feed_reply -> comment). No bloqueante hoy (P-088 dice que no se recuperan igual), pero ensucia logs y podria morder si la API cambia. | Sesion p087 |
+
+## Pendientes nuevos (2026-09-25 p088)
+
+| ID | Estado | Creado | Descripción | Origen |
+|---|---|---|---|---|
+| P-091 | OPEN | 2026-09-25 | Bug writer: 24 filas own_post_reply published parent NULL con post_id == comment_id. get_post(comment_id) devuelve el comment tratado como post; fetch_post_comments(post_id) -> 404. Preexistente, no regresion. Afecta 22 A + 2 con score>0. Hipotesis fix: corregir punto de escritura (record_phase_b_comment o track_action) para guardar post_id real. | Sesion p088 |
+
+## Cerrados esta sesión (2026-09-25 p088)
+
+| ID | Descripción | Commit / artefacto |
+|---|---|---|
+| P-082 | Backfill historico SQLite (parcial 85/120) | scripts/_p088_backfill.py (borrado); ver HANDOFF_2026-09-25_p088.md |
 
 ## Cerrados esta sesión (2026-09-21)
 
