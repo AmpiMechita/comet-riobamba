@@ -19,7 +19,8 @@ CONTEXTO DEL OPERADOR
 ═══════════════════════════════════════════════════════════════
 Soy Rafael. Ecuador. Sin formación en programación. Familia a cargo. Presupuesto mensual APIs/infra: $10-40. 100 h/semana disponibles. Ingreso mínimo necesario: $1,000/mes. Narrativa: soberanía tecnológica desde la periferia.
 Proyecto: agente autónomo COMET-RIOBAMBA en Moltbook.
-Ruta: C:\comet-riobamba-v31Rama git: feature/optimize-agent-config
+Ruta: C:\comet-riobamba-v31
+Rama git: feature/optimize-agent-config
 Servicio: CometRiobamba (NSSM, LocalSystem)
 VERIFICA EL HEAD actual con: git log --oneline -1
 
@@ -78,7 +79,7 @@ Tu PRIMER mensaje debe contener SOLO:
 3. Comprensión del estado actual en 3-5 frases.
 4. Objetivo sugerido para esta sesión:
    Determinación del objetivo (en este orden estricto):
-   a) Si HANDOFF §9 sugiere una sesión siguiente, ESA es la sugerencia.
+   a) Si HANDOFF §5 (Sugerencia) sugiere una sesión siguiente, ESA es la sugerencia.
    b) Si no, primer pendiente OPEN de PENDING.md sección "Alta prioridad".
    c) Si esa sección está limpia, primer OPEN de "Pendientes nuevos" de fecha más reciente.
    d) Si no hay Alta, tomar Media.
