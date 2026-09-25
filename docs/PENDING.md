@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-25 p083b (viernes, UTC-5). P-083 DONE (retiro JSONL ADR-004, commit 5658073, suite 1509 passed). P-085 DONE (PROMPT_APERTURA sin premisa 'sin Internet'). P-086 OPEN (regla: borrar artefactos antes de git add -A). P-082 OPEN (backfill SQLite). Ver HANDOFF_2026-09-25_p083b.md.
+> **Última actualización:** 2026-09-25 p083b (viernes, UTC-5). P-083 DONE (retiro JSONL ADR-004, commit 5658073, suite 1509 passed). P-085 DONE (PROMPT_APERTURA sin premisa 'sin Internet'). P-086 OPEN (regla: borrar artefactos antes de git add -A). P-082 EN CURSO (inventario real 25/9: 211 filas = 192 score NULL + 15 score=0 + 4 score>0; 181 published sin score = 120 recuperables [22 A + 34 C1 + 64 C2] + 61 feed_replies irrecuperables; bug load_recent_entries abre P-087). Nuevos P-087, P-088. Ver HANDOFF_2026-09-25_p082.md.
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -133,6 +133,13 @@
 |---|---|---|---|---|
 | P-085 | DONE | 2026-09-25 | Corregir plantilla de apertura: premisa sin Internet incorrecta. CERRADO 25/9 p083b: PROMPT_APERTURA.md linea 'ni Internet (sin herramientas)' eliminada; anadida aclaracion '(Si tienes acceso a Internet para buscar herramientas y mejoras.)'. | Handoff p082 s6, cerrado p083b |
 | P-086 | OPEN | 2026-09-25 | Anadir regla a DIRECTRICES.md: borrar artefactos de sesion (scripts/patch_*.py) ANTES de git add -A, no despues del commit. Origen: p083b amend a5ea345->5658073. | Handoff p083b |
+
+## Pendientes nuevos (2026-09-25 p082)
+
+| ID | Estado | Creado | Descripción | Origen |
+|---|---|---|---|---|
+| P-087 | OPEN | 2026-09-25 | Bug `services/karma_roi_tracker.py::load_recent_entries` L648: para `type=comment` asigna `thread_id = parent_comment_id`, pero el thread real es `post_id`. `fetch_post_comments(parent_id)` -> HTTP 404/0 -> `failed` en `update_all_karma`. Afecta updater 6h en produccion (replies anidados own_post_reply/thread_followup). Probe p082: comment `a99ca442` vive bajo post `e48eb57b`, NO bajo su parent_comment_id. Fix: usar post_id como thread_id. Bloquea 64 filas de backfill. | Sesion p082 |
+| P-088 | OPEN | 2026-09-25 | 61 filas historicas `source=feed_reply` (parent_comment_id NULL, comment_id != post_id) NO recuperables con API actual: `get_post(comment_id)` -> 404; `fetch_post_comments(post_id)` no las incluye (probe B: 197 comments, hit=False). Aceptar perdida historica o explorar otro endpoint. | Sesion p082 |
 
 ## Cerrados esta sesión (2026-09-21)
 
