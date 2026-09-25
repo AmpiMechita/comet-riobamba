@@ -105,3 +105,31 @@ def test_sin_datos_previos():
     assert summary["phase_a"]["count"] == 0
     assert summary["phase_b"]["count"] == 0
     assert summary["roi_ratio_a_vs_b"] == 0
+
+
+def test_load_recent_entries_thread_id_is_post_id_for_comment_c2():
+    """P-087: para type=comment thread_id debe ser post_id (no parent_comment_id)."""
+    from services.karma_roi_tracker import (
+        record_phase_b_comment,
+        load_recent_entries,
+    )
+
+    # C2: reply anidado — parent_comment_id != post_id
+    record_phase_b_comment(
+        comment_id="c_c2_t1", post_id="p_root_t1",
+        parent_comment_id="c_parent_t1", source="own_post_reply",
+        target_author="alice", target_is_watchlist=0, score=None,
+        model="m", tier="t", input_tokens=0, output_tokens=0,
+        cost_usd=0.0, status="published",
+    )
+    # Post top-level
+    track_action(action_type="post", moltbook_id="p_top_t1", phase="A",
+                 cost_usd=0.001, input_tokens=1, output_tokens=1, model="m")
+
+    entries = {e["moltbook_id"]: e for e in load_recent_entries(hours=24)}
+
+    assert entries["c_c2_t1"]["type"] == "comment"
+    assert entries["c_c2_t1"]["thread_id"] == "p_root_t1"
+    assert entries["c_c2_t1"]["thread_id"] != "c_parent_t1"
+    assert entries["p_top_t1"]["type"] == "post"
+    assert entries["p_top_t1"]["thread_id"] is None
