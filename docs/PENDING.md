@@ -231,6 +231,13 @@
 | P-093 | DONE | 2026-09-25 | Schema versioning SQLite (5 DBs agente). CERRADO 26/9 p100: helper core/sqlite_migrations.py::apply_migrations + SCHEMA_VERSION/MIGRATIONS en memory_store, persistence, topic_memory, dedup_store, karma_roi_tracker. ADR-005. Tests tests/test_sqlite_migrations.py (6) + 59 focalizados + suite 1520 passed 1 skipped. Huesped data/karma_roi_tracker.db borrado. | Sesion p093, cerrado p100 |
 
 
+
+## Pendientes nuevos (2026-09-26 p101)
+
+| ID | Estado | Creado | Descripcion | Origen |
+|---|---|---|---|---|
+| P-100b | OPEN | 2026-09-26 | Decidir dueno del schema de energy_intel.db + versionar (ADR-005 bis). Premisa de P-100 era incorrecta: ademas del escritor primario docs/ein/energy_intel_node.py, runtime escribe via services/energy_knowledge_base.py::update_claim_status; y phase_b/orchestrator.py lo consume. Opciones: (a) versionar solo en energy_intel_node.py (dueno schema) + validar uv>=1 en runtime; (b) dejar fuera de ADR-005 y documentar; (c) mover schema a runtime y degradar node a escritor puro. Requiere ADR. | Sesion p101 |
+| P-101 | OPEN | 2026-09-26 | Fijar cwd del repurposer o aceptar duplicado de DBs. services/content_distributor.py:155 invoca `python -m comet_repurposer ... cwd=scripts/comet_repurposer`; config resuelve project_root=os.getcwd() -> DBs activos viven en scripts/comet_repurposer/data/*.db, no en data/*.db (raiz). Ya existe duplicado publish_queue.db en ambos (24576 B cada). Decision: pasar --project-root o cwd=raiz, o documentar subdirectorio como canonico y borrar duplicado de raiz. | Sesion p101 (hallazgo P-100a) |
 ## Pendientes nuevos (2026-09-26)
 
 | ID | Estado | Creado | Descripcion | Origen |
@@ -238,7 +245,7 @@
 | P-096 | OPEN | 2026-09-26 | Regla 34 ubicada fuera de secuencia: esta en L49, entre reglas 26 y 27, en vez de tras la 33. Cosmetico. | Sesion p086 |
 | P-097 | OPEN | 2026-09-26 | HANDOFF p095 seccion 1 dice P-095 OPEN pero ledger ya lo marca DONE (commit 002a32b). | Sesion p086 |
 | P-098 | DONE | 2026-09-26 | PID 7564=Python hijo (StartTime 25/9 22:37:55, CPU ~1808s); PID 12080=wrapper NSSM (Win32_Service.ProcessId). Sin reboot ni restart: ciclos 381-401 ininterrumpidos. Artefacto de medicion: p095 reporto PID hijo, p086 reporto PID wrapper. CERRADO 26/9 p087. | Sesion p086 |
-| P-100 | OPEN | 2026-09-26 | Extender schema versioning SQLite (ADR-005) a scripts/comet_repurposer/ (publish_queue.db, repurpose_dedup.db, semantic_dedup.db) y decidir energy_intel.db (escritor en docs/ein/, no runtime). Diferido de P-093a por riesgo. | Sesion p100 |
+| P-100 | DONE PARCIAL | 2026-09-26 | Extender schema versioning SQLite (ADR-005) a scripts/comet_repurposer/ (publish_queue.db, repurpose_dedup.db, semantic_dedup.db) y decidir energy_intel.db. HECHO p101: helper local comet_repurposer/migrations.py (~30 lineas, contrato identico a core) + SCHEMA_VERSION=1/MIGRATIONS=[] en dedup.py, semantic_dedup.py, publishers/base.py + tests/test_migrations_repurposer.py (7 passed; suite repurposer 11 passed). Addendum ADR-005. Decidir energy_intel.db DIFERIDO a P-100b (premisa 'no runtime' incorrecta). Commit a09a95e. | Sesion p100, parcial p101 |
 
 > **Correccion P-091 (p092):** la hipotesis del HANDOFF p088 (bug en _post_own_reply L4611 o record_phase_b_comment L1423) fue DESCARTADA por lectura de codigo + logs. Causa raiz real: Phase A, phase_a_content.py:2193 llama track_action(action_type='post') y L2116 track_action(action_type='post_rejected'); track_action carece de discriminacion por tipo y escribe a comment_actions con source='own_post_reply' por default. Alcance: 24 publicados + 11 rejected = 35 filas espurias. P-091 DONE via P-092 (commit 03ec072).
 
