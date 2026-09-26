@@ -247,6 +247,6 @@
 
 | ID | Descripción | Commit / artefacto |
 |---|---|---|
-| P-099 | battery_monitor: guardia _paused evita add_reason/remove_reason repetidos cada poll | PENDING_COMMIT_1 |
+| P-099 | battery_monitor: guardia _paused evita add_reason/remove_reason repetidos cada poll | d93cbbf |
 
 *Actualizar en cada sesión. Nunca borrar filas.*
