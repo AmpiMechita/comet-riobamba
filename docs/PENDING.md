@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-26 p086 (sabado, UTC-5). P-086 DONE (regla 35 en DIRECTRICES.md). P-096 OPEN (Regla 34 fuera de secuencia, L49). P-097 OPEN (HANDOFF p095 dice P-095 OPEN pero ledger DONE). P-098 DONE (artefacto medicion: PID 12080=wrapper NSSM, PID 7564=Python hijo). P-095 DONE. P-093 OPEN. P-090 DONE.
+> **Última actualización:** 2026-09-26 p087 (sabado, UTC-5). P-098 DONE (artefacto PID NSSM vs Python hijo). P-096 OPEN. P-097 OPEN. P-093 OPEN.
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
