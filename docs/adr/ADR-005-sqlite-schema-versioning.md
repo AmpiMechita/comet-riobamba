@@ -64,3 +64,43 @@ Pendiente (P-100): extender a `scripts/comet_repurposer/`
   DB vieja no migra (INV4 lo mitiga como disciplina, no como enforcement).
 - Con: `apply_migrations` no corre en `_get_conn()` de karma_roi con
   `conn.executescript` en cada llamada (mismo comportamiento que antes).
+
+
+## Addendum 2026-09-26 (P-100a)
+
+Extension al repurposer (los 3 DBs: `publish_queue.db`,
+`repurpose_dedup.db`, `semantic_dedup.db`), todos en `SCHEMA_VERSION = 1`.
+
+### Decisiones
+
+1. **No importar `core/sqlite_migrations.py`.** El repurposer es paquete
+   standalone (propio `requirements.txt`, `.env.example`, README; se invoca
+   por subproceso `python -m comet_repurposer` desde
+   `services/content_distributor.py`). Se duplica el helper en
+   `scripts/comet_repurposer/comet_repurposer/migrations.py` (~30 lineas,
+   mismo contrato). Trade-off aceptado: dos copias pequenas a mantener vs
+   acoplar paquete independiente al core del agente.
+
+2. **`energy_intel.db` NO se decide aqui (P-100b).** Correccion a la premisa
+   de P-100: la DB SI se escribe desde runtime
+   (`services/energy_knowledge_base.py::update_claim_status`) ademas del
+   escritor primario `docs/ein/energy_intel_node.py`. Decidir dueno del
+   schema requiere ADR aparte.
+
+### Invariantes adicionales (repurposer)
+
+- INV1b. `scripts/comet_repurposer/comet_repurposer/migrations.py` mantiene
+  contrato identico a `core/sqlite_migrations.py`; divergencias entre ambos
+  son deuda explicita, no evolucion independiente.
+- INV5. `services/content_distributor.py` invoca el repurposer con
+  `cwd=scripts/comet_repurposer`, por lo que `project_root = os.getcwd()`
+  resuelve a ese subdirectorio. Los DBs activos en produccion viven en
+  `scripts/comet_repurposer/data/*.db`, no en `data/*.db` (raiz). Existe
+  duplicado `publish_queue.db` en ambos. Registrado como P-101.
+
+### Consecuencias
+
+- Pro: los 3 DBs del repurposer quedan auto-verificables.
+- Con: helper duplicado (30 lineas); mitigado por INV1b.
+- Con: la discrepancia cwd/DBs activos (INV5) puede inducir confusion al
+  inspeccionar `data/` desde la raiz. P-101 propone fijar cwd a raiz.

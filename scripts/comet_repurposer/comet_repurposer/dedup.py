@@ -14,9 +14,14 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from .migrations import apply_migrations
+
 
 class DedupStore:
     """Tiny SQLite wrapper with two operations: ``seen?`` and ``mark``."""
+
+    SCHEMA_VERSION = 1
+    MIGRATIONS = []
 
     def __init__(self, db_path: Path) -> None:
         self.db_path = Path(db_path)
@@ -34,6 +39,7 @@ class DedupStore:
             )
             """
         )
+        apply_migrations(self._conn, self.SCHEMA_VERSION, self.MIGRATIONS, label="repurpose_log")
         self._conn.commit()
 
     @staticmethod

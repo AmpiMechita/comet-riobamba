@@ -29,6 +29,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ..migrations import apply_migrations
+
 
 class PublishStatus(str, Enum):
     GENERATED = "generated"     # ready for review, not yet approved
@@ -104,6 +106,9 @@ class RateLimitError(PublishError):
 class QueueStore:
     """SQLite-backed queue of :class:`PublishJob`."""
 
+    SCHEMA_VERSION = 1
+    MIGRATIONS = []
+
     SCHEMA = """
     CREATE TABLE IF NOT EXISTS publish_queue (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -133,6 +138,7 @@ class QueueStore:
         self._conn = sqlite3.connect(str(self.db_path))
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(self.SCHEMA)
+        apply_migrations(self._conn, self.SCHEMA_VERSION, self.MIGRATIONS, label="publish_queue")
         self._conn.commit()
 
     def enqueue(self, job: PublishJob) -> int:

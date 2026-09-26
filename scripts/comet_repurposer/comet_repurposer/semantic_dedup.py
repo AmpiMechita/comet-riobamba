@@ -40,6 +40,8 @@ from typing import Iterable, List, Optional, Sequence, Tuple
 
 import requests
 
+from .migrations import apply_migrations
+
 
 # ---------------------------------------------------------------------------
 # Stopwords (small English + Spanish set — no external dependency)
@@ -257,6 +259,9 @@ class SemanticDedup:
         hits = sd.find_duplicates(new_item.source_id, new_item.body, threshold=0.85)
     """
 
+    SCHEMA_VERSION = 1
+    MIGRATIONS = []
+
     SCHEMA = """
     CREATE TABLE IF NOT EXISTS semantic_dedup (
         source_id TEXT PRIMARY KEY,
@@ -280,6 +285,7 @@ class SemanticDedup:
         self.max_lexical_items = max_lexical_items
         self._conn = sqlite3.connect(str(self.db_path))
         self._conn.executescript(self.SCHEMA)
+        apply_migrations(self._conn, self.SCHEMA_VERSION, self.MIGRATIONS, label="semantic_dedup")
         self._conn.commit()
         # In-memory TF-IDF index, rebuilt lazily from DB on first query.
         self._tfidf = TfidfIndex()
