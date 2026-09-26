@@ -84,3 +84,10 @@ Los snapshots suelen estar cada 3-12h. Ventana util: ~48-72h.
 
 33. Parches de archivos de texto via Python: usar read_bytes/write_bytes, nunca read_text/write_text (colapsan CRLF y traducen LF->CRLF). Preservar el terminador de cada linea. Con core.autocrlf=true, read_text/write_text renormalizan blobs con CRLF y generan diffs fantasma (incidente CHANGELOG 22/9: numstat 152/139 por solo EOL). Tras cada commit, verificar git show --numstat HEAD.
 
+
+## Artefactos de sesion (2026-09-26)
+
+35. Borrar artefactos de sesion (scripts/patch_*.py, scripts/_tmp_*.py, y similares)
+    ANTES de git add -A, no despues del commit. Si se cuelan en staging:
+    git restore --staged del path antes de commitear. Origen: p083b (amend
+    a5ea345->5658073 por patch_*.py stageado).

@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-25 p095 (viernes, UTC-5). P-090 DONE (load_recent_entries por action_type, commit 7d28f95; suite 1514 passed + 1 skipped). P-093 OPEN (schema versioning, deuda de p093). P-094 DONE (incidente regleta/bateria 21:31-22:05; 4 boots; 1 Kernel-Power 41 sucio; agente/NSSM OK; sin commit). P-095 DONE (battery_monitor LOW=25 RESUME=45 + logging; commit 337b06d, activo PID 7564 desde 22:38:10). P-092 DONE (columna action_type en comment_actions + filtros en get_roi_summary/roi_dashboard, commit 03ec072; backfill 24 post + 11 post_rejected; tests 8/8 + 19 adyacentes; verificado A=35/B=176). P-091 DONE. P-086 OPEN (regla: borrar artefactos antes de git add -A). P-087 DONE (fix thread_id=post_id en load_recent_entries, commit 9275a64, verificado en prod ciclo #374 17:08 updated=4 failed=7; los 7 son feed_reply=P-088, no regresion). P-083 DONE (retiro JSONL ADR-004, commit 5658073, suite 1509 passed). P-085 DONE (PROMPT_APERTURA sin premisa 'sin Internet'). P-086 OPEN (regla: borrar artefactos antes de git add -A). P-082 EN CURSO (inventario real 25/9: 211 filas = 192 score NULL + 15 score=0 + 4 score>0; 181 published sin score = 120 recuperables [22 A + 34 C1 + 64 C2] + 61 feed_replies irrecuperables; bug load_recent_entries abre P-087). Nuevos P-087, P-088. Ver HANDOFF_2026-09-25_p082b.md (nota: p082 original = sesion nocturna P-084 parcial, commit 7035ac9; restaurado tras sobrescritura en 997f337).
+> **Última actualización:** 2026-09-26 p086 (sabado, UTC-5). P-086 DONE (regla 35 en DIRECTRICES.md, seccion Artefactos de sesion). P-096 OPEN (Regla 34 fuera de secuencia, L49, cosmetico). P-097 OPEN (HANDOFF p095 dice P-095 OPEN pero ledger ya DONE). P-095 DONE. P-093 OPEN. P-090 DONE.
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -132,7 +132,7 @@
 | ID | Estado | Creado | Descripción | Origen |
 |---|---|---|---|---|
 | P-085 | DONE | 2026-09-25 | Corregir plantilla de apertura: premisa sin Internet incorrecta. CERRADO 25/9 p083b: PROMPT_APERTURA.md linea 'ni Internet (sin herramientas)' eliminada; anadida aclaracion '(Si tienes acceso a Internet para buscar herramientas y mejoras.)'. | Handoff p082 s6, cerrado p083b |
-| P-086 | OPEN | 2026-09-25 | Anadir regla a DIRECTRICES.md: borrar artefactos de sesion (scripts/patch_*.py) ANTES de git add -A, no despues del commit. Origen: p083b amend a5ea345->5658073. | Handoff p083b |
+| P-086 | DONE | 2026-09-25 | Anadir regla a DIRECTRICES.md: borrar artefactos de sesion (scripts/patch_*.py) ANTES de git add -A, no despues del commit. Origen: p083b amend a5ea345->5658073. CERRADO 26/9 p086: regla 35 en DIRECTRICES.md seccion "Artefactos de sesion". | Handoff p083b |
 
 ## Pendientes nuevos (2026-09-25 p082)
 
@@ -229,6 +229,14 @@
 | ID | Estado | Creado | Descripción | Origen |
 |---|---|---|---|---|
 | P-093 | OPEN | 2026-09-25 | Schema versioning para SQLite (deuda detectada en p093; ver HANDOFF_2026-09-25_p093.md). | Sesion p093 |
+
+
+## Pendientes nuevos (2026-09-26)
+
+| ID | Estado | Creado | Descripcion | Origen |
+|---|---|---|---|---|
+| P-096 | OPEN | 2026-09-26 | Regla 34 ubicada fuera de secuencia: esta en L49, entre reglas 26 y 27, en vez de tras la 33. Cosmetico. | Sesion p086 |
+| P-097 | OPEN | 2026-09-26 | HANDOFF p095 seccion 1 dice P-095 OPEN pero ledger ya lo marca DONE (commit 002a32b). | Sesion p086 |
 
 > **Correccion P-091 (p092):** la hipotesis del HANDOFF p088 (bug en _post_own_reply L4611 o record_phase_b_comment L1423) fue DESCARTADA por lectura de codigo + logs. Causa raiz real: Phase A, phase_a_content.py:2193 llama track_action(action_type='post') y L2116 track_action(action_type='post_rejected'); track_action carece de discriminacion por tipo y escribe a comment_actions con source='own_post_reply' por default. Alcance: 24 publicados + 11 rejected = 35 filas espurias. P-091 DONE via P-092 (commit 03ec072).
 
