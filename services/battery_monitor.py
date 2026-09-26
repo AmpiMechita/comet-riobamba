@@ -15,7 +15,7 @@ import threading
 import time
 from typing import Dict, Optional
 
-from services.pause_controller import add_reason, remove_reason
+from services.pause_controller import add_reason, get_reasons, remove_reason
 
 logger = logging.getLogger("services.battery_monitor")
 
@@ -49,6 +49,7 @@ def _read_battery_state() -> Optional[Dict]:
 def _monitor_loop() -> None:
     logger.info("battery_monitor: iniciado (poll=%ss, low=%s%%, resume=%s%%)",
                 POLL_INTERVAL_SECONDS, BATTERY_LOW_PCT, BATTERY_RESUME_PCT)
+    _paused = "battery" in get_reasons()
     while True:
         try:
             state = _read_battery_state()
@@ -60,17 +61,22 @@ def _monitor_loop() -> None:
                 charge = state.get("EstimatedChargeRemaining")
                 # 1 = descargando, 2 = AC conectado
                 if status == 1:
-                    logger.info("battery_monitor: AC desconectado (%s%%)", charge)
-                    add_reason("battery", f"AC desconectado ({charge}%)")
+                    if not _paused:
+                        logger.info("battery_monitor: AC desconectado (%s%%)", charge)
+                        add_reason("battery", f"AC desconectado ({charge}%)")
+                        _paused = True
                 elif status == 2 and charge is not None:
                     charge_int = int(charge)
                     if charge_int <= BATTERY_LOW_PCT:
-                        logger.info("battery_monitor: bateria baja (%s%%)", charge_int)
-                        add_reason("battery", f"bateria {charge_int}%")
+                        if not _paused:
+                            logger.info("battery_monitor: bateria baja (%s%%)", charge_int)
+                            add_reason("battery", f"bateria {charge_int}%")
+                            _paused = True
                     elif charge_int >= BATTERY_RESUME_PCT:
-                        # AC conectado Y carga suficiente -> reanudar
-                        logger.info("battery_monitor: AC conectado (%s%%), reanudando", charge_int)
-                        remove_reason("battery")
+                        if _paused:
+                            logger.info("battery_monitor: AC conectado (%s%%), reanudando", charge_int)
+                            remove_reason("battery")
+                            _paused = False
                     # Si esta entre LOW y RESUME, mantener estado actual
         except Exception as e:
             logger.warning("battery_monitor: error en ciclo: %s", e)

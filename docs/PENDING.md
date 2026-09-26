@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-26 p087 (sabado, UTC-5). P-098 DONE (artefacto PID NSSM vs Python hijo). P-096 OPEN. P-097 OPEN. P-093 OPEN.
+> **Última actualización:** 2026-09-26 p099 (sabado, UTC-5). P-099 DONE (guardia _paused en battery_monitor). P-096 OPEN. P-097 OPEN. P-093 OPEN.
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -242,5 +242,11 @@
 > **Correccion P-091 (p092):** la hipotesis del HANDOFF p088 (bug en _post_own_reply L4611 o record_phase_b_comment L1423) fue DESCARTADA por lectura de codigo + logs. Causa raiz real: Phase A, phase_a_content.py:2193 llama track_action(action_type='post') y L2116 track_action(action_type='post_rejected'); track_action carece de discriminacion por tipo y escribe a comment_actions con source='own_post_reply' por default. Alcance: 24 publicados + 11 rejected = 35 filas espurias. P-091 DONE via P-092 (commit 03ec072).
 
 ---
+
+## Cerrados esta sesión (2026-09-26 p099)
+
+| ID | Descripción | Commit / artefacto |
+|---|---|---|
+| P-099 | battery_monitor: guardia _paused evita add_reason/remove_reason repetidos cada poll | PENDING_COMMIT_1 |
 
 *Actualizar en cada sesión. Nunca borrar filas.*
