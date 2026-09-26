@@ -12,6 +12,8 @@
 | CometUpdaterInternalService151.0.7922.249 | Stopped | - | - |
 | CometUpdaterService151.0.7922.249 | Stopped | - | - |
 
+> **Nota PIDs (P-098):** `Win32_Service.ProcessId` = PID del wrapper NSSM; PID del proceso Python hijo es distinto (`Get-Process python*`). Sin reboot ni restart verificado 26/9.
+
 ## 2. Entorno
 
 | Item | Valor |
