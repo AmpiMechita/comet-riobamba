@@ -18,8 +18,24 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from core.sqlite_migrations import apply_migrations
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = BASE_DIR / "data" / "comet_state.db"
+
+SCHEMA_VERSION = 1
+
+def _migrate_v1(conn):
+    for col, col_type in [("last_post_date", "TEXT"), ("comments_today", "INTEGER NOT NULL DEFAULT 0"),
+                          ("last_value_review", "TEXT"), ("consecutive_failures", "INTEGER NOT NULL DEFAULT 0"),
+                          ("retry_attempt", "INTEGER NOT NULL DEFAULT 0"), ("next_retry_at", "TEXT"),
+                          ("last_post_timestamp", "TEXT")]:
+        try:
+            conn.execute(f"ALTER TABLE agent_state ADD COLUMN {col} {col_type}")
+        except sqlite3.OperationalError:
+            pass
+
+MIGRATIONS = [(1, _migrate_v1)]
 
 
 @contextmanager
@@ -71,15 +87,7 @@ def init_db() -> None:
             """
         )
 
-        # Migrations for existing databases that lack newer columns
-        for col, col_type in [("last_post_date", "TEXT"), ("comments_today", "INTEGER NOT NULL DEFAULT 0"),
-                              ("last_value_review", "TEXT"), ("consecutive_failures", "INTEGER NOT NULL DEFAULT 0"),
-                              ("retry_attempt", "INTEGER NOT NULL DEFAULT 0"), ("next_retry_at", "TEXT"),
-                              ("last_post_timestamp", "TEXT")]:
-            try:
-                conn.execute(f"ALTER TABLE agent_state ADD COLUMN {col} {col_type}")
-            except sqlite3.OperationalError:
-                pass
+        apply_migrations(conn, SCHEMA_VERSION, MIGRATIONS, label="comet_state.db")
 
         # Registro de acciones (auditoría)
         conn.execute(

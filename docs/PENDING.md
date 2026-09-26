@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-26 p099 (sabado, UTC-5). P-099 DONE (guardia _paused en battery_monitor). P-096 OPEN. P-097 OPEN. P-093 OPEN.
+> **Última actualización:** 2026-09-26 p100 (sabado, UTC-5). P-093 DONE (schema versioning SQLite, ADR-005). P-100 OPEN (extender a repurposer + energy_intel). P-096 OPEN. P-097 OPEN.
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -228,7 +228,7 @@
 
 | ID | Estado | Creado | Descripción | Origen |
 |---|---|---|---|---|
-| P-093 | OPEN | 2026-09-25 | Schema versioning para SQLite (deuda detectada en p093; ver HANDOFF_2026-09-25_p093.md). | Sesion p093 |
+| P-093 | DONE | 2026-09-25 | Schema versioning SQLite (5 DBs agente). CERRADO 26/9 p100: helper core/sqlite_migrations.py::apply_migrations + SCHEMA_VERSION/MIGRATIONS en memory_store, persistence, topic_memory, dedup_store, karma_roi_tracker. ADR-005. Tests tests/test_sqlite_migrations.py (6) + 59 focalizados + suite 1520 passed 1 skipped. Huesped data/karma_roi_tracker.db borrado. | Sesion p093, cerrado p100 |
 
 
 ## Pendientes nuevos (2026-09-26)
@@ -238,6 +238,7 @@
 | P-096 | OPEN | 2026-09-26 | Regla 34 ubicada fuera de secuencia: esta en L49, entre reglas 26 y 27, en vez de tras la 33. Cosmetico. | Sesion p086 |
 | P-097 | OPEN | 2026-09-26 | HANDOFF p095 seccion 1 dice P-095 OPEN pero ledger ya lo marca DONE (commit 002a32b). | Sesion p086 |
 | P-098 | DONE | 2026-09-26 | PID 7564=Python hijo (StartTime 25/9 22:37:55, CPU ~1808s); PID 12080=wrapper NSSM (Win32_Service.ProcessId). Sin reboot ni restart: ciclos 381-401 ininterrumpidos. Artefacto de medicion: p095 reporto PID hijo, p086 reporto PID wrapper. CERRADO 26/9 p087. | Sesion p086 |
+| P-100 | OPEN | 2026-09-26 | Extender schema versioning SQLite (ADR-005) a scripts/comet_repurposer/ (publish_queue.db, repurpose_dedup.db, semantic_dedup.db) y decidir energy_intel.db (escritor en docs/ein/, no runtime). Diferido de P-093a por riesgo. | Sesion p100 |
 
 > **Correccion P-091 (p092):** la hipotesis del HANDOFF p088 (bug en _post_own_reply L4611 o record_phase_b_comment L1423) fue DESCARTADA por lectura de codigo + logs. Causa raiz real: Phase A, phase_a_content.py:2193 llama track_action(action_type='post') y L2116 track_action(action_type='post_rejected'); track_action carece de discriminacion por tipo y escribe a comment_actions con source='own_post_reply' por default. Alcance: 24 publicados + 11 rejected = 35 filas espurias. P-091 DONE via P-092 (commit 03ec072).
 

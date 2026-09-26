@@ -15,7 +15,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
+from core.sqlite_migrations import apply_migrations
+
 logger = logging.getLogger("services.dedup_store")
+
+SCHEMA_VERSION = 1
+MIGRATIONS = []
 
 # Valid Moltbook post_id = UUID. The post-keyed namespaces (agent_comment,
 # commented_post) must never persist synthetic/test keys like 'p1' or
@@ -86,6 +91,7 @@ class DedupStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_dedup_ns ON dedup_store(namespace)"
             )
+            apply_migrations(conn, SCHEMA_VERSION, MIGRATIONS, label="comet_dedup.db")
 
     def _migrate_from_json(self) -> None:
         with self._get_conn() as conn:

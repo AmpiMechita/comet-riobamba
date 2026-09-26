@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Set
 from pathlib import Path
 
+from core.sqlite_migrations import apply_migrations
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = BASE_DIR / "data" / "karma_roi.db"
 
@@ -69,6 +71,15 @@ CREATE TABLE IF NOT EXISTS daily_snapshots (
 """
 
 # Mapeo de nombres de estado para consistencia
+SCHEMA_VERSION = 1
+
+def _migrate_v1(conn):
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(comment_actions)")}
+    if "action_type" not in cols:
+        conn.execute("ALTER TABLE comment_actions ADD COLUMN action_type TEXT NOT NULL DEFAULT 'comment'")
+
+MIGRATIONS = [(1, _migrate_v1)]
+
 VALID_STATUSES = {"published", "rejected", "duplicate", "failed"}
 VALID_EVENT_TYPES = {"comment_reply", "upvote", "follow", "post_reply"}
 VALID_ATTRIBUTION_METHODS = {"direct_comment", "same_post_window", "aggregate_only"}
@@ -82,6 +93,7 @@ def _get_conn() -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout = 3000")  # 3 segundos timeout en busy
     conn.executescript(SCHEMA_SQL)
+    apply_migrations(conn, SCHEMA_VERSION, MIGRATIONS, label="karma_roi.db")
     return conn
 
 

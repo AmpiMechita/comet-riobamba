@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from core.sqlite_migrations import apply_migrations
+
 logger = logging.getLogger(__name__)
 
 _CREATE_TABLE = """
@@ -22,6 +24,9 @@ VALUES (?, ?, ?, ?)
 
 _GET = "SELECT user_id, username, summary, last_interaction FROM agent_memory WHERE user_id = ?"
 
+SCHEMA_VERSION = 1
+MIGRATIONS = []
+
 
 class MemoryStore:
     def __init__(self, db_path: str = "data/memory.db") -> None:
@@ -34,6 +39,7 @@ class MemoryStore:
         try:
             conn = self._get_conn()
             conn.execute(_CREATE_TABLE)
+            apply_migrations(conn, SCHEMA_VERSION, MIGRATIONS, label="memory.db")
             conn.commit()
         except Exception as exc:
             logger.warning("MemoryStore: error inicializando DB: %s", exc)

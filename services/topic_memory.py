@@ -12,7 +12,12 @@ from pathlib import Path
 
 from config import TOPIC_MEMORY_DB_PATH
 
+from core.sqlite_migrations import apply_migrations
+
 logger = logging.getLogger(__name__)
+
+SCHEMA_VERSION = 1
+MIGRATIONS = []
 
 
 class TopicMemory:
@@ -44,6 +49,7 @@ class TopicMemory:
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_topic_hash ON topics(topic_hash)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_created_at ON topics(created_at)")
+        apply_migrations(self.conn, SCHEMA_VERSION, MIGRATIONS, label="topic_memory.db")
         self.conn.commit()
     
     def record_topic(self, text: str, post_type: str = "original", cycle_num: int = 0):
