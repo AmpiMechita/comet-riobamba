@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-26 p086 (sabado, UTC-5). P-086 DONE (regla 35 en DIRECTRICES.md, seccion Artefactos de sesion). P-096 OPEN (Regla 34 fuera de secuencia, L49, cosmetico). P-097 OPEN (HANDOFF p095 dice P-095 OPEN pero ledger ya DONE). P-095 DONE. P-093 OPEN. P-090 DONE.
+> **Última actualización:** 2026-09-26 p086 (sabado, UTC-5). P-086 DONE (regla 35 en DIRECTRICES.md). P-096 OPEN (Regla 34 fuera de secuencia, L49). P-097 OPEN (HANDOFF p095 dice P-095 OPEN pero ledger DONE). P-098 OPEN (PID cambio 7564->12080 sin causa documentada). P-095 DONE. P-093 OPEN. P-090 DONE.
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -237,6 +237,7 @@
 |---|---|---|---|---|
 | P-096 | OPEN | 2026-09-26 | Regla 34 ubicada fuera de secuencia: esta en L49, entre reglas 26 y 27, en vez de tras la 33. Cosmetico. | Sesion p086 |
 | P-097 | OPEN | 2026-09-26 | HANDOFF p095 seccion 1 dice P-095 OPEN pero ledger ya lo marca DONE (commit 002a32b). | Sesion p086 |
+| P-098 | OPEN | 2026-09-26 | PID servicio cambio de 7564 (p095, 22:37:55) a 12080 (p086, 17:02). Revisar Event Viewer: reboot, restart manual o caida. Si reboot, confirmar auto-arranque NSSM (patron P-002). | Sesion p086 |
 
 > **Correccion P-091 (p092):** la hipotesis del HANDOFF p088 (bug en _post_own_reply L4611 o record_phase_b_comment L1423) fue DESCARTADA por lectura de codigo + logs. Causa raiz real: Phase A, phase_a_content.py:2193 llama track_action(action_type='post') y L2116 track_action(action_type='post_rejected'); track_action carece de discriminacion por tipo y escribe a comment_actions con source='own_post_reply' por default. Alcance: 24 publicados + 11 rejected = 35 filas espurias. P-091 DONE via P-092 (commit 03ec072).
 
