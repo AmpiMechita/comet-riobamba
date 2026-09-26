@@ -20,8 +20,8 @@ from services.pause_controller import add_reason, remove_reason
 logger = logging.getLogger("services.battery_monitor")
 
 POLL_INTERVAL_SECONDS = 30
-BATTERY_LOW_PCT = 15
-BATTERY_RESUME_PCT = 25
+BATTERY_LOW_PCT = 25
+BATTERY_RESUME_PCT = 45
 
 
 def _read_battery_state() -> Optional[Dict]:
@@ -42,7 +42,7 @@ def _read_battery_state() -> Optional[Dict]:
             data = data[0] if data else None
         return data
     except Exception as e:
-        logger.debug("battery_monitor: error leyendo WMI: %s", e)
+        logger.warning("battery_monitor: error leyendo WMI: %s", e)
         return None
 
 
@@ -60,13 +60,16 @@ def _monitor_loop() -> None:
                 charge = state.get("EstimatedChargeRemaining")
                 # 1 = descargando, 2 = AC conectado
                 if status == 1:
+                    logger.info("battery_monitor: AC desconectado (%s%%)", charge)
                     add_reason("battery", f"AC desconectado ({charge}%)")
                 elif status == 2 and charge is not None:
                     charge_int = int(charge)
                     if charge_int <= BATTERY_LOW_PCT:
+                        logger.info("battery_monitor: bateria baja (%s%%)", charge_int)
                         add_reason("battery", f"bateria {charge_int}%")
                     elif charge_int >= BATTERY_RESUME_PCT:
                         # AC conectado Y carga suficiente -> reanudar
+                        logger.info("battery_monitor: AC conectado (%s%%), reanudando", charge_int)
                         remove_reason("battery")
                     # Si esta entre LOW y RESUME, mantener estado actual
         except Exception as e:
