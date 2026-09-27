@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-26 p100 (sabado, UTC-5). P-093 DONE (schema versioning SQLite, ADR-005). P-100 OPEN (extender a repurposer + energy_intel). P-096 OPEN. P-097 OPEN.
+> **Última actualización:** 2026-09-26 p102 (sabado, UTC-5). P-093 DONE (schema versioning SQLite, ADR-005). P-100 OPEN (extender a repurposer + energy_intel). P-096 OPEN. P-097 OPEN.
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -236,7 +236,7 @@
 
 | ID | Estado | Creado | Descripcion | Origen |
 |---|---|---|---|---|
-| P-100b | OPEN | 2026-09-26 | Decidir dueno del schema de energy_intel.db + versionar (ADR-005 bis). Premisa de P-100 era incorrecta: ademas del escritor primario docs/ein/energy_intel_node.py, runtime escribe via services/energy_knowledge_base.py::update_claim_status; y phase_b/orchestrator.py lo consume. Opciones: (a) versionar solo en energy_intel_node.py (dueno schema) + validar uv>=1 en runtime; (b) dejar fuera de ADR-005 y documentar; (c) mover schema a runtime y degradar node a escritor puro. Requiere ADR. | Sesion p101 |
+| P-100b | DONE | 2026-09-26 | Decidir dueno del schema de energy_intel.db + versionar (ADR-005 bis). Premisa de P-100 era incorrecta: ademas del escritor primario docs/ein/energy_intel_node.py, runtime escribe via services/energy_knowledge_base.py::update_claim_status; y phase_b/orchestrator.py lo consume. Opciones: (a) versionar solo en energy_intel_node.py (dueno schema) + validar uv>=1 en runtime; (b) dejar fuera de ADR-005 y documentar; (c) mover schema a runtime y degradar node a escritor puro. Requiere ADR. | Sesion p101 |
 | P-101 | OPEN | 2026-09-26 | Fijar cwd del repurposer o aceptar duplicado de DBs. services/content_distributor.py:155 invoca `python -m comet_repurposer ... cwd=scripts/comet_repurposer`; config resuelve project_root=os.getcwd() -> DBs activos viven en scripts/comet_repurposer/data/*.db, no en data/*.db (raiz). Ya existe duplicado publish_queue.db en ambos (24576 B cada). Decision: pasar --project-root o cwd=raiz, o documentar subdirectorio como canonico y borrar duplicado de raiz. | Sesion p101 (hallazgo P-100a) |
 ## Pendientes nuevos (2026-09-26)
 
@@ -258,3 +258,18 @@
 | P-099 | battery_monitor: guardia _paused evita add_reason/remove_reason repetidos cada poll | d93cbbf |
 
 *Actualizar en cada sesión. Nunca borrar filas.*
+
+
+## Pendientes nuevos (2026-09-26 p102)
+
+| ID | Estado | Creado | Descripcion | Origen |
+|---|---|---|---|---|
+| P-113 | OPEN | 2026-09-26 | Endurecer enum claimed|disputed|debunked en EnergyKnowledgeBase.update_claim_status (hoy no valida; el PATCH del node si). Sin caller en prod, pero API publica. | Sesion p102 (P-100b) |
+| P-114 | OPEN | 2026-09-26 | Validar uv>=1 en runtime (EnergyKnowledgeBase.__init__): leer PRAGMA user_version y marcar unavailable si <1. Diferido hasta confirmar que el node corrio post-merge y la DB quedo en uv=1. | Sesion p102 (P-100b) |
+| P-115 | OPEN | 2026-09-26 | Bug latente en docs/ein/energy_intel_node.py::main: DB_PATH = args.db (L710) reasigna sin `global`; db_conn() lee la global -> --db sin efecto. Sin impacto en prod (no se usa --db). | Sesion p102 (P-100b) |
+
+## Cerrados esta sesion (2026-09-26 p102)
+
+| ID | Descripcion | Commit / artefacto |
+|---|---|---|
+| P-100b | energy_intel.db: dueno del schema = docs/ein/energy_intel_node.py (unico). Helper apply_migrations inline (contrato core/sqlite_migrations.py, INV1c). SCHEMA_VERSION=1/MIGRATIONS=[] + llamada en init_db() (cubre L557/L711). KB: default db_path absoluto (elimina foot-gun cwd). Corregida premisa P-100a: update_claim_status NO tiene caller prod (solo 3 tests). 32/32 focalizados. | 38c157c (codigo) + ADR-005 addendum bis (docs) |

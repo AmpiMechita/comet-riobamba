@@ -104,3 +104,69 @@ Extension al repurposer (los 3 DBs: `publish_queue.db`,
 - Con: helper duplicado (30 lineas); mitigado por INV1b.
 - Con: la discrepancia cwd/DBs activos (INV5) puede inducir confusion al
   inspeccionar `data/` desde la raiz. P-101 propone fijar cwd a raiz.
+
+
+## Addendum bis 2026-09-26 (P-100b) - energy_intel.db
+
+**Contexto:** sesion p102. Cierre de P-100 (ultimas DBs fuera de core/).
+
+### Correccion al addendum P-100a
+
+El addendum P-100a afirmo que la DB "SI se escribe desde runtime
+(services/energy_knowledge_base.py::update_claim_status)". La auditoria de
+p102 (grep excluyendo tests/ y backups/) muestra que update_claim_status NO
+tiene caller en produccion: sus unicos usuarios son 3 tests en
+tests/test_energy_kb.py. Los unicos escritores reales viven dentro del node
+standalone. Premisa corregida.
+
+### Dueno del schema
+
+docs/ein/energy_intel_node.py es el unico dueno: posee SCHEMA (tabla claims
++ idx_tech/idx_status/idx_date), init_db() y db_conn() con
+PRAGMA journal_mode=WAL. Escritores reales (upsert_claim L122 via run_ingest;
+POST /claims; PATCH /claims/{id}) estan dentro del mismo modulo standalone.
+
+Consumidores runtime (solo lectura): phases/phase_b/orchestrator.py:205
+(ruta absoluta BASE_DIR/data/energy_intel.db); scripts/generate_energy_report.py;
+services/energy_intel_telegram.py:396.
+
+### Decisiones
+
+1. Helper de migraciones INLINE en el node (no sibling): el modulo se declara
+   "single-file" y un import cross-cwd desde energy_intel_telegram.py:158
+   seria fragil. Contrato duplicado de core/sqlite_migrations.py (~10 lineas
+   activas; INV1c).
+2. SCHEMA_VERSION = 1, MIGRATIONS = [] en el node. apply_migrations se llama
+   justo despues de c.executescript(SCHEMA) en init_db() (cubre L557
+   run_ingest y L711 main).
+3. EnergyKnowledgeBase pasa a ruta absoluta por defecto:
+   Path(__file__).resolve().parents[1] / "data" / "energy_intel.db".
+   Alinea con DB_PATH del node (parents[2]) y elimina foot-gun de cwd.
+4. update_claim_status permanece como via de escritura runtime permitida pero
+   latente (sin caller hoy). Si se invoca, debe respetar el enum
+   claimed|disputed|debunked del PATCH del node. Endurecer: P-113.
+5. Validacion uv>=1 en runtime (KB) se difiere a P-114: (i) versionar node y
+   correrlo -> DB queda en uv=1; (ii) luego KB valida.
+
+### Invariantes adicionales
+
+- INV1c. El helper inline apply_migrations del node mantiene contrato
+  identico a core/sqlite_migrations.py y al del repurposer. Divergencias son
+  deuda explicita (mismo criterio que INV1b).
+- INV6. energy_intel.db tiene un unico dueno de schema:
+  docs/ein/energy_intel_node.py. EnergyKnowledgeBase no crea ni migra; solo
+  lee (y, si se invoca, actualiza status de una fila puntual).
+- INV7. Todo lector runtime abre el archivo por ruta absoluta resuelta desde
+  __file__ o BASE_DIR. Ruta relativa Path("data/...") prohibida en no-test.
+- INV8. Contrato ruta node<->KB: DB_PATH del node ==
+  BASE_DIR/data/energy_intel.db. Cubierto por
+  tests/test_energy_intel_node.py::test_db_path_matches_orchestrator_energy_knowledge_base.
+
+### Consecuencias
+
+- Pro: energy_intel.db auto-verificable (uv>=1 tras primera corrida del node).
+- Pro: P-100 cerrado completo (5 DBs agente + 3 repurposer + 1 energy_intel).
+- Pro: eliminado el foot-gun de cwd en EnergyKnowledgeBase.
+- Con: tercer duplicado del helper (~10 lineas); mitigado por INV1c.
+- Con: update_claim_status sigue sin caller; se documenta pero no se elimina.
+- Con: validacion uv>=1 en runtime diferida (P-114).
