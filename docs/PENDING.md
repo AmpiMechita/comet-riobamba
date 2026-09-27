@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-26 p102 (sabado, UTC-5). P-093 DONE (schema versioning SQLite, ADR-005). P-100 OPEN (extender a repurposer + energy_intel). P-096 OPEN. P-097 OPEN.
+> **Última actualización:** 2026-09-26 p103 (sabado, UTC-5). P-101 DONE (--project-root explicito). P-116 OPEN Alta (--source distribution_queue invalido). P-096/P-097 OPEN.
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -273,3 +273,15 @@
 | ID | Descripcion | Commit / artefacto |
 |---|---|---|
 | P-100b | energy_intel.db: dueno del schema = docs/ein/energy_intel_node.py (unico). Helper apply_migrations inline (contrato core/sqlite_migrations.py, INV1c). SCHEMA_VERSION=1/MIGRATIONS=[] + llamada en init_db() (cubre L557/L711). KB: default db_path absoluto (elimina foot-gun cwd). Corregida premisa P-100a: update_claim_status NO tiene caller prod (solo 3 tests). 32/32 focalizados. | 38c157c (codigo) + ADR-005 addendum bis (docs) |
+
+## Pendientes nuevos (2026-09-26 p103)
+
+| ID | Estado | Creado | Descripcion | Origen |
+|---|---|---|---|---|
+| P-116 | OPEN | 2026-09-26 | Pipeline LinkedIn/Twitter roto: content_distributor.py:157 invoca `comet_repurposer generate --source distribution_queue`, valor que NO existe en cli._select_items (valid: all, latest, social_content, published_posts, ebook, research_agenda). Argparse falla con returncode=2 antes de tocar DBs. Evidencia: service_stdout-20260923T223731.476.log:32576 (22/9 23:11:41). Efecto: 0 drafts enqueued desde el agente. Fix propuesto (Opcion A): anadir `distribution_queue` como source en repurposer (lee data/distribution_queue.json) + tests. Alternativa B: bypass escribiendo directo a publish_queue.db via QueueStore. | Sesion p103 (hallazgo P-101) |
+
+## Cerrados esta sesion (2026-09-26 p103)
+
+| ID | Descripcion | Commit / artefacto |
+|---|---|---|
+| P-101 | Fix BUG-2 (cwd del repurposer): pasar `--project-root <raiz>` explicito desde content_distributor.py, calculado con `Path(__file__).resolve().parents[1]` (no cwd). BUG-1 (source invalido) derivado a P-116 (Alta). | def7d6e |
