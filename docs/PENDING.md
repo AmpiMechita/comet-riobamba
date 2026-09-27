@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-26 p103 (sabado, UTC-5). P-101 DONE (--project-root explicito). P-116 OPEN Alta (--source distribution_queue invalido). P-096/P-097 OPEN.
+> **Última actualización:** 2026-09-26 p116 (sábado, UTC-5). P-116 DONE (--source distribution_queue end-to-end). P-117/P-118 OPEN (deuda detectada al cerrar P-116).
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -278,10 +278,24 @@
 
 | ID | Estado | Creado | Descripcion | Origen |
 |---|---|---|---|---|
-| P-116 | OPEN | 2026-09-26 | Pipeline LinkedIn/Twitter roto: content_distributor.py:157 invoca `comet_repurposer generate --source distribution_queue`, valor que NO existe en cli._select_items (valid: all, latest, social_content, published_posts, ebook, research_agenda). Argparse falla con returncode=2 antes de tocar DBs. Evidencia: service_stdout-20260923T223731.476.log:32576 (22/9 23:11:41). Efecto: 0 drafts enqueued desde el agente. Fix propuesto (Opcion A): anadir `distribution_queue` como source en repurposer (lee data/distribution_queue.json) + tests. Alternativa B: bypass escribiendo directo a publish_queue.db via QueueStore. | Sesion p103 (hallazgo P-101) |
+| P-116 | DONE | 2026-09-26 | Pipeline LinkedIn/Twitter roto: content_distributor.py:157 invoca `comet_repurposer generate --source distribution_queue`, valor que NO existe en cli._select_items (valid: all, latest, social_content, published_posts, ebook, research_agenda). Argparse falla con returncode=2 antes de tocar DBs. Evidencia: service_stdout-20260923T223731.476.log:32576 (22/9 23:11:41). Efecto: 0 drafts enqueued desde el agente. Fix propuesto (Opcion A): anadir `distribution_queue` como source en repurposer (lee data/distribution_queue.json) + tests. Alternativa B: bypass escribiendo directo a publish_queue.db via QueueStore. | Sesion p103 (hallazgo P-101) |
 
 ## Cerrados esta sesion (2026-09-26 p103)
 
 | ID | Descripcion | Commit / artefacto |
 |---|---|---|
 | P-101 | Fix BUG-2 (cwd del repurposer): pasar `--project-root <raiz>` explicito desde content_distributor.py, calculado con `Path(__file__).resolve().parents[1]` (no cwd). BUG-1 (source invalido) derivado a P-116 (Alta). | def7d6e |
+
+## Cerrados esta sesion (2026-09-26 p116)
+
+| ID | Descripción | Commit / artefacto |
+|---|---|---|
+| P-116 | Pipeline LinkedIn/Twitter end-to-end: (a) `choices` de --source ahora incluye `distribution_queue`; (b) nuevo reader `iter_distribution_queue()` lee `data/distribution_queue.json`; (c) `content_distributor.py` pasa `--platforms linkedin,x` (no `twitter`); (d) pasa `--enqueue-linkedin --enqueue-x` (antes queue=None, 0 jobs encolados); (e) parsea `Enqueued N` real de stderr en vez de `len(posts)` optimista. Tests: 5 nuevos. | e17645b |
+
+## Pendientes nuevos (2026-09-26 p116)
+
+| ID | Estado | Creado | Descripción | Origen |
+|---|---|---|---|---|
+| P-117 | OPEN | 2026-09-26 | `services/content_distributor.py::run_distribution` usa `repurposer_path = Path("scripts/comet_repurposer")` relativo a cwd. Funciona hoy porque el agente corre con cwd=raiz (NSSM AppDirectory), pero rompe si se invoca desde otro dir. Cambiar a `Path(__file__).resolve().parents[1] / "scripts" / "comet_repurposer"`. Registrado como deuda en HANDOFF_2026-09-26_p103.md §4. | Sesión p116 |
+| P-118 | OPEN | 2026-09-26 | `content_distributor.py::_save_state` se llama SIEMPRE al final de `run_distribution()`, incluso si `errors` no esta vacio o `enqueued==0`. Resultado: el throttle de 20h se activa aunque el pipeline haya fallado o no haya encolado nada. Considerar no actualizar state si `errors` o `enqueued==0`. | Sesión p116 |
+
