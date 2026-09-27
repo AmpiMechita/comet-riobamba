@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-26 p119 (sábado, UTC-5). P-117 DONE. P-118 DONE. P-119 DONE (STATE_FILE y PUBLISHED_POSTS_FILE absolutos desde __file__). P-120 OPEN (mismo anti-patrón cwd-relativo en 6+ archivos, deuda estructural).
+> **Última actualización:** 2026-09-26 p114 (sábado, UTC-5). P-114 DONE (gate uv>=1 en EnergyKnowledgeBase.__init__). P-113/P-115/P-120 OPEN.
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -265,7 +265,7 @@
 | ID | Estado | Creado | Descripcion | Origen |
 |---|---|---|---|---|
 | P-113 | OPEN | 2026-09-26 | Endurecer enum claimed|disputed|debunked en EnergyKnowledgeBase.update_claim_status (hoy no valida; el PATCH del node si). Sin caller en prod, pero API publica. | Sesion p102 (P-100b) |
-| P-114 | OPEN | 2026-09-26 | Validar uv>=1 en runtime (EnergyKnowledgeBase.__init__): leer PRAGMA user_version y marcar unavailable si <1. Diferido hasta confirmar que el node corrio post-merge y la DB quedo en uv=1. | Sesion p102 (P-100b) |
+| P-114 | DONE | 2026-09-26 | Validar uv>=1 en runtime (EnergyKnowledgeBase.__init__): lee PRAGMA user_version; si <1, available=False y los metodos devuelven []/False. CERRADO 26/9 p114: gate en __init__ tras SELECT 1 FROM claims; test nuevo test_unavailable_when_schema_version_too_low; helper _create_test_db setea uv=1. Reproduccion real (copia uv=0): available=False. Suite 1525/1skip. | Sesion p102, cerrado p114 |
 | P-115 | OPEN | 2026-09-26 | Bug latente en docs/ein/energy_intel_node.py::main: DB_PATH = args.db (L710) reasigna sin `global`; db_conn() lee la global -> --db sin efecto. Sin impacto en prod (no se usa --db). | Sesion p102 (P-100b) |
 
 ## Cerrados esta sesion (2026-09-26 p102)
@@ -330,3 +330,9 @@
 | ID | Estado | Creado | Descripción | Origen |
 |---|---|---|---|---|
 | P-120 | OPEN | 2026-09-26 | Deuda estructural: mismo anti-patrón cwd-relativo que P-117/P-119 detectado en 6+ archivos (grep p119): `core/agent.py:172` (state_file), `services/model_cascade.py:77`, `services/model_status_telegram.py:19`, `services/telegram_control.py:20-25`, `services/topic_evolution.py:18`, `phases/phase_b/orchestrator.py:538`, `phases/phase_c_analytics.py:62`. No bloqueante hoy (agente cwd=raíz), pero familia. Evaluar fix en bloque o por archivo según criticidad. | Sesion p119 |
+
+## Cerrados esta sesion (2026-09-26 p114)
+
+| ID | Descripcion | Commit / artefacto |
+|---|---|---|
+| P-114 | EnergyKnowledgeBase.__init__ exige PRAGMA user_version>=1; available=False si <1. Test nuevo + helper uv=1. Suite 1525 passed 1 skipped. | 48f16ce |
