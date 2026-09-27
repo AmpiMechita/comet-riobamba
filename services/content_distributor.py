@@ -17,8 +17,8 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger("services.content_distributor")
 
-STATE_FILE = Path("data/content_distributor_state.json")
-PUBLISHED_POSTS_FILE = Path("data/published_posts.json")
+STATE_FILE = Path(__file__).resolve().parents[1] / "data" / "content_distributor_state.json"
+PUBLISHED_POSTS_FILE = Path(__file__).resolve().parents[1] / "data" / "published_posts.json"
 
 
 def should_run_distribution() -> bool:
