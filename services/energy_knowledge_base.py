@@ -13,7 +13,10 @@ class EnergyKnowledgeBase:
             conn = sqlite3.connect(str(self.db_path))
             conn.row_factory = sqlite3.Row
             conn.execute("SELECT 1 FROM claims LIMIT 1")
+            uv = conn.execute("PRAGMA user_version").fetchone()[0]
             conn.close()
+            if uv < 1:
+                return
             self.available = True
         except (sqlite3.Error, OSError):
             self.available = False

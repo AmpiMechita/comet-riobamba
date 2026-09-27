@@ -53,6 +53,7 @@ def _create_test_db(db_path: Path) -> None:
              row["metric_value"], row["metric_unit"],
              row["status"], row["date_pub"], row["source_type"]),
         )
+    conn.execute("PRAGMA user_version=1")
     conn.commit()
     conn.close()
 
@@ -90,3 +91,17 @@ def test_read_and_update(tmp_path: Path):
 
     not_found = kb.update_claim_status("does_not_exist", "claimed")
     assert not_found is False
+
+
+def test_unavailable_when_schema_version_too_low(tmp_path: Path):
+    db_path = tmp_path / "test_energy_uv0.db"
+    _create_test_db(db_path)
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("PRAGMA user_version=0")
+    conn.commit()
+    conn.close()
+
+    kb = EnergyKnowledgeBase(db_path)
+    assert kb.available is False
+    assert kb.get_recent_claims() == []
+    assert kb.update_claim_status("claim_001", "disputed") is False
