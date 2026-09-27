@@ -39,3 +39,29 @@ Alternativas: P-120 (cwd-relativo), P-121 (test --db).
 
 ## 6. Estado tras sesion
 HEAD: este commit. CometRiobamba Running, sin reinicio. Working tree limpio.
+
+
+## 7. Restricciones de diseno para P-122 (no perder)
+
+P-122 (soporte cursor en fetch_post_comments) debe respetar:
+
+- OPT-IN. Por defecto `paginate=False`, una sola pagina. Los 13 callers
+  actuales NO cambian de comportamiento. El bucle de cursor solo se activa
+  donde se justifique (parametro explicito o metodo nuevo
+  `fetch_all_post_comments`).
+- RIESGO DE BLAST RADIUS. Un post grande puede tener 500+ comentarios
+  (verificado hoy: 527 top-level en 11 paginas para 19b6e9bf). Paginar por
+  defecto multiplica llamadas HTTP x11 en cada ciclo del agente -> riesgo
+  de rate-limit Moltbook -> ciclo perdido -> produccion rota.
+- CALLERS PRIORITARIOS (migrar primero, con test dirigido):
+  1) services/karma_updater.py:59 (lazo de karma; P-074/P-079).
+  2) services/comment_votes.py:107 (loop roto en pagina 2; el propio codigo
+     admite "la API ignora el offset" pero nunca busco cursor).
+  Despues: matcher follow-ups orchestrator.py 2165/3910/4192.
+  Solo con evidencia: telegram_client:550, phase_c_analytics:93.
+- TESTS. Un test unitario por caller migrado (stub del cliente que devuelve
+  2 paginas y confirma que el bucle las recorre). Un test del default
+  (paginate=False) que confirme comportamiento actual sin cambios.
+- RE-MEDIR P-082. Solo despues de mergear P-122 tiene sentido reabrir el
+  conteo de "cuantos backfills son recuperables"; el numero "85/120" del
+  ledger queda marcado como no auditable hasta entonces.
