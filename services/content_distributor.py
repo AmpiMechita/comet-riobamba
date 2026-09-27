@@ -8,6 +8,7 @@ feeds them to comet_repurposer pipeline, and enqueues for LinkedIn/Twitter.
 
 import json
 import logging
+import re
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -155,7 +156,9 @@ def run_distribution() -> Dict:
             result = subprocess.run(
                 [sys.executable, "-m", "comet_repurposer", "generate",
                  "--source", "distribution_queue",
-                 "--platforms", "linkedin,twitter",
+                 "--platforms", "linkedin,x",
+                 "--enqueue-linkedin",
+                 "--enqueue-x",
                  "--project-root", str(project_root),
                  "--limit", str(len(posts))],
                 cwd=str(repurposer_path),
@@ -164,8 +167,9 @@ def run_distribution() -> Dict:
                 timeout=120,
             )
             if result.returncode == 0:
-                enqueued = len(posts)
-                logger.info("content_distributor: repurposer generated %d drafts", enqueued)
+                m = re.search(r"Enqueued (\d+) job", result.stderr or "")
+                enqueued = int(m.group(1)) if m else 0
+                logger.info("content_distributor: repurposer enqueued %d jobs", enqueued)
             else:
                 errors.append(f"repurposer exit code {result.returncode}: {result.stderr[:200]}")
                 logger.warning("content_distributor: repurposer failed: %s", result.stderr[:200])

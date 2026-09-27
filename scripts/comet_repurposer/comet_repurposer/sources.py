@@ -260,6 +260,41 @@ def iter_research_agenda(project_root: Path) -> Iterator[SourceItem]:
         )
 
 
+def iter_distribution_queue(project_root: Path) -> Iterator[SourceItem]:
+    """Read data/distribution_queue.json written by content_distributor."""
+    path = project_root / "data" / "distribution_queue.json"
+    if not path.exists():
+        return
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(data, dict):
+        return
+    posts = data.get("posts") or []
+    if not isinstance(posts, list):
+        return
+    for entry in posts:
+        if not isinstance(entry, dict):
+            continue
+        post_id = str(entry.get("post_id") or entry.get("id") or "").strip()
+        topic = str(entry.get("topic") or entry.get("title") or "").strip()
+        if not post_id or not topic:
+            continue
+        body = str(entry.get("body") or entry.get("content") or topic)
+        yield SourceItem(
+            source_kind="distribution_item",
+            source_id=post_id,
+            title=topic,
+            body=body,
+            language="en",
+            created_at=entry.get("published_at") or entry.get("created_at"),
+            tags=list(entry.get("tags") or []),
+            source_path=str(path),
+            truncated=looks_truncated(body),
+        )
+
+
 def iter_all_sources(project_root: Path) -> Iterator[SourceItem]:
     """Yield from every reader in priority order.
 

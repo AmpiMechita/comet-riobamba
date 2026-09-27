@@ -57,6 +57,7 @@ from .pipeline import repurpose_batch
 from .sources import (
     SourceItem,
     iter_all_sources,
+    iter_distribution_queue,
     iter_ebooks,
     iter_latest,
     iter_published_posts,
@@ -87,6 +88,8 @@ def _select_items(source: str, project_root: Path, limit: int | None) -> Iterato
         it = iter_social_content(project_root)
     elif source == "published_posts":
         it = iter_published_posts(project_root)
+    elif source == "distribution_queue":
+        it = iter_distribution_queue(project_root)
     elif source == "ebook":
         it = iter_ebooks(project_root)
     elif source == "research_agenda":
@@ -528,7 +531,7 @@ def build_parser() -> argparse.ArgumentParser:
     # generate
     pg = sub.add_parser("generate", help="Read sources and produce drafts per platform.")
     pg.add_argument("--source", default="latest",
-                    choices=["all", "latest", "social_content", "published_posts", "ebook", "research_agenda"])
+                    choices=["all", "latest", "social_content", "published_posts", "ebook", "research_agenda", "distribution_queue"])
     pg.add_argument("--platforms", default=",".join(ALL_PLATFORMS))
     pg.add_argument("--limit", type=int, default=5)
     pg.add_argument("--lang", choices=["en", "es"], default=None)
