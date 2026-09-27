@@ -139,3 +139,15 @@ Los snapshots suelen estar cada 3-12h. Ventana util: ~48-72h.
 44. (A8) Cuando una salida de PowerShell llegue vacia o truncada, pedir la
     salida cruda (| Out-String -Width 400, -Raw, o -Tail/-First) antes de
     concluir. Las lineas largas se truncan y simulan ausencia.
+
+
+## Memoria entre sesiones (Principio Rafael, 2026-09-27)
+
+45. Nada se asume ni se supone. Todo lo que deba sobrevivir a la sesion se
+    anota en los archivos que se leen al abrir (HANDOFF / PENDING /
+    MAPA_TECNICO / DIRECTRICES) ANTES de cerrar el chat. Un modelo no tiene
+    memoria entre sesiones; la unica memoria persistente es el disco.
+    Si algo se menciona en el chat y no queda en un archivo, no existe.
+    Corolario: cuando el modelo diga "lo dejo anotado para mi", verificar
+    que quedo efectivamente en el archivo antes de cerrar; si no, es una
+    promesa vacia.
