@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-26 p118 (sábado, UTC-5). P-117 DONE. P-118 DONE (no activar throttle si errors o enqueued==0). P-119 OPEN.
+> **Última actualización:** 2026-09-26 p119 (sábado, UTC-5). P-117 DONE. P-118 DONE. P-119 DONE (STATE_FILE y PUBLISHED_POSTS_FILE absolutos desde __file__). P-120 OPEN (mismo anti-patrón cwd-relativo en 6+ archivos, deuda estructural).
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -311,10 +311,22 @@
 
 | ID | Estado | Creado | Descripcion | Origen |
 |---|---|---|---|---|
-| P-119 | OPEN | 2026-09-26 | Mismo anti-patron que P-117 en services/content_distributor.py L20-21: STATE_FILE y PUBLISHED_POSTS_FILE son Path relativos a cwd. No bloqueante hoy (agente cwd=raiz), pero rompe si se invoca desde otro dir. Fijar a Path(__file__).resolve().parents[1] / "data" / "...". | Sesion p117 |
+| P-119 | DONE | 2026-09-26 | Mismo anti-patron que P-117 en services/content_distributor.py L20-21: STATE_FILE y PUBLISHED_POSTS_FILE son Path relativos a cwd. No bloqueante hoy (agente cwd=raiz), pero rompe si se invoca desde otro dir. Fijar a Path(__file__).resolve().parents[1] / "data" / "...". | Sesion p117 |
 
 ## Cerrados esta sesion (2026-09-26 p118)
 
 | ID | Descripcion | Commit / artefacto |
 |---|---|---|
 | P-118 | `_save_state()` condicional: solo se llama si `errors==[]` y `enqueued>0`. Rama 'no posts qualify' ya no escribe state. 4 tests nuevos en tests/test_content_distributor.py. Suite 1524 passed, 1 skipped. | 8afca4d |
+
+## Cerrados esta sesion (2026-09-26 p119)
+
+| ID | Descripcion | Commit / artefacto |
+|---|---|---|
+| P-119 | `services/content_distributor.py` L20-21: `STATE_FILE` y `PUBLISHED_POSTS_FILE` ahora absolutos desde `Path(__file__).resolve().parents[1] / "data" / "..."`. Reproducción desde cwd=C:\Windows: paths apuntan a `C:\comet-riobamba-v31\data\...`, `is_absolute()=True`. Suite 1524 passed, 1 skipped. | fc49403 |
+
+## Pendientes nuevos (2026-09-26 p119)
+
+| ID | Estado | Creado | Descripción | Origen |
+|---|---|---|---|---|
+| P-120 | OPEN | 2026-09-26 | Deuda estructural: mismo anti-patrón cwd-relativo que P-117/P-119 detectado en 6+ archivos (grep p119): `core/agent.py:172` (state_file), `services/model_cascade.py:77`, `services/model_status_telegram.py:19`, `services/telegram_control.py:20-25`, `services/topic_evolution.py:18`, `phases/phase_b/orchestrator.py:538`, `phases/phase_c_analytics.py:62`. No bloqueante hoy (agente cwd=raíz), pero familia. Evaluar fix en bloque o por archivo según criticidad. | Sesion p119 |
