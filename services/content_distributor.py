@@ -151,10 +151,12 @@ def run_distribution() -> Dict:
     repurposer_path = Path("scripts/comet_repurposer")
     if repurposer_path.exists():
         try:
+            project_root = Path(__file__).resolve().parents[1]
             result = subprocess.run(
                 [sys.executable, "-m", "comet_repurposer", "generate",
                  "--source", "distribution_queue",
                  "--platforms", "linkedin,twitter",
+                 "--project-root", str(project_root),
                  "--limit", str(len(posts))],
                 cwd=str(repurposer_path),
                 capture_output=True,
