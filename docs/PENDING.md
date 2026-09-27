@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-26 p117 (sábado, UTC-5). P-117 DONE (repurposer_path absoluto). P-118/P-119 OPEN (deuda detectada p116/p117).
+> **Última actualización:** 2026-09-26 p118 (sábado, UTC-5). P-117 DONE. P-118 DONE (no activar throttle si errors o enqueued==0). P-119 OPEN.
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -297,7 +297,7 @@
 | ID | Estado | Creado | Descripción | Origen |
 |---|---|---|---|---|
 | P-117 | OPEN | 2026-09-26 | `services/content_distributor.py::run_distribution` usa `repurposer_path = Path("scripts/comet_repurposer")` relativo a cwd. Funciona hoy porque el agente corre con cwd=raiz (NSSM AppDirectory), pero rompe si se invoca desde otro dir. Cambiar a `Path(__file__).resolve().parents[1] / "scripts" / "comet_repurposer"`. Registrado como deuda en HANDOFF_2026-09-26_p103.md §4. | Sesión p116 |
-| P-118 | OPEN | 2026-09-26 | `content_distributor.py::_save_state` se llama SIEMPRE al final de `run_distribution()`, incluso si `errors` no esta vacio o `enqueued==0`. Resultado: el throttle de 20h se activa aunque el pipeline haya fallado o no haya encolado nada. Considerar no actualizar state si `errors` o `enqueued==0`. | Sesión p116 |
+| P-118 | DONE | 2026-09-26 | `content_distributor.py::_save_state` se llama SIEMPRE al final de `run_distribution()`, incluso si `errors` no esta vacio o `enqueued==0`. Resultado: el throttle de 20h se activa aunque el pipeline haya fallado o no haya encolado nada. Considerar no actualizar state si `errors` o `enqueued==0`. | Sesión p116 |
 
 
 
@@ -312,3 +312,9 @@
 | ID | Estado | Creado | Descripcion | Origen |
 |---|---|---|---|---|
 | P-119 | OPEN | 2026-09-26 | Mismo anti-patron que P-117 en services/content_distributor.py L20-21: STATE_FILE y PUBLISHED_POSTS_FILE son Path relativos a cwd. No bloqueante hoy (agente cwd=raiz), pero rompe si se invoca desde otro dir. Fijar a Path(__file__).resolve().parents[1] / "data" / "...". | Sesion p117 |
+
+## Cerrados esta sesion (2026-09-26 p118)
+
+| ID | Descripcion | Commit / artefacto |
+|---|---|---|
+| P-118 | `_save_state()` condicional: solo se llama si `errors==[]` y `enqueued>0`. Rama 'no posts qualify' ya no escribe state. 4 tests nuevos en tests/test_content_distributor.py. Suite 1524 passed, 1 skipped. | 8afca4d |
