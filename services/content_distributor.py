@@ -130,7 +130,6 @@ def run_distribution() -> Dict:
     posts = select_best_posts(top_n=3)
     if not posts:
         logger.info("content_distributor: no posts qualify for distribution")
-        _save_state()
         return {"selected": 0, "enqueued": 0, "errors": []}
 
     logger.info("content_distributor: %d posts selected for distribution", len(posts))
@@ -182,7 +181,8 @@ def run_distribution() -> Dict:
         logger.info("content_distributor: repurposer not found, posts saved to distribution_queue.json")
         enqueued = len(posts)
 
-    _save_state()
+    if not errors and enqueued > 0:
+        _save_state()
     return {"selected": len(posts), "enqueued": enqueued, "errors": errors}
 
 
