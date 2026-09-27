@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-26 p115 (sábado, UTC-5). P-115 REJECTED (no-op, evidencia p115). P-113/P-120/P-121 OPEN.
+> **Última actualización:** 2026-09-26 p113 (sábado, UTC-5). P-113 DONE (enum en update_claim_status). P-120/P-121 OPEN.
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -264,7 +264,7 @@
 
 | ID | Estado | Creado | Descripcion | Origen |
 |---|---|---|---|---|
-| P-113 | OPEN | 2026-09-26 | Endurecer enum claimed|disputed|debunked en EnergyKnowledgeBase.update_claim_status (hoy no valida; el PATCH del node si). Sin caller en prod, pero API publica. | Sesion p102 (P-100b) |
+| P-113 | DONE | 2026-09-26 | Endurecer enum claimed|disputed|debunked en EnergyKnowledgeBase.update_claim_status (hoy no valida; el PATCH del node si). Sin caller en prod, pero API publica. CERRADO 26/9 p113: constante _VALID_STATUSES (L5) + guarda L58-60; test nuevo. Suite 1526 passed 1 skipped. | Sesion p102 (P-100b), cerrado p113 |
 | P-114 | DONE | 2026-09-26 | Validar uv>=1 en runtime (EnergyKnowledgeBase.__init__): lee PRAGMA user_version; si <1, available=False y los metodos devuelven []/False. CERRADO 26/9 p114: gate en __init__ tras SELECT 1 FROM claims; test nuevo test_unavailable_when_schema_version_too_low; helper _create_test_db setea uv=1. Reproduccion real (copia uv=0): available=False. Suite 1525/1skip. | Sesion p102, cerrado p114 |
 | P-115 | REJECTED | 2026-09-26 | Bug latente en docs/ein/energy_intel_node.py::main: DB_PATH = args.db (L710) reasigna sin `global`; db_conn() lee la global -> --db sin efecto. Sin impacto en prod (no se usa --db). | Sesion p102 (P-100b) |
 
@@ -349,3 +349,10 @@
 | ID | Estado | Creado | Descripcion | Origen |
 |---|---|---|---|---|
 | P-121 | OPEN | 2026-09-26 | Gap de cobertura: tests/test_energy_intel_node.py cubre DB_PATH estatico (absoluto, cwd-invariante, KB match) pero NO el rebind via --db. Anadir test de regresion con runpy + stubs (modelo del repro p115) o declarar fuera de alcance. | Sesion p115 |
+
+
+## Cerrados esta sesion (2026-09-26 p113)
+
+| ID | Descripcion | Commit / artefacto |
+|---|---|---|
+| P-113 | Validar enum en EnergyKnowledgeBase.update_claim_status: constante modulo _VALID_STATUSES (L5) + guarda L58-60; test test_update_claim_status_rejects_invalid_status (5 valores invalidos + estado DB intacto + valor valido OK). Suite 1526 passed 1 skipped. | bd31e01 |
