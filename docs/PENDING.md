@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-26 p113 (sábado, UTC-5). P-113 DONE (enum en update_claim_status). P-120/P-121 OPEN.
+> **Última actualización:** 2026-09-27 audit. Auditoria sistematica p079-p119. H1 bug cursor (P-122 Alta); P-088 refutado; P-082 reabierto; P-115 errata. P-120/P-121 OPEN.
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -356,3 +356,30 @@
 | ID | Descripcion | Commit / artefacto |
 |---|---|---|
 | P-113 | Validar enum en EnergyKnowledgeBase.update_claim_status: constante modulo _VALID_STATUSES (L5) + guarda L58-60; test test_update_claim_status_rejects_invalid_status (5 valores invalidos + estado DB intacto + valor valido OK). Suite 1526 passed 1 skipped. | bd31e01 |
+
+
+## Auditoria sistematica (2026-09-27)
+
+Resultado: 21/22 pendientes p079-p119 con evidencia (185 tests ejecutados,
+numstat real vs declarado, paths verificados). Detalle en
+docs/HANDOFF_2026-09-27_audit.md.
+
+### Reaperturas por falso negativo
+
+| ID | Estado | Creado | Descripcion | Origen |
+|---|---|---|---|---|
+| P-082 | REOPENED | 2026-09-27 | El numero "85/120 recuperables" se calculo con fetch_post_comments que solo ve pagina 1. Script _p088_backfill.py fue borrado, no auditable. Nueva estimacion real desconocida; probablemente >85 recuperables. Re-medir con cursor-loop (P-122). | Auditoria 2026-09-27 (H4) |
+| P-088 | REOPENED | 2026-09-27 | Falso negativo: los 3 "irrecuperables" probados (75ec581d, c61641b1, cdbb220d) SI estan en la API; aparecen en paginas 2-8 via next_cursor. Evidencia: probe cursor-loop, 527 top-level en 11 paginas para post 19b6e9bf. La API SI pagina; offset NO funciona. | Auditoria 2026-09-27 (H3) |
+
+### Errata documental
+
+| ID | Descripcion |
+|---|---|
+| P-115 | ERRATA: el veredicto REJECTED (no-op) es CORRECTO, pero la descripcion de la fila P-115 era incorrecta. El codigo en docs/ein/energy_intel_node.py:714 tiene `if __name__ == "__main__":` a nivel modulo; L723 `DB_PATH = args.db` tambien a nivel modulo -> sin shadowing, --db SI funciona. Confirmado por lectura de L700-736 (auditoria 2026-09-27 H5). No hubo bug. |
+
+### Pendientes nuevos (2026-09-27 audit)
+
+| ID | Estado | Creado | Descripcion | Origen |
+|---|---|---|---|---|
+| P-122 | OPEN | 2026-09-27 | ALTA. Bug activo: `services/moltbook_api_client.py::fetch_post_comments` (L624) ignora `has_more`/`next_cursor` y solo devuelve pagina 1 (con replies anidados aplanados). La API SI pagina por cursor; `offset` es ignorado. Impacto: (a) `karma_updater.update_karma_from_moltbook` (L59) devuelve success:False silencioso para comentarios en pagina 2+ (afecta P-074/P-079); (b) `comment_votes.refresh_all_comment_votes` loop roto en pagina 2 (el propio codigo admite "la API ignora el offset" pero no busca cursor); (c) matcher follow-ups orchestrator.py:2165/3910/4192 -> replies_matched=0 en prod; (d) telegram_client.py:550 y phase_c_analytics.py:93 (probables). Fix: cursor-loop opt-in en fetch_post_comments (por defecto 1 pagina para no romper 13 callers; nuevo parametro `paginate=True`/`max_pages=N`); mapear callers que se beneficien. | Auditoria 2026-09-27 (H1/H2) |
+| P-123 | OPEN | 2026-09-27 | Baja. MAPA_TECNICO.md (2026-09-22) no lista ADR-004 (jsonl-obsolete-sqlite-canonical, 24/9) ni ADR-005 (sqlite-schema-versioning, 26/9). Ya anotado en HANDOFF_2026-09-25_p083 seccion 17; sigue sin atacarse. Actualizar tabla de ADRs. | Auditoria 2026-09-27 (H6) |

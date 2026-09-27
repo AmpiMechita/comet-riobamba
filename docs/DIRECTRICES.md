@@ -91,3 +91,51 @@ Los snapshots suelen estar cada 3-12h. Ventana util: ~48-72h.
     ANTES de git add -A, no despues del commit. Si se cuelan en staging:
     git restore --staged del path antes de commitear. Origen: p083b (amend
     a5ea345->5658073 por patch_*.py stageado).
+
+
+## Rigor de verificacion (2026-09-27, auditoria p079-p119)
+
+36. (A1 fuerte) Todo grep que decida un veredicto (bug/no-bug, existe/no-existe,
+    DONE/no-DONE) debe pasar por DOS mecanismos independientes antes de concluir.
+    Ejemplo: Select-String + python -c "import re; ...". Si los dos no coinciden,
+    el resultado NO se usa. Un solo grep no decide nada estructural.
+    Origen: 3 falsos negativos el 27/9 (patron track_action\( con -SimpleMatch;
+    "a|b" con -SimpleMatch; nombre ADR-004 inventado por analogia).
+
+37. (A1b) Nunca usar -SimpleMatch con patrones que contengan metacaracteres
+    (\( \) \[ \] \* \. \| \?). -SimpleMatch desactiva regex PERO toma los
+    escapes y el pipe como literales -> falso negativo silencioso. Si el patron
+    tiene metacaracter, usar -Pattern sin -SimpleMatch (regex real).
+
+38. (A2) Antes de concluir "no hay X", ejecutar el grep sobre un archivo donde
+    se sabe que X existe. Si no hay match ahi, el patron esta mal, no el codigo.
+    Falso negativo != ausencia.
+
+39. (A3) Cuando docs citan archivo, DB o path, verificar con Test-Path/glob
+    ANTES de operar sobre el. Si no existe, corregir el doc en la misma sesion.
+    No inferir paths por analogia (incidente 27/9: se asumio
+    ADR-004-jsonl-retirement.md; el real es ADR-004-jsonl-obsolete-sqlite-canonical.md).
+
+40. (A4) Al diagnosticar, escribir la hipotesis explicita en texto y luego el
+    comando que la confirmaria/refutaria. Prohibido encadenar dos fixes sobre
+    hipotesis no confirmadas.
+
+41. (A5) Al operador no programador no se le ofrecen opciones tecnicas ambiguas.
+    Cuando Rafael pide "solucionar", investigar hasta tener UNA propuesta
+    justificada. Alternativas solo cuando la decision es de negocio (dinero,
+    narrativa, riesgo), nunca de ingenieria.
+
+42. (A6) Toda accion externa (post/comment/reply) debe persistir en append-only
+    los campos suficientes para reconstruir sin depender de la API:
+    timestamp ISO con microsegundos, id devuelto por API, post_id, parent_id,
+    autor target, status HTTP, y score/upvotes del momento. Origen: paginacion
+    por cursor demostro que un dato "irrecuperable" puede serlo solo si la API
+    cambia el contrato.
+
+43. (A7) En cada cierre, Select-String de todo path citado en el HANDOFF y
+    confirmar existencia. Errores de path en docs son deuda silenciosa que
+    reaparece como P-115 (premisa falsa durante 2 sesiones).
+
+44. (A8) Cuando una salida de PowerShell llegue vacia o truncada, pedir la
+    salida cruda (| Out-String -Width 400, -Raw, o -Tail/-First) antes de
+    concluir. Las lineas largas se truncan y simulan ausencia.
