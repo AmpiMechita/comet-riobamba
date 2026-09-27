@@ -149,7 +149,7 @@ def run_distribution() -> Dict:
     # Try to run the repurposer pipeline
     errors = []
     enqueued = 0
-    repurposer_path = Path("scripts/comet_repurposer")
+    repurposer_path = Path(__file__).resolve().parents[1] / "scripts" / "comet_repurposer"
     if repurposer_path.exists():
         try:
             project_root = Path(__file__).resolve().parents[1]
