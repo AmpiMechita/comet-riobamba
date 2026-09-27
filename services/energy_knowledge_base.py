@@ -2,6 +2,8 @@ from pathlib import Path
 import sqlite3
 from typing import Any, Dict, List, Optional
 
+_VALID_STATUSES = ("claimed", "disputed", "debunked")
+
 
 class EnergyKnowledgeBase:
     def __init__(self, db_path: Optional[Path] = None):
@@ -54,6 +56,8 @@ class EnergyKnowledgeBase:
             return []
 
     def update_claim_status(self, claim_id: str, new_status: str) -> bool:
+        if new_status not in _VALID_STATUSES:
+            return False
         if not self.available:
             return False
         try:

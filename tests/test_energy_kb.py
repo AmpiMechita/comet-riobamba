@@ -105,3 +105,26 @@ def test_unavailable_when_schema_version_too_low(tmp_path: Path):
     assert kb.available is False
     assert kb.get_recent_claims() == []
     assert kb.update_claim_status("claim_001", "disputed") is False
+
+
+def test_update_claim_status_rejects_invalid_status(tmp_path: Path):
+    """P-113: update_claim_status debe rechazar valores fuera del enum."""
+    db_path = tmp_path / "test_energy_invalid.db"
+    _create_test_db(db_path)
+
+    kb = EnergyKnowledgeBase(db_path)
+    assert kb.available is True
+
+    for bogus in ("bogus", "", "CLAIMED", "Debunked", "claimed "):
+        assert kb.update_claim_status("claim_001", bogus) is False, bogus
+
+    # estado en DB intacto
+    recent = kb.get_recent_claims(limit=5)
+    row = next(r for r in recent if r["id"] == "claim_001")
+    assert row["status"] == "claimed"
+
+    # valor valido sigue funcionando
+    assert kb.update_claim_status("claim_001", "debunked") is True
+    recent2 = kb.get_recent_claims(limit=5)
+    row2 = next(r for r in recent2 if r["id"] == "claim_001")
+    assert row2["status"] == "debunked"
