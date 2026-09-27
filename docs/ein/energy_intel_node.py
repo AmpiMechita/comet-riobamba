@@ -99,6 +99,18 @@ CREATE INDEX IF NOT EXISTS idx_tech   ON claims(technology);
 CREATE INDEX IF NOT EXISTS idx_status ON claims(status);
 CREATE INDEX IF NOT EXISTS idx_date   ON claims(date_pub);
 """
+# SCHEMA VERSIONING (ADR-005) - P-100b, addendum bis
+SCHEMA_VERSION = 1
+MIGRATIONS = []
+
+def apply_migrations(conn, sv, migs, label):
+    """Contrato identico a core/sqlite_migrations.py (ADR-005 INV1c)."""
+    uv = conn.execute("PRAGMA user_version").fetchone()[0]
+    if uv > sv: raise RuntimeError(f'[{label}] uv={uv}>{sv}')
+    for tgt, fn in sorted(migs, key=lambda x: x[0]):
+        if tgt > uv: fn(conn); conn.execute(f'PRAGMA user_version={tgt}'); conn.commit()
+    if conn.execute('PRAGMA user_version').fetchone()[0] < sv:
+        conn.execute(f'PRAGMA user_version={sv}'); conn.commit()
 
 @contextmanager
 def db_conn():
@@ -114,6 +126,7 @@ def db_conn():
 def init_db():
     with db_conn() as c:
         c.executescript(SCHEMA)
+        apply_migrations(c, SCHEMA_VERSION, MIGRATIONS, 'energy_intel')
 
 def claim_id(url: str, title: str, date: str) -> str:
     raw = f"{url}|{title}|{date}"

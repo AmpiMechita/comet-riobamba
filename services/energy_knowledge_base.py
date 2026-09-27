@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 
 class EnergyKnowledgeBase:
     def __init__(self, db_path: Optional[Path] = None):
-        self.db_path = db_path or Path("data/energy_intel.db")
+        self.db_path = db_path or (Path(__file__).resolve().parents[1] / "data" / "energy_intel.db")
         self.available = False
         if not self.db_path.exists():
             return
