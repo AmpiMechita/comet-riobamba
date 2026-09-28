@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-28 P-122 (cursor-loop opt-in). Auditoria sistematica p079-p119. H1 bug cursor (P-122 Alta); P-088 refutado; P-082 reabierto; P-115 errata. P-120/P-121 OPEN.
+> **Última actualización:** 2026-09-28 p122 (restart aplicado, P-126 alta). Auditoria sistematica p079-p119. H1 bug cursor (P-122 Alta); P-088 refutado; P-082 reabierto; P-115 errata. P-120/P-121 OPEN.
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -385,3 +385,4 @@ docs/HANDOFF_2026-09-27_audit.md.
 | P-123 | OPEN | 2026-09-27 | Baja. MAPA_TECNICO.md (2026-09-22) no lista ADR-004 (jsonl-obsolete-sqlite-canonical, 24/9) ni ADR-005 (sqlite-schema-versioning, 26/9). Ya anotado en HANDOFF_2026-09-25_p083 seccion 17; sigue sin atacarse. Actualizar tabla de ADRs. | Auditoria 2026-09-27 (H6) |
 | P-124 | DONE | 2026-09-28 | Corregido en esta sesion: HANDOFF_2026-09-27_audit.md L53 y PENDING.md L372 citaban 19b6e9bf como post_id; es prefijo (8 chars). La API exige UUID completo. Corregido a 19b6e9bf-6ff9-4ea5-834a-cbbac714f546. | Sesion P-122 |
 | P-125 | OPEN | 2026-09-28 | Media. Migrar callers restantes de fetch_post_comments al cursor-loop (cliente ya soporta paginate=True desde P-122): phases/phase_b/orchestrator.py:2165/3910/4192 (matcher follow-ups, replies_matched=0 en prod), services/telegram_client.py:550, phases/phase_c_analytics.py:93. Solo con evidencia de beneficio por caller (A5). Handlers internos L728/990/1071 sin cambio. | Sesion p122 |
+| P-126 | OPEN | 2026-09-28 | Baja. P-098 reporto PID hijo 7564 con StartTime 25/9 22:37:55. Verificado 27/9 pre-restart: PID hijo real = 7620, StartTime 26/9 18:32:32. Hubo restart intermedio no documentado. Actualizar narrativa de P-098 o cerrarlo como impreciso. | Sesion p122 |
