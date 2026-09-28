@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-28 p122 (restart aplicado, P-126 alta). Auditoria sistematica p079-p119. H1 bug cursor (P-122 Alta); P-088 refutado; P-082 reabierto; P-115 errata. P-120/P-121 OPEN.
+> **Última actualización:** 2026-09-28 p129 (P-082 DONE definitivo: 96/99 backfilled; 3 borrados reales). Auditoria sistematica p079-p119. P-122 DONE; P-125 DONE; P-128/P-129 OPEN.
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -368,7 +368,7 @@ docs/HANDOFF_2026-09-27_audit.md.
 
 | ID | Estado | Creado | Descripcion | Origen |
 |---|---|---|---|---|
-| P-082 | REOPENED | 2026-09-27 | El numero "85/120 recuperables" se calculo con fetch_post_comments que solo ve pagina 1. Script _p088_backfill.py fue borrado, no auditable. Nueva estimacion real desconocida; probablemente >85 recuperables. Re-medir con cursor-loop (P-122). | Auditoria 2026-09-27 (H4) |
+| P-082 | DONE | 2026-09-27 | CERRADO 28/9 p129: re-medicion con cursor-loop (P-122/P-125) dio 96/99 recuperables (A=22/22, B=63/63, C=11/14). Los 3 restantes (6db7cb37, 9f3130a4, 39f094c4) son borrados reales en Moltbook (n estable 293/487 con max_pages=5 y =20). Backfill ejecutado sobre 96 filas (upd=96 skip=3), SQLite NULL published 99->3, suma score published=202. Snapshot previo data/karma_roi.db.snapshot-p082-20260928-135319.db. Detalle docs/P082_REMEDICION.md. | Auditoria 2026-09-27 (H4) |
 | P-088 | REOPENED | 2026-09-27 | Falso negativo: los 3 "irrecuperables" probados (75ec581d, c61641b1, cdbb220d) SI estan en la API; aparecen en paginas 2-8 via next_cursor. Evidencia: probe cursor-loop, 527 top-level en 11 paginas para post 19b6e9bf-6ff9-4ea5-834a-cbbac714f546. La API SI pagina; offset NO funciona. | Auditoria 2026-09-27 (H3) |
 
 ### Errata documental
@@ -393,6 +393,7 @@ docs/HANDOFF_2026-09-27_audit.md.
 |---|---|---|---|---|
 | P-127 | OPEN | 2026-09-28 | Baja. `phases/phase_b/orchestrator.py::_process_own_post` (L4170) sin caller productivo (solo tests); docstring L42 sugiere que si esta cableado via _execute_own_post_replies pero no lo esta. Eliminar o documentar como dead code. | Sesion p125 |
 | P-128 | OPEN | 2026-09-28 | Media. `data/karma_roi_tracker.db` = 0 bytes (creado por probe fallido 28/9 6:11); DB real con datos es `data/karma_roi.db` (98KB). PENDING L384 y HANDOFF p122 asumen nombre equivocado. Verificar ruta canonica en codigo y corregir docs o renombrar DB. | Sesion p125 |
+| P-129 | OPEN | 2026-09-28 | Media. `services/karma_updater.py::update_karma_from_moltbook` llama `fetch_post_comments(..., paginate=True)` con `max_pages` por defecto=5 (tope 250 comentarios). En prod hay posts con >1000 comentarios (19b6e9bf=1105, 50b2ba76=1737, 84b2c139=1275); los comments del agente en pagina 6+ no se refrescan -> score NULL silencioso en el ciclo 6h. Fix: subir `max_pages` en karma_updater o pasarlo por env con default razonable (p.ej. 50). | Sesion p129 (hallazgo P-082) |
 
 ## Cerrados esta sesion (2026-09-28 p125)
 
