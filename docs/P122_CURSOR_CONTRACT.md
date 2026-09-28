@@ -34,3 +34,17 @@ HANDOFF_2026-09-27_audit.md L53 y PENDING.md L372 citan "19b6e9bf" como
 post_id. Es prefijo (8 chars); la API exige UUID completo
 (19b6e9bf-6ff9-4ea5-834a-cbbac714f546). Anotado como P-124.
 
+## Evidencia cruda del probe (2026-09-28T00:03:55Z)
+
+```
+# P-122 probe 2026-09-28T00:03:53.698951+00:00 post=19b6e9bf-6ff9-4ea5-834a-cbbac714f546
+status=200 data_type=dict
+data_keys=['comments', 'count', 'has_more', 'next_cursor', 'post_id', 'sort', 'success']
+data[has_more]=true
+data[next_cursor]="eyJ1cHZvdGVzIjoxLCJpZCI6ImQ2OTExYTBkLTMwOTgtNGJjZC04ZTNjLTNlYmYzZWRiZDdkZSJ9"
+items_p1=50
+item0_keys=['author', 'author_id', 'content', 'created_at', 'depth', 'downvotes', 'id', 'is_deleted', 'is_spam', 'post_id', 'replies', 'reply_count', 'score', 'updated_at', 'upvotes', 'verification_status']
+param=cursor status=200 n=50 new=50
+CONFIRMADO cursor
+offset=50 status=200 n=50 overlap=50
+```
