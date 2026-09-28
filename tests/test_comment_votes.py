@@ -74,32 +74,29 @@ class TestCommentVotesLedger:
         records = path.read_text(encoding="utf-8").splitlines()
         assert len(records) == 1
 
-    def test_refresh_paginates_to_find_deep_comments(self, tmp_path):
-        """Comentarios fuera de la primera pagina se encuentran paginando
-        (offset); si la API ignora el offset se corta sin loop infinito."""
+    def test_refresh_finds_deep_comments_via_paginate(self, tmp_path):
+        """P-122: el cliente pagina por cursor (paginate=True); el caller
+        recibe ya todas las paginas en UNA sola llamada."""
         path = tmp_path / "comment_votes.jsonl"
         record_published_comment("post-1", "c-deep", 0.9, path=path)
         record_published_comment("post-1", "c-shallow", 0.3, path=path)
 
-        pages = [
-            [{"id": f"other-{i}", "upvotes": 0} for i in range(50)],
-            [{"id": "c-deep", "upvotes": 7}],
-            [],  # c-shallow nunca aparece: pagina vacia corta la busqueda
-        ]
         api = MagicMock()
-        api.fetch_post_comments.side_effect = pages
+        api.fetch_post_comments.return_value = [
+            {"id": f"other-{i}", "upvotes": 0} for i in range(50)
+        ] + [{"id": "c-deep", "upvotes": 7}]
 
         updated = refresh_comment_votes(api, "post-1", ["c-deep", "c-shallow"], path=path)
 
         assert updated == 1
-        assert api.fetch_post_comments.call_args_list[0][1]["offset"] == 0
-        assert api.fetch_post_comments.call_args_list[1][1]["offset"] == 50
+        assert api.fetch_post_comments.call_count == 1
+        kwargs = api.fetch_post_comments.call_args.kwargs
+        assert kwargs.get("paginate") is True
         records = {r["comment_id"]: r for r in
                    (json.loads(l) for l in path.read_text(encoding="utf-8").splitlines())}
         assert records["c-deep"]["upvotes"] == 7
-
-    def test_refresh_stops_when_api_ignores_offset(self, tmp_path, caplog):
-        """Si la API ignora el offset (misma primera pagina), no hay loop."""
+    def test_refresh_warns_when_comment_not_found(self, tmp_path, caplog):
+        """P-122: una sola llamada paginada; el comentario no aparece -> 0 y warning."""
         import logging
         path = tmp_path / "comment_votes.jsonl"
         record_published_comment("post-1", "c-missing", 0.5, path=path)
@@ -110,9 +107,8 @@ class TestCommentVotesLedger:
             updated = refresh_comment_votes(api, "post-1", ["c-missing"], path=path)
 
         assert updated == 0
-        assert api.fetch_post_comments.call_count == 2, "pagina 0 + pagina 1 identica, luego corte"
+        assert api.fetch_post_comments.call_count == 1
         assert any("sin localizar" in r.getMessage() for r in caplog.records)
-
     def test_summary_groups_by_score(self, tmp_path):
         path = tmp_path / "comment_votes.jsonl"
         record_published_comment("p1", "c-high", 0.9, path=path)

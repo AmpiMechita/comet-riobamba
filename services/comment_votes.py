@@ -86,8 +86,8 @@ def refresh_comment_votes(api: Any, post_id: str, comment_ids: List[str],
                           path: Optional[Path] = None, max_pages: int = 6) -> int:
     """Actualiza los upvotes de nuestros comentarios en UN post.
 
-    Fetch paginado (offset por 50) con deteccion defensiva: si la API ignora
-    el offset (vuelve la misma primera pagina), se corta. Actualiza solo los
+    Fetch paginado por cursor via el cliente (P-122). El cliente sigue
+    next_cursor hasta agotar paginas o topar con max_pages. Actualiza solo los
     comment_id registrados en el ledger y loguea cuantos no se localizaron
     (nuestros comentarios pueden quedar fuera de las primeras 50 top-level
     en posts con cientos de comentarios). Devuelve cuantos se actualizaron."""
@@ -101,29 +101,21 @@ def refresh_comment_votes(api: Any, post_id: str, comment_ids: List[str],
     now = datetime.now(timezone.utc).isoformat()
     updated = 0
     found: set = set()
-    prev_ids: Optional[set] = None
-    for page in range(max_pages):
-        try:
-            comments = api.fetch_post_comments(post_id, offset=page * 50) or []
-        except TypeError:
-            # cliente sin soporte de offset: una sola pagina
-            comments = api.fetch_post_comments(post_id) or []
-        if not comments:
-            break
-        current_ids = {str(c.get("id") or c.get("comment_id")) for c in comments}
-        if page > 0 and prev_ids is not None and current_ids == prev_ids:
-            break  # la API ignora el offset: no hay mas paginas
-        prev_ids = current_ids
-        for c in comments:
-            cid = c.get("id") or c.get("comment_id")
-            if cid and str(cid) in wanted:
-                rec = records[str(cid)]
-                rec["upvotes"] = int(c.get("upvotes") or 0)
-                rec["checked_at"] = now
-                found.add(str(cid))
-                updated += 1
-        if not (wanted - found):
-            break
+    # El cliente pagina por cursor (P-122, contrato verificado 2026-09-28).
+    # Trae todas las paginas necesarias en UNA llamada; el caller ya no itera.
+    try:
+        comments = api.fetch_post_comments(post_id, paginate=True, max_pages=max_pages) or []
+    except TypeError:
+        # cliente sin soporte de paginate (firma vieja): una sola pagina
+        comments = api.fetch_post_comments(post_id) or []
+    for c in comments:
+        cid = c.get("id") or c.get("comment_id")
+        if cid and str(cid) in wanted:
+            rec = records[str(cid)]
+            rec["upvotes"] = int(c.get("upvotes") or 0)
+            rec["checked_at"] = now
+            found.add(str(cid))
+            updated += 1
     missing = wanted - found
     if missing:
         logger.warning(

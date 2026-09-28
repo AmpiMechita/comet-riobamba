@@ -369,7 +369,7 @@ docs/HANDOFF_2026-09-27_audit.md.
 | ID | Estado | Creado | Descripcion | Origen |
 |---|---|---|---|---|
 | P-082 | REOPENED | 2026-09-27 | El numero "85/120 recuperables" se calculo con fetch_post_comments que solo ve pagina 1. Script _p088_backfill.py fue borrado, no auditable. Nueva estimacion real desconocida; probablemente >85 recuperables. Re-medir con cursor-loop (P-122). | Auditoria 2026-09-27 (H4) |
-| P-088 | REOPENED | 2026-09-27 | Falso negativo: los 3 "irrecuperables" probados (75ec581d, c61641b1, cdbb220d) SI estan en la API; aparecen en paginas 2-8 via next_cursor. Evidencia: probe cursor-loop, 527 top-level en 11 paginas para post 19b6e9bf. La API SI pagina; offset NO funciona. | Auditoria 2026-09-27 (H3) |
+| P-088 | REOPENED | 2026-09-27 | Falso negativo: los 3 "irrecuperables" probados (75ec581d, c61641b1, cdbb220d) SI estan en la API; aparecen en paginas 2-8 via next_cursor. Evidencia: probe cursor-loop, 527 top-level en 11 paginas para post 19b6e9bf-6ff9-4ea5-834a-cbbac714f546. La API SI pagina; offset NO funciona. | Auditoria 2026-09-27 (H3) |
 
 ### Errata documental
 
@@ -383,3 +383,4 @@ docs/HANDOFF_2026-09-27_audit.md.
 |---|---|---|---|---|
 | P-122 | OPEN | 2026-09-27 | ALTA. Bug activo: `services/moltbook_api_client.py::fetch_post_comments` (L624) ignora `has_more`/`next_cursor` y solo devuelve pagina 1 (con replies anidados aplanados). La API SI pagina por cursor; `offset` es ignorado. Impacto: (a) `karma_updater.update_karma_from_moltbook` (L59) devuelve success:False silencioso para comentarios en pagina 2+ (afecta P-074/P-079); (b) `comment_votes.refresh_all_comment_votes` loop roto en pagina 2 (el propio codigo admite "la API ignora el offset" pero no busca cursor); (c) matcher follow-ups orchestrator.py:2165/3910/4192 -> replies_matched=0 en prod; (d) telegram_client.py:550 y phase_c_analytics.py:93 (probables). Fix: cursor-loop opt-in en fetch_post_comments (por defecto 1 pagina para no romper 13 callers; nuevo parametro `paginate=True`/`max_pages=N`); mapear callers que se beneficien. | Auditoria 2026-09-27 (H1/H2) |
 | P-123 | OPEN | 2026-09-27 | Baja. MAPA_TECNICO.md (2026-09-22) no lista ADR-004 (jsonl-obsolete-sqlite-canonical, 24/9) ni ADR-005 (sqlite-schema-versioning, 26/9). Ya anotado en HANDOFF_2026-09-25_p083 seccion 17; sigue sin atacarse. Actualizar tabla de ADRs. | Auditoria 2026-09-27 (H6) |
+| P-124 | DONE | 2026-09-28 | Corregido en esta sesion: HANDOFF_2026-09-27_audit.md L53 y PENDING.md L372 citaban 19b6e9bf como post_id; es prefijo (8 chars). La API exige UUID completo. Corregido a 19b6e9bf-6ff9-4ea5-834a-cbbac714f546. | Sesion P-122 |

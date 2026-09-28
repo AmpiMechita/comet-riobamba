@@ -56,7 +56,7 @@ def update_karma_from_moltbook(moltbook_client, entry: dict) -> dict:
             thread = entry.get("thread_id")
             if not thread:
                 return {"upvotes": 0, "comments": 0, "success": False}
-            comments = moltbook_client.fetch_post_comments(thread) or []
+            comments = moltbook_client.fetch_post_comments(thread, paginate=True) or []
             target = next((c for c in comments if c.get("id") == mid), None)
             if target is None:
                 return {"upvotes": 0, "comments": 0, "success": False}

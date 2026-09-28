@@ -621,24 +621,57 @@ class MoltbookAPIClient(PlatformClient):
         logger.info("fetch_my_posts: %d posts propios", len(posts))
         return posts
 
-    def fetch_post_comments(self, post_id: str, offset: int = 0) -> List[Dict[str, Any]]:
+    def fetch_post_comments(
+        self,
+        post_id: str,
+        offset: int = 0,
+        *,
+        paginate: bool = False,
+        max_pages: int = 5,
+    ) -> List[Dict[str, Any]]:
+        """GET /posts/{post_id}/comments.
+
+        Por defecto (paginate=False) devuelve SOLO la primera pagina, con
+        replies anidadas aplanadas. Comportamiento historico; los 13 callers
+        actuales no cambian.
+
+        Si paginate=True, sigue data.next_cursor hasta has_more=false o hasta
+        max_pages paginas. La API IGNORA offset; el unico parametro de
+        paginacion valido es cursor. Contrato verificado 2026-09-28
+        (docs/P122_CURSOR_CONTRACT.md, evidencia del probe en docs/evidence/).
+        """
         if not post_id:
             return []
 
         path = f"/posts/{post_id}/comments"
 
         try:
-            params = {"limit": 50}
-            if offset:
-                params["offset"] = offset
-            result = self._request("GET", path, params=params)
-            if 200 <= result["status"] < 300:
+            pages_to_fetch = max(1, int(max_pages)) if paginate else 1
+            all_items: List[Dict[str, Any]] = []
+            cursor: Optional[str] = None
+            seen_cursors: set = set()
+
+            for page in range(pages_to_fetch):
+                params = {"limit": 50}
+                if paginate and cursor:
+                    params["cursor"] = cursor
+                elif offset and page == 0 and not paginate:
+                    params["offset"] = offset
+
+                result = self._request("GET", path, params=params)
+                if not (200 <= result["status"] < 300):
+                    break
+
                 data = result["data"]
                 items = self._pick_list(data, "items", "comments", "data")
-                logger.info("fetch_post_comments(%s): %d comentarios", post_id, len(items))
+                if paginate:
+                    logger.info(
+                        "fetch_post_comments(%s): page=%d %d comentarios",
+                        post_id, page, len(items),
+                    )
+                else:
+                    logger.info("fetch_post_comments(%s): %d comentarios", post_id, len(items))
 
-                # ── Log temporal de evidencia: UNA vez por proceso vuelca el
-                #    JSON crudo de un comentario real (recortado a 400 chars).
                 if not getattr(self, "_raw_dump_done", False):
                     self._raw_dump_done = True
                     if items and isinstance(items[0], dict):
@@ -647,44 +680,57 @@ class MoltbookAPIClient(PlatformClient):
                             json.dumps(items[0], ensure_ascii=False)[:400],
                         )
 
-                # ── Aplanar estructura anidada (data.comments[].replies[]) ──
-                # La API real devuelve respuestas ANIDADAS dentro de cada
-                # comentario; los hijos llevan parent_id plano. Sin este
-                # aplanado el matcher de follow-ups solo ve top-level y nunca
-                # las respuestas a nuestros comentarios (replies_matched=0).
-                flattened: List[Dict[str, Any]] = []
+                all_items.extend(items)
 
-                def _flatten(raw_item: Dict, parent_override: Optional[str] = None) -> None:
-                    c = dict(raw_item)
-                    c["post_id"] = post_id
-                    c["id"] = c.get("id") or c.get("comment_id") or c.get("commentId")
-                    c["text"] = c.get("text") or c.get("content") or c.get("body") or ""
-                    c["content"] = c.get("content") or c.get("text") or c.get("body") or ""
-                    author_raw = c.get("author") or c.get("author_name") or c.get("username") or ""
-                    if isinstance(author_raw, dict):
-                        c["author"] = author_raw.get("name") or author_raw.get("username") or ""
-                    else:
-                        c["author"] = author_raw
-                    c["author_id"] = c.get("author_id") or c.get("user_id") or c.get("userid")
-                    c["parent_id"] = c.get("parent_id") or c.get("parentId") or parent_override
-                    flattened.append(c)
-                    for sub in (raw_item.get("replies") or []):
-                        if isinstance(sub, dict):
-                            _flatten(sub, parent_override=c.get("id"))
+                if not paginate:
+                    break
 
-                for raw in items:
-                    if isinstance(raw, dict):
-                        _flatten(raw)
-
-                if len(flattened) != len(items):
-                    logger.info(
-                        "fetch_post_comments(%s): aplanadas %d (top-level=%d, replies anidadas incluidas)",
-                        post_id, len(flattened), len(items),
+                has_more = bool(data.get("has_more")) if isinstance(data, dict) else False
+                nxt = data.get("next_cursor") if isinstance(data, dict) else None
+                if not has_more or not nxt:
+                    break
+                if nxt in seen_cursors:
+                    logger.warning(
+                        "fetch_post_comments(%s): next_cursor repetido en page=%d, corto",
+                        post_id, page,
                     )
+                    break
+                seen_cursors.add(nxt)
+                cursor = nxt
 
-                return flattened
+            flattened: List[Dict[str, Any]] = []
+
+            def _flatten(raw_item: Dict, parent_override: Optional[str] = None) -> None:
+                c = dict(raw_item)
+                c["post_id"] = post_id
+                c["id"] = c.get("id") or c.get("comment_id") or c.get("commentId")
+                c["text"] = c.get("text") or c.get("content") or c.get("body") or ""
+                c["content"] = c.get("content") or c.get("text") or c.get("body") or ""
+                author_raw = c.get("author") or c.get("author_name") or c.get("username") or ""
+                if isinstance(author_raw, dict):
+                    c["author"] = author_raw.get("name") or author_raw.get("username") or ""
+                else:
+                    c["author"] = author_raw
+                c["author_id"] = c.get("author_id") or c.get("user_id") or c.get("userid")
+                c["parent_id"] = c.get("parent_id") or c.get("parentId") or parent_override
+                flattened.append(c)
+                for sub in (raw_item.get("replies") or []):
+                    if isinstance(sub, dict):
+                        _flatten(sub, parent_override=c.get("id"))
+
+            for raw in all_items:
+                if isinstance(raw, dict):
+                    _flatten(raw)
+
+            if len(flattened) != len(all_items):
+                logger.info(
+                    "fetch_post_comments(%s): aplanadas %d (top-level=%d, replies anidadas incluidas)",
+                    post_id, len(flattened), len(all_items),
+                )
+
+            return flattened
         except Exception as e:
-            logger.debug("fetch_post_comments(%s) falló: %s", post_id, e)
+            logger.debug("fetch_post_comments(%s) fallo: %s", post_id, e)
 
         return []
 

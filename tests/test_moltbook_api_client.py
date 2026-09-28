@@ -749,6 +749,62 @@ def test_fetch_post_comments_error_returns_empty():
     assert client.fetch_post_comments("post-1") == []
 
 
+def test_fetch_post_comments_default_single_page_ignores_cursor():
+    """Default: paginate=False -> 1 sola request, sin cursor aunque has_more=true."""
+    client = _make_client()
+    client._request = MagicMock(return_value={
+        "status": 200,
+        "data": {
+            "comments": [{"id": "c1", "content": "x"}],
+            "has_more": True,
+            "next_cursor": "should-be-ignored",
+        },
+    })
+    result = client.fetch_post_comments("post-1")
+    assert len(result) == 1
+    assert client._request.call_count == 1
+    params = client._request.call_args.kwargs.get("params") or {}
+    assert "cursor" not in params
+
+
+def test_fetch_post_comments_paginate_follows_cursor():
+    """paginate=True: 2 paginas -> 2 requests, la 2a con cursor=next_cursor."""
+    client = _make_client()
+    client._request = MagicMock(side_effect=[
+        {"status": 200, "data": {"comments": [{"id": "a"}], "has_more": True, "next_cursor": "c1"}},
+        {"status": 200, "data": {"comments": [{"id": "b"}], "has_more": False, "next_cursor": None}},
+    ])
+    result = client.fetch_post_comments("post-1", paginate=True)
+    assert {c["id"] for c in result} == {"a", "b"}
+    assert client._request.call_count == 2
+    second_params = client._request.call_args_list[1].kwargs.get("params") or {}
+    assert second_params.get("cursor") == "c1"
+
+
+def test_fetch_post_comments_paginate_stops_on_repeat_cursor():
+    """next_cursor repetido -> corta para no loopear."""
+    client = _make_client()
+    client._request = MagicMock(side_effect=[
+        {"status": 200, "data": {"comments": [{"id": "a"}], "has_more": True, "next_cursor": "same"}},
+        {"status": 200, "data": {"comments": [{"id": "b"}], "has_more": True, "next_cursor": "same"}},
+    ])
+    result = client.fetch_post_comments("post-1", paginate=True)
+    assert len(result) == 2
+    assert client._request.call_count == 2
+
+
+def test_fetch_post_comments_paginate_respects_max_pages():
+    """max_pages=2 aunque has_more siempre true."""
+    client = _make_client()
+    client._request = MagicMock(return_value={
+        "status": 200,
+        "data": {"comments": [{"id": "x"}], "has_more": True, "next_cursor": "n"},
+    })
+    result = client.fetch_post_comments("post-1", paginate=True, max_pages=2)
+    assert client._request.call_count == 2
+    assert len(result) == 2
+
+
 # ── Circuit breaker: 4xx no-breaker vs fallos reales ────────────────
 
 

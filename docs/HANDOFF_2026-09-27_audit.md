@@ -50,7 +50,7 @@ P-122 (soporte cursor en fetch_post_comments) debe respetar:
   donde se justifique (parametro explicito o metodo nuevo
   `fetch_all_post_comments`).
 - RIESGO DE BLAST RADIUS. Un post grande puede tener 500+ comentarios
-  (verificado hoy: 527 top-level en 11 paginas para 19b6e9bf). Paginar por
+  (verificado hoy: 527 top-level en 11 paginas para 19b6e9bf-6ff9-4ea5-834a-cbbac714f546). Paginar por
   defecto multiplica llamadas HTTP x11 en cada ciclo del agente -> riesgo
   de rate-limit Moltbook -> ciclo perdido -> produccion rota.
 - CALLERS PRIORITARIOS (migrar primero, con test dirigido):
