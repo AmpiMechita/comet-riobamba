@@ -470,7 +470,7 @@ class TestOwnPostGlobalQueue:
                 self._comment("fresh-other", created="2026-08-12T12:00:00Z"),
             ],
         }
-        pb.api.fetch_post_comments = MagicMock(side_effect=lambda pid: comments_by_post[pid])
+        pb.api.fetch_post_comments = MagicMock(side_effect=lambda pid, **kw: comments_by_post[pid])
 
         await pb._execute_own_post_replies()
 
@@ -493,7 +493,7 @@ class TestOwnPostGlobalQueue:
                 self._comment(f"p1-c{i}", created=f"2026-08-12T09:{i:02d}:00Z") for i in range(5)
             ],
         }
-        pb.api.fetch_post_comments = MagicMock(side_effect=lambda pid: comments_by_post[pid])
+        pb.api.fetch_post_comments = MagicMock(side_effect=lambda pid, **kw: comments_by_post[pid])
 
         await pb._execute_own_post_replies()
 
@@ -538,10 +538,30 @@ class TestOwnPostGlobalQueue:
                 self._comment(f"d{i}", created=f"2026-08-12T09:{i:02d}:00Z") for i in range(5)
             ],
         }
-        pb.api.fetch_post_comments = MagicMock(side_effect=lambda pid: comments_by_post[pid])
+        pb.api.fetch_post_comments = MagicMock(side_effect=lambda pid, **kw: comments_by_post[pid])
 
         await pb._execute_own_post_replies()
 
         processed = [r for r in pb._dedup.get_replied_comment_ids()
                      if ":" in r and (r.split(":", 1)[1].startswith("c") or r.split(":", 1)[1].startswith("d"))]
         assert len(processed) == 2, f"Daily limit 2 debe frenar en 2, got {len(processed)}"
+
+    @pytest.mark.asyncio
+    async def test_p125_large_post_uses_paginate(self, _redirect_paths):
+        """P-125: post con comment_count>50 dispara paginate=True, max_pages=3."""
+        pb = self._make_pb_queue(queue_size=10, per_post_cap=10)
+        big = "big-0000000-aaaa-bbbb-cccc-ddddeeeeffff"
+        sml = "sml-0000000-aaaa-bbbb-cccc-ddddeeeeffff"
+        posts = [
+            {"id": big, "comment_count": 200},
+            {"id": sml, "comment_count": 10},
+        ]
+        pb.api._request = MagicMock(return_value={"status": 200, "data": {"posts": posts}})
+        pb.api.fetch_my_posts = MagicMock(return_value=[])
+        pb.api.fetch_post_comments = MagicMock(return_value=[])
+
+        await pb._execute_own_post_replies()
+
+        calls = {c.args[0]: dict(c.kwargs) for c in pb.api.fetch_post_comments.call_args_list}
+        assert calls[big] == {"paginate": True, "max_pages": 3}, calls[big]
+        assert calls[sml] == {}, calls[sml]

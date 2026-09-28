@@ -3907,7 +3907,15 @@ class PhaseB:
                     str(post.get("content") or post.get("body") or post.get("text") or "").strip(),
                 ]).strip()
                 try:
-                    all_comments = self.api.fetch_post_comments(post_id)
+                    # P-125: post con >50 comentarios -> cursor-loop (max_pages=3);
+                    # posts chicos mantienen 1 pagina (historico).
+                    _cc = int(post.get("comment_count") or post.get("comments_count") or 0)
+                    if _cc > 50:
+                        all_comments = self.api.fetch_post_comments(
+                            post_id, paginate=True, max_pages=3,
+                        )
+                    else:
+                        all_comments = self.api.fetch_post_comments(post_id)
                 except Exception as e:
                     logger.warning(f"Phase B: error fetching comments for post {post_id}: {e}")
                     continue

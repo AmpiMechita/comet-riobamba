@@ -386,3 +386,16 @@ docs/HANDOFF_2026-09-27_audit.md.
 | P-124 | DONE | 2026-09-28 | Corregido en esta sesion: HANDOFF_2026-09-27_audit.md L53 y PENDING.md L372 citaban 19b6e9bf como post_id; es prefijo (8 chars). La API exige UUID completo. Corregido a 19b6e9bf-6ff9-4ea5-834a-cbbac714f546. | Sesion P-122 |
 | P-125 | OPEN | 2026-09-28 | Media. Migrar callers restantes de fetch_post_comments al cursor-loop (cliente ya soporta paginate=True desde P-122): phases/phase_b/orchestrator.py:2165/3910/4192 (matcher follow-ups, replies_matched=0 en prod), services/telegram_client.py:550, phases/phase_c_analytics.py:93. Solo con evidencia de beneficio por caller (A5). Handlers internos L728/990/1071 sin cambio. | Sesion p122 |
 | P-126 | OPEN | 2026-09-28 | Baja. P-098 reporto PID hijo 7564 con StartTime 25/9 22:37:55. Verificado 27/9 pre-restart: PID hijo real = 7620, StartTime 26/9 18:32:32. Hubo restart intermedio no documentado. Actualizar narrativa de P-098 o cerrarlo como impreciso. | Sesion p122 |
+
+## Pendientes nuevos (2026-09-28 p125)
+
+| ID | Estado | Creado | Descripción | Origen |
+|---|---|---|---|---|
+| P-127 | OPEN | 2026-09-28 | Baja. `phases/phase_b/orchestrator.py::_process_own_post` (L4170) sin caller productivo (solo tests); docstring L42 sugiere que si esta cableado via _execute_own_post_replies pero no lo esta. Eliminar o documentar como dead code. | Sesion p125 |
+| P-128 | OPEN | 2026-09-28 | Media. `data/karma_roi_tracker.db` = 0 bytes (creado por probe fallido 28/9 6:11); DB real con datos es `data/karma_roi.db` (98KB). PENDING L384 y HANDOFF p122 asumen nombre equivocado. Verificar ruta canonica en codigo y corregir docs o renombrar DB. | Sesion p125 |
+
+## Cerrados esta sesion (2026-09-28 p125)
+
+| ID | Descripción | Commit / artefacto |
+|---|---|---|
+| P-125 | Migrado caller orchestrator.py:3910 con trigger condicional (comment_count>50 -> paginate=True,max_pages=3). 4 callers NO migrados con evidencia (ver docs/P125_CALLERS_DECISION.md). Test test_p125_large_post_uses_paginate. Suite 1533 passed 1 skipped. | (commit p125) |
