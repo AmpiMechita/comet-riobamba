@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-28 p129 (P-082 DONE definitivo: 96/99 backfilled; 3 borrados reales). Auditoria sistematica p079-p119. P-122 DONE; P-125 DONE; P-129 DONE; P-128 OPEN.
+> **Última actualización:** 2026-09-29 p131 (P-088 DONE definitivo; P-082 96/99 backfilled; 3 borrados reales). Auditoria sistematica p079-p119. P-122 DONE; P-125 DONE; P-129 DONE; P-128 OPEN.
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -369,7 +369,7 @@ docs/HANDOFF_2026-09-27_audit.md.
 | ID | Estado | Creado | Descripcion | Origen |
 |---|---|---|---|---|
 | P-082 | DONE | 2026-09-27 | CERRADO 28/9 p129: re-medicion con cursor-loop (P-122/P-125) dio 96/99 recuperables (A=22/22, B=63/63, C=11/14). Los 3 restantes (6db7cb37, 9f3130a4, 39f094c4) son borrados reales en Moltbook (n estable 293/487 con max_pages=5 y =20). Backfill ejecutado sobre 96 filas (upd=96 skip=3), SQLite NULL published 99->3, suma score published=202. Snapshot previo data/karma_roi.db.snapshot-p082-20260928-135319.db. Detalle docs/P082_REMEDICION.md. | Auditoria 2026-09-27 (H4) |
-| P-088 | REOPENED | 2026-09-27 | Falso negativo: los 3 "irrecuperables" probados (75ec581d, c61641b1, cdbb220d) SI estan en la API; aparecen en paginas 2-8 via next_cursor. Evidencia: probe cursor-loop, 527 top-level en 11 paginas para post 19b6e9bf-6ff9-4ea5-834a-cbbac714f546. La API SI pagina; offset NO funciona. | Auditoria 2026-09-27 (H3) |
+| P-088 | DONE | 2026-09-27 | Falso negativo: los 3 "irrecuperables" probados (75ec581d, c61641b1, cdbb220d) SI estan en la API; aparecen en paginas 2-8 via next_cursor. Evidencia: probe cursor-loop, 527 top-level en 11 paginas para post 19b6e9bf-6ff9-4ea5-834a-cbbac714f546. La API SI pagina; offset NO funciona. CERRADO 2026-09-29 p131: re-medicion p129 dio 96/99 recuperables (A=22/22, B=63/63, C=11/14); los 3 MISS son borrados reales (n estable 293/487/487 con max_pages=20); los 63 feed_reply SI estan via next_cursor. Evidencia: docs/P082_REMEDICION.md + HANDOFF_2026-09-28_p129.md. | Auditoria 2026-09-27 (H3), cerrado p131 |
 
 ### Errata documental
 
