@@ -22,6 +22,7 @@ logger = logging.getLogger("services.karma_updater")
 
 STATE_PATH = Path("data/karma_updater_last_run.json")
 DEFAULT_INTERVAL_HOURS = float(os.getenv("KARMA_UPDATER_INTERVAL_HOURS", "6"))
+KARMA_FETCH_MAX_PAGES = int(os.getenv("KARMA_FETCH_MAX_PAGES", "50"))
 
 
 def _upvotes(d: Dict[str, Any]) -> int:
@@ -56,7 +57,9 @@ def update_karma_from_moltbook(moltbook_client, entry: dict) -> dict:
             thread = entry.get("thread_id")
             if not thread:
                 return {"upvotes": 0, "comments": 0, "success": False}
-            comments = moltbook_client.fetch_post_comments(thread, paginate=True) or []
+            comments = moltbook_client.fetch_post_comments(
+                thread, paginate=True, max_pages=KARMA_FETCH_MAX_PAGES
+            ) or []
             target = next((c for c in comments if c.get("id") == mid), None)
             if target is None:
                 return {"upvotes": 0, "comments": 0, "success": False}

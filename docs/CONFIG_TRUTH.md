@@ -94,4 +94,15 @@ Regla #31: toda metrica persistida entre arranques debe incluir run_id.
 
 ---
 
-*Actualizado: 2026-09-20.*
+## 14. Karma updater -- paginacion de comentarios (P-129, 2026-09-28)
+
+`services/karma_updater.py::update_karma_from_moltbook` llama a `fetch_post_comments(thread, paginate=True, max_pages=KARMA_FETCH_MAX_PAGES)`.
+
+- `KARMA_UPDATER_INTERVAL_HOURS` (default 6): intervalo del guard de frecuencia.
+- `KARMA_FETCH_MAX_PAGES` (default 50): tope de paginas del cursor-loop.
+  - Motivo: en prod hay posts con 1105/1275/1737 comentarios; con `max_pages=5` (default del cliente, P-122) los comentarios del agente en pagina 6+ quedaban sin refrescar -> score NULL silencioso cada 6h.
+  - Coste: hasta 50 paginas x 50 comments = 2500 comments por comentario propio en window de 24h.
+
+---
+
+*Actualizado: 2026-09-28.*

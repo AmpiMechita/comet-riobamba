@@ -20,7 +20,7 @@ def test_comment_paginate_true_passed_to_client():
 
     assert result["success"] is True
     assert result["upvotes"] == 3
-    client.fetch_post_comments.assert_called_once_with("post-uuid", paginate=True)
+    client.fetch_post_comments.assert_called_once_with("post-uuid", paginate=True, max_pages=50)
 
 
 def test_comment_found_only_when_paginated():

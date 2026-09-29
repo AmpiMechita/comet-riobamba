@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-28 p129 (P-082 DONE definitivo: 96/99 backfilled; 3 borrados reales). Auditoria sistematica p079-p119. P-122 DONE; P-125 DONE; P-128/P-129 OPEN.
+> **Última actualización:** 2026-09-28 p129 (P-082 DONE definitivo: 96/99 backfilled; 3 borrados reales). Auditoria sistematica p079-p119. P-122 DONE; P-125 DONE; P-129 DONE; P-128 OPEN.
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -393,10 +393,16 @@ docs/HANDOFF_2026-09-27_audit.md.
 |---|---|---|---|---|
 | P-127 | OPEN | 2026-09-28 | Baja. `phases/phase_b/orchestrator.py::_process_own_post` (L4170) sin caller productivo (solo tests); docstring L42 sugiere que si esta cableado via _execute_own_post_replies pero no lo esta. Eliminar o documentar como dead code. | Sesion p125 |
 | P-128 | OPEN | 2026-09-28 | Media. `data/karma_roi_tracker.db` = 0 bytes (creado por probe fallido 28/9 6:11); DB real con datos es `data/karma_roi.db` (98KB). PENDING L384 y HANDOFF p122 asumen nombre equivocado. Verificar ruta canonica en codigo y corregir docs o renombrar DB. | Sesion p125 |
-| P-129 | OPEN | 2026-09-28 | Media. `services/karma_updater.py::update_karma_from_moltbook` llama `fetch_post_comments(..., paginate=True)` con `max_pages` por defecto=5 (tope 250 comentarios). En prod hay posts con >1000 comentarios (19b6e9bf=1105, 50b2ba76=1737, 84b2c139=1275); los comments del agente en pagina 6+ no se refrescan -> score NULL silencioso en el ciclo 6h. Fix: subir `max_pages` en karma_updater o pasarlo por env con default razonable (p.ej. 50). | Sesion p129 (hallazgo P-082) |
+| P-129 | DONE | 2026-09-28 | Media. `services/karma_updater.py::update_karma_from_moltbook` llama `fetch_post_comments(..., paginate=True)` con `max_pages` por defecto=5 (tope 250 comentarios). En prod hay posts con >1000 comentarios (19b6e9bf=1105, 50b2ba76=1737, 84b2c139=1275); los comments del agente en pagina 6+ no se refrescan -> score NULL silencioso en el ciclo 6h. Fix: subir `max_pages` en karma_updater o pasarlo por env con default razonable (p.ej. 50). | Sesion p129 (hallazgo P-082) |
 
 ## Cerrados esta sesion (2026-09-28 p125)
 
 | ID | Descripción | Commit / artefacto |
 |---|---|---|
 | P-125 | Migrado caller orchestrator.py:3910 con trigger condicional (comment_count>50 -> paginate=True,max_pages=3). 4 callers NO migrados con evidencia (ver docs/P125_CALLERS_DECISION.md). Test test_p125_large_post_uses_paginate. Suite 1533 passed 1 skipped. | (commit p125) |
+
+## Cerrados esta sesion (2026-09-28 p130)
+
+| ID | Descripcion | Commit / artefacto |
+|---|---|---|
+| P-129 | Karma updater: paginacion de comentarios via KARMA_FETCH_MAX_PAGES (default 50). Antes max_pages=5 (default cliente) dejaba sin refrescar comments del agente en posts >250 comentarios. Tests: 2 dirigidos + suite 1533 passed 1 skipped. | (commit p130) |
