@@ -259,6 +259,13 @@
 
 *Actualizar en cada sesión. Nunca borrar filas.*
 
+## Cerrados esta sesion (2026-09-29 p131)
+
+| ID | Descripcion | Commit / artefacto |
+|---|---|---|
+| P-088 | Cierre formal como DONE. Re-medicion p129 (96/99 recuperables; A=22/22 B=63/63 C=11/14); 3 MISS son borrados reales (n estable 293/487/487). Los 63 feed_reply originalmente irrecuperables SI estan via next_cursor. Header PENDING p129->p131 + fila P-088 REOPENED->DONE. numstat 2/2. | c351d06 + HANDOFF_2026-09-29_p131.md |
+
+
 
 ## Pendientes nuevos (2026-09-26 p102)
 
