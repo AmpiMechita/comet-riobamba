@@ -449,3 +449,16 @@ docs/HANDOFF_2026-09-27_audit.md.
 | ID | Descripcion | Commit / artefacto |
 |---|---|---|
 | P-120 | Fix anti-patron cwd-relativo en 7 archivos (13 paths absolutos + 1 import pathlib) | f0723de |
+
+## Pendientes nuevos (2026-10-01 auditoria QA por capas)
+
+| ID | Estado | Creado | Descripcion | Origen |
+|---|---|---|---|---|
+| P-136 | OPEN | 2026-10-01 | Alta. Contaminacion confirmada test->telemetria: test_prompt_injection_abstain usa _INJECTION_ATTEMPTS_PATH real; 101/153 filas de data/injection_attempts.jsonl son hostile_agent/post-1 sinteticas. Aislar path en tmp, preservar backup y separar/depurar historico sintetico con evidencia. | Auditoria QA 2026-10-01 |
+| P-137 | OPEN | 2026-10-01 | Alta. Auditar toda la suite para detectar escrituras de tests sobre data/, logs/ o estado productivo real. Inventariar paths mutables, exigir tmp_path/monkeypatch y prueba de no-contaminacion. Hallazgo P-136 demuestra que el aislamiento actual no es completo. | Auditoria QA 2026-10-01 |
+| P-138 | OPEN | 2026-10-01 | Media. Crear programa canonico QA_COMPORTAMIENTO.md que integre evals/run_evals.py, shadow_quality_checks, fabrication corpus, prompt-injection/ABSTAIN, claim_checker y self_eval. Definir dimensiones, fuentes, criterios PASS/FAIL y evidencia requerida; actualizar DOC_COHERENCE. | Auditoria QA 2026-10-01 |
+| P-139 | OPEN | 2026-10-01 | Media. Sustituir el unico umbral global 85% de Phase B por benchmark multidimensional y regresion por categoria. Baseline actual: 31 fixtures (15 feed, 4 follow, 4 upvote, 2 debate, 2 home, 2 own_post, 2 semantic). Medir por dimension y evitar que una categoria oculte fallos de otra. | Auditoria QA 2026-10-01 |
+| P-140 | OPEN | 2026-10-01 | Media. Calibracion epistemologica y trazabilidad claim->evidencia: distinguir OBSERVED/MEASURED/DOCUMENTED/INFERRED/HYPOTHETICAL; exigir procedencia para numeros, entidades y afirmaciones empiricas antes de publicar. Primero medir baseline; no activar bloqueo sin evaluacion. | Auditoria QA 2026-10-01 |
+| P-141 | OPEN | 2026-10-01 | Media. Auditoria forense del corpus publico de comet_riobamba: posts+comentarios+evolucion temporal+grafo de interaccion. Medir repeticion, contradicciones, novedad, continuidad, correcciones, aprendizaje de feedback y convergencia con otros agentes. | Auditoria QA 2026-10-01 |
+| P-142 | OPEN | 2026-10-01 | Media. Red-team conductual mas alla de prompt injection: fuentes contradictorias, dato falso plausible, estado/memoria stale, tool timeout/error, API parcial, retry/duplicado y agente adversarial. Ejecutar offline con fixtures; prohibido publicar acciones externas durante pruebas. | Auditoria QA 2026-10-01 |
+| P-143 | OPEN | 2026-10-01 | Media. Audit-the-auditor: contrastar afirmaciones empiricas publicas de comet_riobamba con artefactos internos reproducibles. Registrar git SHA, run_id, modelo/tier, config/fixture hash y evidencia suficiente para separar resultado medido de narrativa plausible. | Auditoria QA 2026-10-01 |
