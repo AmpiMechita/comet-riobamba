@@ -336,7 +336,9 @@ def test_maybe_follow_author_empty_name(monkeypatch):
 
 def test_derive_search_queries_from_agenda(monkeypatch, tmp_path):
     monkeypatch.setenv("SEMANTIC_SEARCH_MAX_QUERIES", "2")
-    agenda_file = Path("data/research_agenda.json")
+    monkeypatch.setattr("phases.phase_b.orchestrator.BASE_DIR", tmp_path)
+    agenda_file = tmp_path / "data/research_agenda.json"
+    agenda_file.parent.mkdir(parents=True, exist_ok=True)
     orig_content = agenda_file.read_text(encoding="utf-8") if agenda_file.exists() else None
     try:
         agenda_file.write_text(json.dumps({
@@ -359,8 +361,10 @@ def test_derive_search_queries_from_agenda(monkeypatch, tmp_path):
 
 def test_derive_search_queries_roadmap_fallback(monkeypatch, tmp_path):
     monkeypatch.setenv("SEMANTIC_SEARCH_MAX_QUERIES", "1")
-    agenda_file = Path("data/research_agenda.json")
-    roadmap_file = Path("data/topic_roadmap.json")
+    monkeypatch.setattr("phases.phase_b.orchestrator.BASE_DIR", tmp_path)
+    agenda_file = tmp_path / "data/research_agenda.json"
+    roadmap_file = tmp_path / "data/topic_roadmap.json"
+    agenda_file.parent.mkdir(parents=True, exist_ok=True)
     orig_agenda = agenda_file.read_text(encoding="utf-8") if agenda_file.exists() else None
     orig_roadmap = roadmap_file.read_text(encoding="utf-8") if roadmap_file.exists() else None
     try:
@@ -383,7 +387,8 @@ def test_derive_search_queries_roadmap_fallback(monkeypatch, tmp_path):
             roadmap_file.unlink(missing_ok=True)
 
 
-def test_derive_search_queries_env_fallback(monkeypatch):
+def test_derive_search_queries_env_fallback(monkeypatch, tmp_path):
+    monkeypatch.setattr("phases.phase_b.orchestrator.BASE_DIR", tmp_path)
     monkeypatch.setenv("SEMANTIC_SEARCH_QUERIES", "test query,another query")
     monkeypatch.setenv("SEMANTIC_SEARCH_MAX_QUERIES", "2")
     qs = PhaseB._derive_search_queries()

@@ -101,13 +101,13 @@ class TestClusterPosts:
 
 
 class TestRunTrendWatcher:
-    def test_feed_with_10_posts_top_2_proposed(self):
+    def test_feed_with_10_posts_top_2_proposed(self, tmp_path):
         """Scenario (a): Feed with 10 posts → clusters formed → top 2 proposed."""
         api = MagicMock()
         posts = _make_posts(10, base_keyword="security")
         api.fetch_posts.return_value = posts
         agenda = _make_agenda()
-        result = run_trend_watcher(api, agenda, feed_size=50, top_n=2, trends_path=Path("data/test_trends.jsonl"))
+        result = run_trend_watcher(api, agenda, feed_size=50, top_n=2, trends_path=tmp_path / "test_trends.jsonl")
         assert result["posts_scanned"] == 10
         assert result["clusters_found"] >= 1
         assert result["topics_proposed"] >= 1
@@ -115,13 +115,13 @@ class TestRunTrendWatcher:
         for topic in agenda.pending_topics:
             assert topic["source"] == "phase_c_trend"
 
-    def test_keyword_already_in_agenda_skipped(self):
+    def test_keyword_already_in_agenda_skipped(self, tmp_path):
         """Scenario (b): Keyword already in agenda → skipped (no duplicate added)."""
         api = MagicMock()
         posts = _make_posts(3, base_keyword="security")
         api.fetch_posts.return_value = posts
         agenda = _make_agenda(existing_keywords=["security"])
-        result = run_trend_watcher(api, agenda, feed_size=50, top_n=2, trends_path=Path("data/test_trends.jsonl"))
+        result = run_trend_watcher(api, agenda, feed_size=50, top_n=2, trends_path=tmp_path / "test_trends.jsonl")
         # "security" is already in agenda, so it should NOT be re-added.
         # The count of topics with topic=="security" must stay at 1.
         security_topics = [t for t in agenda.pending_topics if t["topic"] == "security"]
@@ -129,43 +129,43 @@ class TestRunTrendWatcher:
         # Other keywords from the titles (gateway, model) may still be proposed
         # — that's expected. The key invariant is no duplicate of "security".
 
-    def test_empty_feed_returns_zero_and_logs_warning(self):
+    def test_empty_feed_returns_zero_and_logs_warning(self, tmp_path):
         """Scenario (c): get_feed returns empty → WARNING, 0 proposals."""
         api = MagicMock()
         api.fetch_posts.return_value = []
         agenda = _make_agenda()
         with patch("services.trend_watcher.logger") as mock_log:
-            result = run_trend_watcher(api, agenda, feed_size=50, top_n=2, trends_path=Path("data/test_trends.jsonl"))
+            result = run_trend_watcher(api, agenda, feed_size=50, top_n=2, trends_path=tmp_path / "test_trends.jsonl")
         assert result["posts_scanned"] == 0
         assert result["topics_proposed"] == 0
         mock_log.warning.assert_called()
 
-    def test_feed_exception_returns_zero_and_logs_warning(self):
+    def test_feed_exception_returns_zero_and_logs_warning(self, tmp_path):
         """Scenario (d): get_feed raises exception → WARNING, 0 proposals."""
         api = MagicMock()
         api.fetch_posts.side_effect = RuntimeError("API down")
         agenda = _make_agenda()
         with patch("services.trend_watcher.logger") as mock_log:
-            result = run_trend_watcher(api, agenda, feed_size=50, top_n=2, trends_path=Path("data/test_trends.jsonl"))
+            result = run_trend_watcher(api, agenda, feed_size=50, top_n=2, trends_path=tmp_path / "test_trends.jsonl")
         assert result["posts_scanned"] == 0
         assert result["topics_proposed"] == 0
         mock_log.warning.assert_called()
 
-    def test_top_n_1_only_one_topic_proposed(self):
+    def test_top_n_1_only_one_topic_proposed(self, tmp_path):
         """Scenario (e): TREND_WATCHER_TOP_N=1 → only 1 topic proposed."""
         api = MagicMock()
         # Create posts with two distinct keywords so we get 2+ clusters
         posts = _make_posts(3, base_keyword="security") + _make_posts(3, base_keyword="mlops")
         api.fetch_posts.return_value = posts
         agenda = _make_agenda()
-        result = run_trend_watcher(api, agenda, feed_size=50, top_n=1, trends_path=Path("data/test_trends.jsonl"))
+        result = run_trend_watcher(api, agenda, feed_size=50, top_n=1, trends_path=tmp_path / "test_trends.jsonl")
         # top_n=1 should propose at most 1
         assert result["topics_proposed"] <= 1
         assert len(result["top_clusters"]) == 1
 
-    def test_analytics_jsonl_written(self):
+    def test_analytics_jsonl_written(self, tmp_path):
         """Scenario (h): analytics_trends.jsonl written with correct fields."""
-        trends_path = Path("data/test_trends_analytics.jsonl")
+        trends_path = tmp_path / "test_trends_analytics.jsonl"
         try:
             api = MagicMock()
             api.fetch_posts.return_value = _make_posts(3, base_keyword="security")
@@ -184,9 +184,9 @@ class TestRunTrendWatcher:
             if trends_path.exists():
                 trends_path.unlink()
 
-    def test_multiple_runs_appends_to_jsonl(self):
+    def test_multiple_runs_appends_to_jsonl(self, tmp_path):
         """Running trend watcher twice appends two lines to JSONL."""
-        trends_path = Path("data/test_trends_analytics.jsonl")
+        trends_path = tmp_path / "test_trends_analytics.jsonl"
         try:
             api = MagicMock()
             api.fetch_posts.return_value = _make_posts(3, base_keyword="security")
