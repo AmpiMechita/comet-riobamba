@@ -165,6 +165,16 @@ Los snapshots suelen estar cada 3-12h. Ventana util: ~48-72h.
     P-082 y P-088 estuvieron OPEN/DONE PARCIAL en su tabla pese a DONE en
     secciones de cierre, generando un falso negativo que costo una sesion.
 
+46b. Cierre de sesion: TODA sesion que cierre un ID DEBE actualizar su
+     fila canonica en PENDING.md en el MISMO commit. La seccion narrativa
+     "Cerrados esta sesion" NO cuenta como cambio de estado. Verificacion
+     pre-commit obligatoria: `Select-String '^\| P-XXX '` en PENDING.md
+     debe devolver EXACTAMENTE una fila, con el estado final.
+     Corolario: si el ID aparece en narrativa y en fila canonica, la
+     canonica es la unica que cuenta; la narrativa se conserva solo como
+     historia. Origen: P-135; tres casos (P-082, P-088 en p133; P-125 en
+     p136) donde la narrativa decia DONE pero la fila canonica seguia
+     OPEN, costando una sesion completa de auditoria cada uno.
 
 ## Re-verificacion de pausas (2026-09-30 p134)
 

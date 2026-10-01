@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-30 p136 (P-125 DONE: reconciliacion Regla 46; fila L394 OPEN->DONE; header p135->p136).
+> **Última actualización:** 2026-09-30 p136b (Regla 46b anadida a DIRECTRICES.md: prohibido cerrar sesion sin actualizar fila canonica del ID en el MISMO commit. P-135 OPEN.)
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -435,3 +435,11 @@ docs/HANDOFF_2026-09-27_audit.md.
 | ID | Descripción | Commit / artefacto |
 |---|---|---|
 | P-131 | Deadlock balance_guard (fix 2 capas + 5 tests + Regla 47) | (commit p134) |
+
+
+## Pendientes nuevos (2026-09-30 p136b)
+
+| ID | Estado | Creado | Descripción | Origen |
+|---|---|---|---|---|
+| P-135 | OPEN | 2026-09-30 | Baja. Reforzar Regla 46 con sub-regla 46b (DIRECTRICES.md): prohibido cerrar sesion sin actualizar la fila canonica del ID en PENDING.md en el MISMO commit; la narrativa "Cerrados esta sesion" NO cuenta como estado; verificacion pre-commit = exactamente 1 fila '| P-XXX |' con estado final. Origen: 3 casos (P-082/P-088 en p133; P-125 en p136) donde la narrativa decia DONE pero la fila canonica seguia OPEN. Aplicado en p136b. | p136 |
+
