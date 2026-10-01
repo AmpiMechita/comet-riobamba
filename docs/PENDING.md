@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-30 p133 (P-130 DONE reconciliacion ledger; P-082 y P-088 filas stale corregidas in-place; regla de fuente unica de estado).
+> **Última actualización:** 2026-09-30 p134 (P-131 DONE: deadlock balance_guard resuelto; Regla 47 re-verificacion de pausas; P-132 OPEN anti-patron EOL; P-123 diferido a p135).
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -418,3 +418,20 @@ docs/HANDOFF_2026-09-27_audit.md.
 | ID | Descripcion | Commit / artefacto |
 |---|---|---|
 | P-128 | DB huerfana verificada y limpiada. Ruta canonica services/karma_roi_tracker.py:23. Borrados data/karma_roi_tracker.db (0B) + data/karma_roi_tracker.json (4B). 0 refs codigo, gitignored, git status limpio. | (commit p132) |
+
+
+## Pendientes nuevos (2026-09-30 p134)
+
+| ID | Estado | Creado | Descripción | Origen |
+|---|---|---|---|---|
+| P-131 | DONE | 2026-09-30 | Alta. Deadlock balance_guard: agente pausado por `balance` no salía porque `check_and_trigger()` (post-ciclo, L1233) nunca corría (el `continue` del pause-check L1218 lo saltaba). Fix en 2 capas: (1) `check_and_trigger()` antes del pause-check en `core/agent.py`; (2) `register_rechecker`/`run_recheckers`/`start_pause_rechecker_thread` en `services/pause_controller.py` + thread daemon 60s + `_balance_ok` registrado en `services/balance_guard.py`. 5 tests nuevos (`tests/test_pause_rechecker.py`), suite 1538 passed 1 skipped. Verificado en prod: force-test con reason=balance limpiada en <60s sin intervención. Regla 47 añadida a DIRECTRICES.md. | p134 |
+| P-132 | OPEN | 2026-09-30 | Baja. Anti-patrón EOL: replace CRLF->eol + LF->eol encadenado es incorrecto (la 1ra sustitución crea secuencias que la 2da vuelve a tocar, generando CR CR LF en archivos CRLF). Patrón correcto: normalizar primero (CRLF->LF, CR->LF), después LF->eol. Afectó a `tests/conftest.py` y `docs/DIRECTRICES.md` en p134; ambos corregidos in-situ. Candidato a Regla 48. | p134 |
+
+
+| P-133 | OPEN | 2026-09-30 | Baja. Regla de metodo: scripts de parcheo a archivo `.py` (no `python -c` inline) cuando haya UTF-8, EOL o >5 lineas. Motivo: 3 bugs de la misma familia en p134 (conftest.py y DIRECTRICES.md con `\r\r\n` por `replace` encadenado; PENDING.py con SyntaxWarning y AssertionError por `\u` en byte strings; verify con comillas mal cerradas). Candidato a Regla 48. | p134 |
+
+## Cerrados esta sesión (2026-09-30 p134)
+
+| ID | Descripción | Commit / artefacto |
+|---|---|---|
+| P-131 | Deadlock balance_guard (fix 2 capas + 5 tests + Regla 47) | (commit p134) |

@@ -6,7 +6,7 @@ Llamar al final de cada ciclo. Reutiliza check_deepseek_balance().
 import logging
 
 from services.deepseek_balance import check_deepseek_balance
-from services.pause_controller import add_reason, remove_reason
+from services.pause_controller import add_reason, register_rechecker, remove_reason
 
 logger = logging.getLogger("services.balance_guard")
 
@@ -27,3 +27,17 @@ def check_and_trigger() -> None:
         add_reason("balance", f"${balance:.4f} <= ${BALANCE_THRESHOLD_USD}")
     else:
         remove_reason("balance")
+
+
+def _balance_ok() -> bool:
+    """Rechecker: True si el saldo YA NO esta bajo (debe limpiarse)."""
+    balance = check_deepseek_balance()
+    if balance is None:
+        return False  # fail-safe: no limpiar sin confirmar
+    return balance > BALANCE_THRESHOLD_USD
+
+
+# Registro al importar: pause_controller correra _balance_ok para la
+# razon "balance" (Capa 2, P-131). Sin esto, un agente pausado por
+# balance solo se reanuda si el outer loop llega a check_and_trigger().
+register_rechecker("balance", _balance_ok)

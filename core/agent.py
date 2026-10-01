@@ -1195,6 +1195,10 @@ class COMETRiobambaAgent:
         # ── Start battery monitor thread (pause pattern) ──
         start_battery_monitor()
         logger.info("Battery monitor background thread started")
+        # Start pause rechecker thread (Capa 2, P-131): re-verifica
+        # condiciones de pausa cada 60s aunque el outer loop este trabado.
+        pause_ctl.start_pause_rechecker_thread()
+        logger.info("Pause rechecker background thread started")
 
         while not self.shutdown_requested:
             # Detect an out-of-band graceful stop request (data/stop.flag).
@@ -1205,6 +1209,15 @@ class COMETRiobambaAgent:
             # Si hay razones activas, esperar 5 min sin ejecutar ciclos.
             # El thread de bateria y el balance_guard limpian las razones
             # cuando las condiciones se recuperan.
+            # Balance guard (Capa 1, P-131): correr ANTES del pause-check.
+            # Si el agente esta pausado por balance y el saldo se recupero,
+            # este rechecker limpia la razon. Sin esto, el continue de
+            # abajo impide llegar al post-ciclo y la pausa es permanente.
+            try:
+                check_and_trigger()
+            except Exception as _e:
+                logger.warning("balance_guard pre-ciclo: error: %s", _e)
+
             if pause_ctl.is_paused():
                 reasons = pause_ctl.get_reasons()
                 logger.warning("Agente en pausa. Razones activas: %s", list(reasons.keys()))

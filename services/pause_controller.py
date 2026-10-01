@@ -11,14 +11,16 @@ lee el flag y se mantiene pausado hasta que se cumplan las condiciones).
 import json
 import logging
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict
+from typing import Callable, Dict
 
 logger = logging.getLogger("services.pause_controller")
 
 PAUSE_FILE = Path("data/pause.flag")
 _lock = threading.Lock()
+_recheckers = {}
 
 
 def _read_state() -> Dict:
@@ -100,3 +102,49 @@ def get_reasons() -> Dict[str, Dict]:
 def get_pause_since() -> str:
     """Retorna timestamp ISO de la primera pausa, o None."""
     return _read_state().get("since")
+
+
+def register_rechecker(reason: str, fn: Callable[[], bool]) -> None:
+    """Registra un re-verificador para una razon de pausa.
+
+    fn() debe devolver True si la condicion externa YA NO aplica
+    (=> la razon debe limpiarse). Se invoca desde run_recheckers(),
+    que corre en el outer loop del agente y en un thread daemon.
+    Idempotente: re-registrar sobrescribe.
+    """
+    _recheckers[reason] = fn
+
+
+def run_recheckers() -> None:
+    """Ejecuta el rechecker de cada razon ACTIVA. Limpia la razon si True.
+
+    No hace nada para razones sin rechecker (battery lo hace via su
+    propio thread).
+    """
+    for reason in list(get_reasons().keys()):
+        fn = _recheckers.get(reason)
+        if fn is None:
+            continue
+        try:
+            if fn():
+                remove_reason(reason)
+        except Exception as e:
+            logger.warning("pause_controller: rechecker %s fallo: %s", reason, e)
+
+
+def _rechecker_loop(poll_seconds: int = 60) -> None:
+    """Thread daemon: corre run_recheckers() cada poll_seconds."""
+    logger.info("pause_controller: rechecker thread iniciado (poll=%ss)", poll_seconds)
+    while True:
+        try:
+            run_recheckers()
+        except Exception as e:
+            logger.warning("pause_controller: error en rechecker loop: %s", e)
+        time.sleep(poll_seconds)
+
+
+def start_pause_rechecker_thread() -> threading.Thread:
+    """Arranca el thread daemon de recheckers (idempotente-ish)."""
+    t = threading.Thread(target=_rechecker_loop, name="pause-rechecker", daemon=True)
+    t.start()
+    return t

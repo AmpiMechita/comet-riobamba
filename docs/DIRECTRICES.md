@@ -164,3 +164,19 @@ Los snapshots suelen estar cada 3-12h. Ventana util: ~48-72h.
     existente (ni tabla duplicada, ni columna ESTADO_ACTUAL). Origen: P-130;
     P-082 y P-088 estuvieron OPEN/DONE PARCIAL en su tabla pese a DONE en
     secciones de cierre, generando un falso negativo que costo una sesion.
+
+
+## Re-verificacion de pausas (2026-09-30 p134)
+
+47. Toda razon de pausa con condicion re-verificable DEBE tener un
+    rechecker registrado en pause_controller (register_rechecker) y un
+    camino de ejecucion que corra AUNQUE is_paused() sea True.
+    Prohibido dejar la unica via de limpieza detras de un `continue`
+    condicionado por is_paused(): el agente quedaria en deadlock
+    (pausa activa -> continue -> guard no corre -> pausa nunca se limpia).
+    Corolario: si una razon se limpia desde un guard post-ciclo, ese
+    guard debe invocarse tambien ANTES del pause-check del outer loop
+    (Capa 1), y ademas debe existir un thread daemon que re-verifique
+    sin depender del ciclo (Capa 2). Origen: P-131; balance_guard dejo
+    al agente pausado 2.5 dias con saldo recuperado a $3.03 porque el
+    unico llamador de remove_reason("balance") estaba tras el `continue`.

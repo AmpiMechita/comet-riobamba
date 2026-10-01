@@ -200,3 +200,19 @@ def _isolate_topic_state(tmp_path, monkeypatch):
         monkeypatch.setattr(pac, "save_topic_matrix", lambda m, _p: _os(m, _mp), raising=False)
     except Exception:
         pass
+
+
+@pytest.fixture(autouse=True)
+def _isolate_pause_state(tmp_path, monkeypatch):
+    """FIX p134 (2026-09-30): aisla data/pause.flag + recheckers.
+
+    Sin esto, cualquier test que llame a add_reason/remove_reason
+    escribe el pause.flag REAL y pausa al agente en produccion.
+    Mismo patron que telegram_outbox (2026-09-16) y karma_roi.db.
+    """
+    try:
+        import services.pause_controller as pc
+        monkeypatch.setattr(pc, "PAUSE_FILE", tmp_path / "pause.flag", raising=False)
+        monkeypatch.setattr(pc, "_recheckers", {}, raising=False)
+    except Exception:
+        pass
