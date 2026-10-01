@@ -179,6 +179,7 @@ def _redirect_paths(tmp_path):
     orig_rpp = rcap_mod._REPLIES_PER_POST_PATH
     orig_dedup = ds.DedupStore._default_db_path
     orig_agenda = ra.AGENDA_PATH
+    orig_injection = pt._INJECTION_ATTEMPTS_PATH
     cs.CONVERSATIONS_PATH = tmp_path / "conversations.json"
     pb_mod._REPLIED_IDS_PATH = tmp_path / "replied_comment_ids.json"
     pb_mod._COMMENTED_POSTS_PATH = tmp_path / "commented_post_ids.json"
@@ -188,6 +189,7 @@ def _redirect_paths(tmp_path):
     rcap_mod._REPLIES_PER_POST_PATH = tmp_path / "replies_per_post.json"
     ds.DedupStore._default_db_path = tmp_path / "comet_dedup.db"
     ra.AGENDA_PATH = tmp_path / "research_agenda.json"
+    pt._INJECTION_ATTEMPTS_PATH = tmp_path / "injection_attempts.jsonl"
 
     _orig_json_files = {}
     for _ns, _jpath, _fmt in ds._JSON_NAMESPACES:
@@ -207,6 +209,7 @@ def _redirect_paths(tmp_path):
     rcap_mod._REPLIES_PER_POST_PATH = orig_rpp
     ds.DedupStore._default_db_path = orig_dedup
     ra.AGENDA_PATH = orig_agenda
+    pt._INJECTION_ATTEMPTS_PATH = orig_injection
 
     for _jpath, _data in _orig_json_files.items():
         Path(_jpath).write_bytes(_data)
