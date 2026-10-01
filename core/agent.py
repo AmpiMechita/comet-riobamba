@@ -169,8 +169,8 @@ class COMETRiobambaAgent:
         self._phase_c: Optional[PhaseCAnalytics] = None
         self._phase_c_engagement: Optional[PhaseCEngagement] = None
 
-        self.state_file = Path("data/state/agent_state.json")
-        self.health_file = Path("data/state/health.json")
+        self.state_file = Path(__file__).resolve().parents[1] / "data/state/agent_state.json"
+        self.health_file = Path(__file__).resolve().parents[1] / "data/state/health.json"
         # Graceful stop without OS signals: create data/stop.flag to request a
         # clean shutdown (detected within 1s in the main loop). Reliable on
         # Windows where SIGINT/CTRL_BREAK to a child process is not available.

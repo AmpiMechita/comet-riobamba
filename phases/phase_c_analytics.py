@@ -59,7 +59,7 @@ class PhaseCAnalytics:
         self.max_replies_per_cycle = int(deps.max_phase_c_replies_per_cycle) if deps.max_phase_c_replies_per_cycle is not None else None
         self.get_comments_today: Optional[Callable[[], int]] = deps.get_comments_today
         self.increment_comments_today: Optional[Callable[[], int]] = deps.increment_comments_today
-        self.state_file = Path("data/state/phase_c_state.json")
+        self.state_file = Path(__file__).resolve().parents[1] / "data/state/phase_c_state.json"
         
     def _load_state(self) -> Dict:
         """Carga estado persistente de Fase C."""

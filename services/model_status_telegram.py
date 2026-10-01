@@ -16,7 +16,7 @@ from services.telegram_client import TelegramClient, create_telegram_client
 
 logger = logging.getLogger("services.model_status_telegram")
 
-_STATE_FILE = Path("data") / "model_status_telegram_state.json"
+_STATE_FILE = Path(__file__).resolve().parents[1] / "data/model_status_telegram_state.json"
 _DEFAULT_MAX_PER_HOUR = 3
 _DEFAULT_COOLDOWN_SECONDS = 300
 

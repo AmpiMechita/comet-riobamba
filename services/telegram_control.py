@@ -17,12 +17,12 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("services.telegram_control")
 
-BRIEFING_STATE_FILE = Path("data/telegram_briefing_state.json")
-INBOUND_REPORT_STATE_FILE = Path("data/telegram_inbound_report_state.json")
-WATCHLIST_INBOUND_FILE = Path("data/watchlist_inbound_today.json")
-AGENT_PROPOSALS_FILE = Path("data/agent_proposals.jsonl")
-GENERATION_ATTEMPTS_FILE = Path("data/generation_attempts.jsonl")
-_FEED_STALL_STATE_FILE = Path("data/phase_b_feed_stall.json")
+BRIEFING_STATE_FILE = Path(__file__).resolve().parents[1] / "data/telegram_briefing_state.json"
+INBOUND_REPORT_STATE_FILE = Path(__file__).resolve().parents[1] / "data/telegram_inbound_report_state.json"
+WATCHLIST_INBOUND_FILE = Path(__file__).resolve().parents[1] / "data/watchlist_inbound_today.json"
+AGENT_PROPOSALS_FILE = Path(__file__).resolve().parents[1] / "data/agent_proposals.jsonl"
+GENERATION_ATTEMPTS_FILE = Path(__file__).resolve().parents[1] / "data/generation_attempts.jsonl"
+_FEED_STALL_STATE_FILE = Path(__file__).resolve().parents[1] / "data/phase_b_feed_stall.json"
 
 
 def log_proposal(proposal_text: str) -> None:

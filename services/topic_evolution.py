@@ -15,7 +15,7 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger("services.topic_evolution")
 
-EVOLUTION_STATE_FILE = Path("data/topic_evolution_state.json")
+EVOLUTION_STATE_FILE = Path(__file__).resolve().parents[1] / "data/topic_evolution_state.json"
 
 # A claim is "mature" when it has been reinforced at least this many times
 MATURITY_THRESHOLD = 3

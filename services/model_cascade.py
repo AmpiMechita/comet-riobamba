@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+from pathlib import Path
 """
 COMET-RIOBAMBA - Model Cascade resiliente (DeepSeek ONLY)
 - Solo DeepSeek: tier_fallback (Pro), tier_pro (Pro), tier_flash (Flash)
@@ -74,7 +75,7 @@ _DEEPSEEK_SPEND_FILE = os.path.join("data", "deepseek_spend_tracker.json")
 # we re-alert on Telegram every DEGRADED_ALERT_COOLDOWN_MINUTES instead of only
 # once per episode, so a sustained outage keeps reminding the operator. State is
 # persisted to survive process restarts within an ongoing episode.
-_DEGRADED_STATE_FILE = os.path.join("data", "degraded_mode_state.json")
+_DEGRADED_STATE_FILE = Path(__file__).resolve().parents[1] / "data/degraded_mode_state.json"
 _DEGRADED_ALERT_COOLDOWN_DEFAULT_MINUTES = 30
 
 

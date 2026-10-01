@@ -336,7 +336,7 @@
 
 | ID | Estado | Creado | Descripción | Origen |
 |---|---|---|---|---|
-| P-120 | OPEN | 2026-09-26 | Deuda estructural: mismo anti-patrón cwd-relativo que P-117/P-119 detectado en 6+ archivos (grep p119): `core/agent.py:172` (state_file), `services/model_cascade.py:77`, `services/model_status_telegram.py:19`, `services/telegram_control.py:20-25`, `services/topic_evolution.py:18`, `phases/phase_b/orchestrator.py:538`, `phases/phase_c_analytics.py:62`. No bloqueante hoy (agente cwd=raíz), pero familia. Evaluar fix en bloque o por archivo según criticidad. | Sesion p119 |
+| P-120 | DONE | 2026-09-26 | Deuda estructural: anti-patron cwd-relativo en 7 archivos. Fix en bloque: paths absolutos via Path(__file__).resolve().parents[N]. model_cascade.py: os.path.join -> Path + import pathlib. Verificado desde cwd alterno. | Sesion p120 |
 
 ## Cerrados esta sesion (2026-09-26 p114)
 

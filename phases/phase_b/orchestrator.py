@@ -535,7 +535,7 @@ _FOLLOWED_AGENTS_PATH = BASE_DIR / "data/followed_agents.json"
 # Re-export of the shared anti-dogpile counter path (authoritative: services/reply_cap)
 _REPLIES_PER_POST_PATH = reply_cap._REPLIES_PER_POST_PATH
 
-_FEED_STALL_STATE_FILE = Path("data/phase_b_feed_stall.json")
+_FEED_STALL_STATE_FILE = Path(__file__).resolve().parents[2] / "data/phase_b_feed_stall.json"
 
 # Marcador de resaltado de resultados de busqueda semantica (⟦HL⟧...⟦/HL⟧):
 # un body que lo contiene es un SNIPPET, no un post real. Se rehidrata por id
