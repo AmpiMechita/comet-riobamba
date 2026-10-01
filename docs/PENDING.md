@@ -4,7 +4,7 @@
 > **Al abrir sesión:** leer filas OPEN prioridad Alta.
 > **Al cerrar sesión:** agregar pendientes nuevos + marcar resueltos con commit.
 > **Creado:** 2026-09-20 (bootstrap desde 6 handoffs + sesión 20/9).
-> **Última actualización:** 2026-09-30 p132 (P-088 DONE definitivo; P-082 96/99 backfilled; 3 borrados reales). Auditoria sistematica p079-p119. P-122 DONE; P-125 DONE; P-129 DONE; P-128 DONE; P-130 OPEN reconciliacion ledger.
+> **Última actualización:** 2026-09-30 p133 (P-130 DONE reconciliacion ledger; P-082 y P-088 filas stale corregidas in-place; regla de fuente unica de estado).
 > Ver `HANDOFF_2026-09-23.md` + `PROMPT_APERTURA.md` para retomar.
 
 ---
@@ -123,7 +123,7 @@
 | P-079 | DONE | 2026-09-24 | Fix P-074 (commit 277ba5b). Camino B: (a) via fetch_post_comments(thread_id)+match por id (no existe get_comment). (b) update_karma_from_moltbook despacha por type. (c) update_all_karma_guarded 6h cableado en core/agent.py. (d) 15 tests dirigidos + suite 1510 passed. | Sesion P-078 + p079 |
 | P-080 | DONE | 2026-09-24 | PROMPT_APERTURA.md L46: byte BEL (0x07) entre `\logs` y `gent.log` (premisa "\n literal" incorrecta, era BEL). Corregido a `.\logs\agent.log`. Sin inflacion EOL. | Sesion P-079, cerrado p081 |
 | P-081 | DONE | 2026-09-24 | Divergencia schema JSONL vs SQLite. Inventario p081: 0 consumidores en produccion (solo karma_dashboard.py CLI + load_tracker_entries interno); engagement_events/daily_snapshots vacias; comments_received sin consumidor. Decision ADR-004: JSONL OBSOLETO, SQLite unica fuente. Retiro ejecutable en P-083. | Sesion P-079, cerrado p081 (ADR-004) |
-| P-082 | DONE PARCIAL | 2026-09-24 | Backfill historico SQLite. CERRADO PARCIAL 25/9 p088: 85/120 recuperables (C2 64/64 + C1 21/34 + 2 muestra). SQLite score NULL 192->107, last_updated NOT NULL 19->104. Irrecuperables con API: 61 feed_reply (P-088) + 13 thread_followup (comment borrado) + 22 A (bug post_id==comment_id, ver P-091) + 11 rejected. | Sesion P-079, cerrado p088 |
+| P-082 | DONE | 2026-09-24 | Backfill historico SQLite. CERRADO PARCIAL 25/9 p088: 85/120 recuperables (C2 64/64 + C1 21/34 + 2 muestra). SQLite score NULL 192->107, last_updated NOT NULL 19->104. Irrecuperables con API: 61 feed_reply (P-088) + 13 thread_followup (comment borrado) + 22 A (bug post_id==comment_id, ver P-091) + 11 rejected. [Reconciliado p133: DONE definitivo (ver fila 27/9 en audit).] | Sesion P-079, cerrado p088 |
 | P-083 | DONE | 2026-09-24 | Ejecutar retiro JSONL (ADR-004). CERRADO 25/9 p083b commit 5658073: (1) krt sin _jsonl_write_entry/JSONL_PATH/KARMA_TRACKER_FILE + load_recent_entries(hours) lee SQLite (parent_comment_id discrimina post/comment); (2) monitoring/karma_dashboard.py eliminado (huerfano); (3) karma_updater.load_tracker_entries delega en load_recent_entries; (4) data/karma_roi_tracker.jsonl (108843B) -> data/archive/karma_roi_tracker.jsonl.20260925_154911 (gitignored); (5) conftest sin monkeypatches huerfanos + test_karma_roi_tracker.py reescrito. Suite 1509 passed, 1 skipped. | Sesion p081, cerrado p083b |
 | P-084 | DONE | 2026-09-24 | Reiniciar servicio NSSM para activar fix 94ecbc2 (colision skipped->skipped_window). Diagnostico p081: proceso PID 6452 arranco 19:40:59, commit 94ecbc2 fue 19:52:15 -> proceso stale. 0 lineas "karma_updater:" en agent.log ni rotados. Post-restart: observar 1 ciclo, confirmar linea en log y score>0 en SQLite. CERRADO 25/9 (verif p083): 2 lineas karma_updater en agent.log (08:19:03 updated=9 failed=2; 14:24:39 updated=10 failed=1, skipped_window 212/223) + state file 14:24:39 + SQLite rows 200->211 score>0 1->4 lu_nn 9->19. ERRATA p081: PID stale real 7132, NO 6452. | Sesion p081, cerrado p083 |
 
@@ -139,7 +139,7 @@
 | ID | Estado | Creado | Descripción | Origen |
 |---|---|---|---|---|
 | P-087 | DONE | 2026-09-25 | Bug `services/karma_roi_tracker.py::load_recent_entries` L648: para `type=comment` asignaba `thread_id = parent_comment_id` (thread real = `post_id`). CERRADO 25/9 p087: SELECT trae `post_id`; `thread_id = post_id_val if is_comment else None` (commit 9275a64). Test C2 (parent != post) + post top-level; suite 1510 passed. Verificado en prod ciclo #374 (17:08:14): updated=4 failed=7; los 3 thread_followup con parent no-nulo actualizados (antes fallaban); los 7 fallos son feed_reply = P-088. | Sesion p082, cerrado p087 |
-| P-088 | OPEN | 2026-09-25 | 61 filas historicas `source=feed_reply` (parent_comment_id NULL, comment_id != post_id) NO recuperables con API actual: `get_post(comment_id)` -> 404; `fetch_post_comments(post_id)` no las incluye (probe B: 197 comments, hit=False). Aceptar perdida historica o explorar otro endpoint. | Sesion p082 |
+| P-088 | DONE | 2026-09-25 | 61 filas historicas `source=feed_reply` (parent_comment_id NULL, comment_id != post_id) NO recuperables con API actual: `get_post(comment_id)` -> 404; `fetch_post_comments(post_id)` no las incluye (probe B: 197 comments, hit=False). Aceptar perdida historica o explorar otro endpoint. [Reconciliado p133: falso negativo, DONE definitivo (ver fila 27/9 en audit).] | Sesion p082 |
 
 | P-089 | OPEN | 2026-09-25 | Verificar que `docs/HANDOFF_<fecha>_<id>.md` no exista antes de escribir HANDOFF nuevo. Sesion p082b: `HANDOFF_2026-09-25_p082.md` ya existia (sesion nocturna 03:35-04:25 P-084, commit 7035ac9) y fue sobrescrito en 997f337; restaurado desde 7035ac9 en 4df134f renombrando el propio a p082b. Regla candidata para DIRECTRICES.md. | Sesion p082b |
 | P-090 | DONE | 2026-09-25 | `load_recent_entries` discrimina `type` por `parent_comment_id IS NULL`: `feed_reply` top-level (parent NULL) se clasifica como `post` y llama `get_post(comment_id)` -> 404. Semanticamente deberia discriminar por `source` (own_post_reply/thread_followup/feed_reply -> comment). No bloqueante hoy (P-088 dice que no se recuperan igual), pero ensucia logs y podria morder si la API cambia. CERRADO 25/9 p094: load_recent_entries usa action_type; 72/72 feed_reply top-level ahora type=comment con thread_id=post_id. Commit 7d28f95. | Sesion p087 |
@@ -411,7 +411,7 @@ docs/HANDOFF_2026-09-27_audit.md.
 
 | ID | Estado | Creado | Descripcion | Origen |
 |---|---|---|---|---|
-| P-130 | OPEN | 2026-09-30 | Media. Reconciliar ledger: filas stale (P-088 OPEN en tabla original pese a DONE 27/9; P-128 OPEN en tabla original pese a DONE p132) + IDs duplicados entre tablas. No borrar historia; normalizar o anadir columna ESTADO_ACTUAL. Universo 104 IDs unicos / 106 filas. | Sesion p132 |
+| P-130 | DONE | 2026-09-30 | Media. CERRADO 30/9 p133: reconciliacion ledger. Filas stale corregidas in-place (P-082 DONE PARCIAL->DONE, P-088 OPEN->DONE); P-128 ya estaba DONE (descripcion original sobrevaloraba). Regla nueva anadida a DIRECTRICES.md (fuente unica de estado). Duplicados restantes son narrativa por diseno (no contradiccion). | Sesion p132, cerrado p133 |
 
 ## Cerrados esta sesion (2026-09-30 p132)
 

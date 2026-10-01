@@ -151,3 +151,16 @@ Los snapshots suelen estar cada 3-12h. Ventana util: ~48-72h.
     Corolario: cuando el modelo diga "lo dejo anotado para mi", verificar
     que quedo efectivamente en el archivo antes de cerrar; si no, es una
     promesa vacia.
+
+## Fuente unica de estado (ledger, 2026-09-30 p133)
+
+46. Un ID P-XXX tiene exactamente UNA fila de estado en PENDING.md: la de su
+    tabla por prioridad (Alta / Media / Baja / Macro / Pendientes nuevos).
+    Cerrar un ID = actualizar esa fila IN-PLACE (Estado + fecha + commit).
+    Las secciones 'Cerrados esta sesion (fecha pXXX)' son narrativa historica,
+    NO fuente de estado: se conservan, pero no cuentan como filas del ledger
+    ni se consultan para determinar si algo esta abierto.
+    Corolario: prohibido crear una segunda fila de estado para un ID ya
+    existente (ni tabla duplicada, ni columna ESTADO_ACTUAL). Origen: P-130;
+    P-082 y P-088 estuvieron OPEN/DONE PARCIAL en su tabla pese a DONE en
+    secciones de cierre, generando un falso negativo que costo una sesion.
