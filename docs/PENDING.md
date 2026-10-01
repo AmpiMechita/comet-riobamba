@@ -355,7 +355,7 @@
 
 | ID | Estado | Creado | Descripcion | Origen |
 |---|---|---|---|---|
-| P-121 | OPEN | 2026-09-26 | Gap de cobertura: tests/test_energy_intel_node.py cubre DB_PATH estatico (absoluto, cwd-invariante, KB match) pero NO el rebind via --db. Anadir test de regresion con runpy + stubs (modelo del repro p115) o declarar fuera de alcance. | Sesion p115 |
+| P-121 | REJECTED | 2026-09-26 | Deuda fantasma. P-115 ya verifico que --db funciona correctamente (no hay shadowing). Flag no usado en produccion. Aplicacion de leccion P-115: no testear bugs refutados. Cerrado 2026-09-30 p121. | Sesion p115 |
 
 
 ## Cerrados esta sesion (2026-09-26 p113)
