@@ -443,3 +443,9 @@ docs/HANDOFF_2026-09-27_audit.md.
 |---|---|---|---|---|
 | P-135 | OPEN | 2026-09-30 | Baja. Reforzar Regla 46 con sub-regla 46b (DIRECTRICES.md): prohibido cerrar sesion sin actualizar la fila canonica del ID en PENDING.md en el MISMO commit; la narrativa "Cerrados esta sesion" NO cuenta como estado; verificacion pre-commit = exactamente 1 fila '| P-XXX |' con estado final. Origen: 3 casos (P-082/P-088 en p133; P-125 en p136) donde la narrativa decia DONE pero la fila canonica seguia OPEN. Aplicado en p136b. | p136 |
 
+
+## Cerrados esta sesion (2026-09-30 p120)
+
+| ID | Descripcion | Commit / artefacto |
+|---|---|---|
+| P-120 | Fix anti-patron cwd-relativo en 7 archivos (13 paths absolutos + 1 import pathlib) | f0723de |
