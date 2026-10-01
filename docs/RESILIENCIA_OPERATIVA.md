@@ -15,7 +15,7 @@
 
     Windows boot
         |
-    [NSSM service — PENDIENTE]
+    [NSSM service — OK]
         |
     python run_agent.py (cuenta SYSTEM, sin login)
         |
@@ -77,7 +77,7 @@
 |---|---|---|
 | Patron pausa | OK | pause_controller verificado |
 | Monitor de bateria | OK | Thread battery-monitor corriendo |
-| Guard de saldo | OK | check_deepseek_balance() -> $1.90 (2026-09-20) |
+| Guard de saldo | OK | check_deepseek_balance() -> $3.00 (2026-10-01) |
 | **Auto-arranque al boot** | **OK** | **NSSM servicio `CometRiobamba` (SYSTEM, StartType=Automatic)** |
 | Notificacion Telegram | OK | 1 vez al pausar, 1 vez al reanudar |
 
@@ -85,13 +85,13 @@ Verificacion empirica (2026-09-20):
 - WMI responde: {EstimatedChargeRemaining: 100, BatteryStatus: 2}
 - Thread arranca: battery-monitor, alive=True
 - Test funcional: pausar con 2 razones -> quitar 1 -> sigue pausado -> quitar la ultima -> reanudado
-- Suite completa: 1489 passed, 1 skipped
+- Suite completa: 1538 passed, 1 skipped
 
 ## 5. Pendientes / Pending items
 
 | # | Pendiente | Prioridad | Notas |
 |---|---|---|---|
-| 1 | Verificar auto-arranque tras reboot real | Media | NSSM configurado StartType=Automatic pero no confirmado con reboot real. Ver PENDING.md P-002. |
+| 1 | ~~Verificar auto-arranque tras reboot real~~ | ~~Media~~ | ~~DONE 23/9: P-002 verificado (boot 17:39:47, auto-arranco 17:40:13, ciclo #283 OK)~~ |
 | 2 | Verificar bateria real | Media | El hardware tiene ~5 min de autonomia. El monitor esta calibrado para 15%/25%, pero puede requerir ajuste. |
 | 3 | Runbook de pausa | Baja | Documentar como verificar si el agente esta pausado, como forzar reanudacion manual, como limpiar pause.flag. |
 
@@ -102,7 +102,7 @@ Verificacion empirica (2026-09-20):
 - **Pausa por bateria o saldo:** el agente se pausa, no muere. Reanuda automaticamente.
 - **Actualizaciones del sistema:** NSSM re-arranca el agente tras update.
 
-**Verificacion pendiente:** arranque tras reboot real no confirmado. Ver PENDING.md P-002.
+**VERIFICADO 23/9:** arranque tras reboot real confirmado (P-002 DONE: boot 17:39:47, auto-arranco 17:40:13, ciclo #283 OK).
 
 ---
 
