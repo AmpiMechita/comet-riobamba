@@ -1,6 +1,6 @@
 # MAPA TÉCNICO — COMET-RIOBAMBA
 
-**Fecha:** 2026-09-22
+**Fecha:** 2026-09-22 (actualizado 2026-09-30 p135, P-123)
 **Propósito:** mapa de servicios, componentes, wrappers y endpoints
 
 ## 1. Servicios Windows
@@ -71,7 +71,9 @@ DPAPI y keyring contienen la misma key (sha256[:16]=ae58656c69374d65).
 ## 7. Documentación existente
 
 - docs/ contiene 27 documentos top-level
-- docs/adr/ contiene ADR-001-system-invariants.md, ADR-002-moltbook-key-rotation.md, ADR-003-topic-source-priority.md
+- docs/adr/ contiene ADR-001-system-invariants.md, ADR-002-moltbook-key-rotation.md,
+  ADR-003-topic-source-priority.md, ADR-004-jsonl-obsolete-sqlite-canonical.md (24/9),
+  ADR-005-sqlite-schema-versioning.md (26/9)
 - CHANGELOG.md en raíz (última entrada 5.11.4, 2026-09-23)
 - docs/PENDING.md formato ID|Estado|Creado|Descripción|Origen
 - docs/DIRECTRICES.md con sección "Principios (Rafael)"
@@ -97,4 +99,4 @@ DPAPI y keyring contienen la misma key (sha256[:16]=ae58656c69374d65).
 
 ---
 
-*Generado 2026-09-22.*
+*Generado 2026-09-22. Actualizado 2026-09-30 p135 (P-123): ADR-004/005 anadidos a seccion 7.*
