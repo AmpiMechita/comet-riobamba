@@ -18,34 +18,14 @@ os.environ.update({"DASHSCOPE_API_KEY": "sk-test", "MOLTBOOK_API_KEY": "sk-test"
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s|%(name)s|%(message)s")
 
+import core.daily_metrics as daily_metrics
 from core.daily_metrics import (
     DailyMetrics,
     load_metrics,
     save_metrics,
     get_current_metrics,
     ingest_event,
-    METRICS_DIR,
 )
-
-
-# ── Fixtures ─────────────────────────────────────────────────────
-
-@pytest.fixture(autouse=True)
-def _clean_metrics_dir():
-    """Limpia métricas entre tests."""
-    if METRICS_DIR.exists():
-        for f in METRICS_DIR.iterdir():
-            f.unlink()
-        METRICS_DIR.rmdir()
-    # Reset singleton
-    import core.daily_metrics as _m
-    _m._current_metrics = None
-    yield
-    if METRICS_DIR.exists():
-        for f in METRICS_DIR.iterdir():
-            f.unlink()
-        METRICS_DIR.rmdir()
-    _m._current_metrics = None
 
 
 # ── Tests ────────────────────────────────────────────────────────
@@ -132,7 +112,7 @@ def test_ingest_event_updates_and_persists():
 
     # Verificar que persiste a disco
     today = datetime.now().date().isoformat()
-    path = METRICS_DIR / f"{today}.json"
+    path = daily_metrics.METRICS_DIR / f"{today}.json"
     assert path.exists()
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["cycle_count"] == 1

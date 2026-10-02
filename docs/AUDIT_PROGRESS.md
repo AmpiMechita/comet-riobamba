@@ -1999,3 +1999,8 @@ Problema: generation_attempts.jsonl acumulaba 637 bytes por corrida de pytest co
 ## H.16 — Reorganizacion docs: NORTH_STAR + archive (2026-09-20)
 
 Problema: 34 docs en docs/ con solapamiento (3 READMEs, 2 objetivos, 2 estrategias). Creados: NORTH_STAR.md, CONTENT_STRATEGY.md, DOC_COHERENCE.md, PENDING.md. Archivados 19 docs a docs/archive/. Borrado LECCIONES_APRENDIDAS_2026-09-03.md (0 bytes). 7 docs stale actualizados.
+
+
+## P-137 - Aislamiento completo de sinks persistentes en pytest - CERRADO
+**Cerrado:** 2026-10-01
+Suite final: 1538 passed, 1 skipped; filesystem delta=0. Se aislaron sinks persistentes restantes en tests/conftest.py, incluyendo WritePolicyEngine, captcha_samples, incidents, watchlist y tracer. Los 4 artefactos contaminados durante la deteccion fueron restaurados exactamente y verificados por tamano, mtime y SHA256. Servicio CometRiobamba permanecio Stopped.

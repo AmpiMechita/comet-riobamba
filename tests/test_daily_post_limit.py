@@ -34,8 +34,11 @@ pytest_plugins = ("pytest_asyncio",)
 # ── Fixtures ─────────────────────────────────────────────────────
 
 @pytest.fixture(autouse=True)
-def _isolate_db():
+def _isolate_db(tmp_path):
     """Usa una DB temporal aislada para cada test."""
+    global TEST_DB
+    _orig_test_db = TEST_DB
+    TEST_DB = tmp_path / "test_daily_post_limit.db"
     import services.persistence as _p
     _original = _p.DB_PATH
     # Los helpers mutan config.behavior_cfg directo (max_comments_per_day=0,
@@ -53,6 +56,7 @@ def _isolate_db():
     _p.DB_PATH = _original
     _cfg.behavior_cfg.clear()
     _cfg.behavior_cfg.update(_orig_behavior)
+    TEST_DB = _orig_test_db
 
 
 # ── Tests: AgentState._check_daily_reset ────────────────────────
@@ -348,7 +352,8 @@ async def test_phase_a_internal_gate_allows_when_under_limit():
         # Redirect topic_history to temp to avoid stale data from other tests
         import phases.phase_a_content as pac
         _orig_th = pac._TOPIC_HISTORY_FILE
-        pac._TOPIC_HISTORY_FILE = Path("data/test_topic_history_tmp.json")
+        _topic_history_tmp = TEST_DB.parent / "test_topic_history_tmp.json"
+        pac._TOPIC_HISTORY_FILE = _topic_history_tmp
 
         try:
             from phases.deps import PhaseADeps
@@ -372,7 +377,7 @@ async def test_phase_a_internal_gate_allows_when_under_limit():
                 result = await phase_a.execute()
         finally:
             pac._TOPIC_HISTORY_FILE = _orig_th
-            Path("data/test_topic_history_tmp.json").unlink(missing_ok=True)
+            _topic_history_tmp.unlink(missing_ok=True)
 
     # El gate interno diario NO debe bloquear (bajo el limite): el resultado
     # puede etiquetar generation_failed/pacing (telemetria honesta del porque

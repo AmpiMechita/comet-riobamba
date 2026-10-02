@@ -25,29 +25,34 @@ TEST_DB = Path("data/test_phase_b_wiring.db")
 
 
 @pytest.fixture(autouse=True)
-def _isolate_db():
+def _isolate_db(tmp_path):
+    global _REPLIED_IDS_PATH, _COMMENTED_POSTS_PATH
+    _orig_rep, _orig_com = _REPLIED_IDS_PATH, _COMMENTED_POSTS_PATH
+    _REPLIED_IDS_PATH = tmp_path / "replied_comment_ids.json"
+    _COMMENTED_POSTS_PATH = tmp_path / "commented_post_ids.json"
     import services.persistence as _p
     import services.research_agenda as _ra
     import services.dedup_store as _ds
     import phases.phase_b as _pb
     _original = _p.DB_PATH
-    _p.DB_PATH = TEST_DB
+    test_db = tmp_path / "test_phase_b_wiring.db"
+    _p.DB_PATH = test_db
     _orig_agenda = _ra.AGENDA_PATH
     _orig_archive = _ra.ARCHIVE_PATH
     _orig_upvoted = _pb._UPVOTED_POST_IDS_PATH
     _orig_followed = _pb._FOLLOWED_AGENTS_PATH
     _orig_dedup_db = _ds.DedupStore._default_db_path
-    _tmp_agenda = Path("data/test_phase_b_wiring_agenda.json")
+    _tmp_agenda = tmp_path / "test_phase_b_wiring_agenda.json"
     _ra.AGENDA_PATH = _tmp_agenda
-    _ra.ARCHIVE_PATH = Path("data/test_phase_b_wiring_agenda_archive.json")
-    _pb._UPVOTED_POST_IDS_PATH = Path("data/test_phase_b_wiring_upvoted.json")
-    _pb._FOLLOWED_AGENTS_PATH = Path("data/test_phase_b_wiring_followed.json")
-    _ds.DedupStore._default_db_path = Path("data/test_phase_b_wiring_dedup.db")
-    if TEST_DB.exists():
-        TEST_DB.unlink()
+    _ra.ARCHIVE_PATH = tmp_path / "test_phase_b_wiring_agenda_archive.json"
+    _pb._UPVOTED_POST_IDS_PATH = tmp_path / "test_phase_b_wiring_upvoted.json"
+    _pb._FOLLOWED_AGENTS_PATH = tmp_path / "test_phase_b_wiring_followed.json"
+    _ds.DedupStore._default_db_path = tmp_path / "test_phase_b_wiring_dedup.db"
+    if test_db.exists():
+        test_db.unlink()
     yield
-    if TEST_DB.exists():
-        TEST_DB.unlink()
+    if test_db.exists():
+        test_db.unlink()
     _tmp_dedup_db = _ds.DedupStore._default_db_path
     for _f in (_tmp_agenda, _ra.ARCHIVE_PATH, _pb._UPVOTED_POST_IDS_PATH, _pb._FOLLOWED_AGENTS_PATH, _tmp_dedup_db):
         if _f.exists():
@@ -58,6 +63,7 @@ def _isolate_db():
     _pb._UPVOTED_POST_IDS_PATH = _orig_upvoted
     _pb._FOLLOWED_AGENTS_PATH = _orig_followed
     _ds.DedupStore._default_db_path = _orig_dedup_db
+    _REPLIED_IDS_PATH, _COMMENTED_POSTS_PATH = _orig_rep, _orig_com
 
 
 @pytest.fixture

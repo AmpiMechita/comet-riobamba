@@ -57,9 +57,9 @@ def test_compute_next_retry_at_formula():
 
 
 @pytest.fixture
-def _patch_db():
+def _patch_db(tmp_path):
     original = DB_PATH
-    test_db = Path("data/test_outbox_backoff.db")
+    test_db = tmp_path / "test_outbox_backoff.db"
     test_db.parent.mkdir(parents=True, exist_ok=True)
     test_db.unlink(missing_ok=True)
     import services.persistence as _p

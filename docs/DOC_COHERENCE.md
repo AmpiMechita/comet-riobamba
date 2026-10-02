@@ -12,9 +12,10 @@
 |---|---|---|---|---|
 | `docs/NORTH_STAR.md` | Objetivo general + específicos + métricas | ✅ Fresh | 2026-09-20 | — |
 | `docs/CONTENT_STRATEGY.md` | Estrategia de contenido + engagement | ✅ Fresh | 2026-09-20 | — |
-| `docs/PENDING.md` | Ledger de pendientes | ✅ Fresh | 2026-09-20 | Actualizar en cada sesión |
-| `docs/DOC_COHERENCE.md` | Este mapa | ✅ Fresh | 2026-09-20 | Actualizar al agregar/archivar docs |
-| `docs/AUDIT_PROGRESS.md` | Historia de fixes (append-only) | 🟡 Falta H.12+ | 2026-09-19 | Agregar entries de fixes 20/9 |
+| `docs/PENDING.md` | Ledger de pendientes | ✅ Fresh | 2026-10-01 | Actualizar en cada sesión |
+| `docs/DOC_COHERENCE.md` | Este mapa | ✅ Fresh | 2026-10-01 | Actualizar al agregar/archivar docs |
+| `docs/HANDOFF_2026-10-01_p137.md` | Continuidad de sesion P-137 (derivado) | ✅ Fresh | 2026-10-01 | Conservar como evidencia de cierre |
+| `docs/AUDIT_PROGRESS.md` | Historia de fixes (append-only) | ✅ Fresh | 2026-10-01 | Mantener append-only |
 | `docs/CONFIG_TRUTH.md` | Config documentada | 🔴 Stale | 2026-09-17 | Agregar day-aware, run_id, allowlist |
 | `docs/COMET-RIOBAMBA_REFERENCE.md` | Referencia operativa | 🟡 Tiene aviso desactualización | 2026-09-19 | Revisar tras fixes 20/9 |
 | `docs/CLAUDE.md` | Contexto para Claude | 🔴 Dice "Ollama" | 2026-09-13 | Corregir stack (DeepSeek) |
