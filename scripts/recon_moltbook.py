@@ -4,7 +4,7 @@
 Reutiliza MoltbookAPIClient con Credentials.from_env() — exactamente como
 core/agent.py. `Credentials.from_env()` ya hace load_dotenv(override=True).
 
-Uso:  ..venv\Scripts\python.exe scripts\recon_moltbook.py
+Uso:  ..venv\\Scripts\\python.exe scripts\\recon_moltbook.py
 """
 import os
 import sys
