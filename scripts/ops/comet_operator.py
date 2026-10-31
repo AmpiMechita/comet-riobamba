@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -24,7 +25,9 @@ class OperatorError(RuntimeError):
     pass
 
 
-def _run(args: list[str], *, cwd: Path) -> str:
+def _run(
+    args: list[str], *, cwd: Path, env: dict[str, str] | None = None
+) -> str:
     proc = subprocess.run(
         args,
         cwd=cwd,
@@ -34,6 +37,7 @@ def _run(args: list[str], *, cwd: Path) -> str:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=False,
+        env=env,
     )
     if proc.returncode != 0:
         detail = proc.stderr.strip() or proc.stdout.strip() or f"exit={proc.returncode}"
@@ -57,15 +61,18 @@ def _service_snapshot(root: Path, service_name: str) -> dict[str, Any]:
     shell = shutil.which("pwsh") or shutil.which("powershell")
     if shell is None:
         raise OperatorError("PowerShell executable not found")
-    safe_name = service_name.replace("'", "''")
     code = (
-        f"$s=Get-CimInstance Win32_Service -Filter \"Name='{safe_name}'\";"
+        "$serviceName = $env:COMET_OPERATOR_SERVICE_NAME;"
+        "$s=Get-CimInstance Win32_Service | Where-Object { $_.Name -eq $serviceName };"
         "if($null -eq $s){throw 'SERVICE_NOT_FOUND'};"
         "$s|Select-Object Name,State,ProcessId,StartMode|ConvertTo-Json -Compress"
     )
+    env = os.environ.copy()
+    env["COMET_OPERATOR_SERVICE_NAME"] = service_name
     raw = _run(
         [shell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", code],
         cwd=root,
+        env=env,
     )
     data = json.loads(raw)
     return {
