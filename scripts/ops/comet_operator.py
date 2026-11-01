@@ -49,6 +49,21 @@ def _git(root: Path, *args: str) -> str:
     return _run(["git", *args], cwd=root)
 
 
+def _git_status(root: Path) -> str:
+    return _git(root, "status", "--porcelain=v1", "--untracked-files=all")
+
+
+def _summarize_git_status(raw_status: str) -> dict[str, Any]:
+    lines = [line for line in raw_status.splitlines() if line]
+    tracked = [line for line in lines if not line.startswith("??")]
+    return {
+        "tracked_changes": len(tracked),
+        "staged_changes": sum(line[0] not in " ?" for line in tracked),
+        "unstaged_changes": sum(line[1] not in " ?" for line in tracked),
+        "untracked": sum(line.startswith("??") for line in lines),
+        "paths": [line[3:] if len(line) >= 4 else line for line in lines],
+    }
+
 def _sha256(path: Path) -> str:
     h = hashlib.sha256()
     with path.open("rb") as fh:
@@ -93,12 +108,8 @@ def snapshot(root: Path, service_name: str) -> dict[str, Any]:
     head = _git(root, "rev-parse", "HEAD")
     branch = _git(root, "branch", "--show-current")
     detached = not bool(branch)
-    raw_status = _git(
-        root, "status", "--porcelain=v1", "--untracked-files=normal"
-    )
-    lines = [line for line in raw_status.splitlines() if line]
-    tracked = [line for line in lines if not line.startswith("??")]
-    untracked = [line for line in lines if line.startswith("??")]
+    raw_status = _git_status(root)
+    git_summary = _summarize_git_status(raw_status)
 
     scoring = root / PROTECTED_SCORING
     if not scoring.is_file():
@@ -111,11 +122,7 @@ def snapshot(root: Path, service_name: str) -> dict[str, Any]:
         "head": head,
         "branch": branch,
         "detached": detached,
-        "git": {
-            "tracked_changes": len(tracked),
-            "untracked": len(untracked),
-            "paths": [line[3:] if len(line) >= 4 else line for line in lines],
-        },
+        "git": git_summary,
         "service": _service_snapshot(root, service_name),
         "protected": {
             PROTECTED_SCORING.as_posix(): {"sha256": _sha256(scoring)}
@@ -138,6 +145,21 @@ def evaluate(snap: dict[str, Any], args: argparse.Namespace) -> list[str]:
         args.expect_tracked_changes,
     )
     expect("git.untracked", snap["git"]["untracked"], args.expect_untracked)
+    expect(
+        "git.staged_changes",
+        snap["git"]["staged_changes"],
+        args.expect_staged_changes,
+    )
+    expect(
+        "git.unstaged_changes",
+        snap["git"]["unstaged_changes"],
+        args.expect_unstaged_changes,
+    )
+    expect(
+        "service.start_mode",
+        snap["service"]["start_mode"],
+        args.expect_service_start_mode,
+    )
 
     scoring = snap["protected"][PROTECTED_SCORING.as_posix()]["sha256"]
     wanted_scoring = (
@@ -151,11 +173,13 @@ def evaluate(snap: dict[str, Any], args: argparse.Namespace) -> list[str]:
         if (
             snap["service"]["status"] != "Stopped"
             or snap["service"]["pid"] != 0
+            or snap["service"]["start_mode"] != "Manual"
         ):
             failures.append(
-                "service: expected status='Stopped' pid=0 "
+                "service: expected status='Stopped' pid=0 start_mode='Manual' "
                 f"actual status={snap['service']['status']!r} "
-                f"pid={snap['service']['pid']!r}"
+                f"pid={snap['service']['pid']!r} "
+                f"start_mode={snap['service']['start_mode']!r}"
             )
 
     return failures
@@ -171,7 +195,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--expect-head")
     parser.add_argument("--expect-branch")
     parser.add_argument("--expect-tracked-changes", type=int)
+    parser.add_argument("--expect-staged-changes", type=int)
+    parser.add_argument("--expect-unstaged-changes", type=int)
     parser.add_argument("--expect-untracked", type=int)
+    parser.add_argument("--expect-service-start-mode")
     parser.add_argument("--expect-scoring-sha256")
     parser.add_argument("--require-service-stopped", action="store_true")
     parser.add_argument("--compact", action="store_true")
