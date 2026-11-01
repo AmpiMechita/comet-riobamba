@@ -17,3 +17,4 @@
 
 # Archivos de entorno / secretos (nunca versionados)
 .env -text
+requirements.lock -text diff whitespace=cr-at-eol
